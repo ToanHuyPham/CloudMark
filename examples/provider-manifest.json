@@ -1,0 +1,8 @@
+{
+  "provider": "Example Vietnam Cloud",
+  "operator": "Example Infrastructure JSC",
+  "region": "hcm-1",
+  "zone": "hcm-1a",
+  "instance_type": "standard-4-8",
+  "cloud_stack": "OpenStack"
+}

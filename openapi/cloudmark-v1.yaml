@@ -1,0 +1,152 @@
+openapi: 3.1.0
+info:
+  title: CloudMark Controller API
+  version: 0.1.0
+  description: Local-first API for machine evidence, benchmark jobs, and multi-node sessions.
+servers:
+  - url: http://127.0.0.1:8787/api/v1
+components:
+  securitySchemes:
+    controllerToken:
+      type: apiKey
+      in: header
+      name: X-CloudMark-Token
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error: { type: string }
+    RunRequest:
+      type: object
+      required: [suite]
+      properties:
+        suite: { type: string, enum: [inventory, storage] }
+        profile: { type: string }
+        confirm_write: { type: boolean, default: false }
+    Run:
+      type: object
+      required: [id, suite, profile, status, request]
+      properties:
+        id: { type: string }
+        suite: { type: string }
+        profile: { type: string }
+        status: { type: string, enum: [queued, running, completed, failed, cancelled] }
+        started_at: { type: [string, "null"], format: date-time }
+        finished_at: { type: [string, "null"], format: date-time }
+        request: { type: object, additionalProperties: true }
+        result: { type: [object, "null"], additionalProperties: true }
+        error: { type: [string, "null"] }
+paths:
+  /health:
+    get:
+      summary: Controller health
+      responses:
+        "200":
+          description: Healthy
+  /system:
+    get:
+      summary: Local inventory and provider evidence
+      parameters:
+        - in: query
+          name: refresh
+          schema: { type: boolean }
+      responses:
+        "200": { description: System evidence }
+  /dashboard:
+    get:
+      summary: Aggregated dashboard payload
+      responses:
+        "200": { description: Dashboard state }
+  /profiles:
+    get:
+      summary: Benchmark and suitability profiles
+      responses:
+        "200": { description: Profiles }
+  /runs:
+    get:
+      summary: List recent benchmark runs
+      responses:
+        "200": { description: Run collection }
+    post:
+      summary: Submit an asynchronous benchmark run
+      security: [{ controllerToken: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RunRequest" }
+      responses:
+        "202":
+          description: Accepted
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Run" }
+        "400":
+          description: Invalid request or failed safety gate
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "401": { description: Missing controller token }
+  /runs/{runId}:
+    get:
+      summary: Read one benchmark run
+      parameters:
+        - in: path
+          name: runId
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Run
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Run" }
+        "404": { description: Not found }
+  /sessions:
+    post:
+      summary: Create a short-lived multi-node pairing session
+      security: [{ controllerToken: [] }]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                label: { type: string }
+      responses:
+        "201": { description: Session and short-lived join token }
+  /sessions/{sessionId}:
+    get:
+      summary: Read session and participants
+      parameters:
+        - in: path
+          name: sessionId
+          required: true
+          schema: { type: string }
+      responses:
+        "200": { description: Session }
+        "404": { description: Not found }
+  /sessions/{sessionId}/join:
+    post:
+      summary: Join an agent with a short-lived session token
+      parameters:
+        - in: path
+          name: sessionId
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [join_token, role, system]
+              properties:
+                join_token: { type: string }
+                role: { type: string, enum: [target, generator, replica, peer] }
+                name: { type: string }
+                system: { type: object, additionalProperties: true }
+      responses:
+        "200": { description: Joined }
+        "403": { description: Invalid token }
