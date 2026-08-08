@@ -6,7 +6,7 @@ systems.
 
 ## Storage
 
-- Filesystem test-file mode is the only enabled mode in `0.1.0-alpha`.
+- Filesystem test-file mode is the only enabled mode in `0.1.0`.
 - The selected directory is resolved before execution.
 - Free space must cover the test file plus the larger of 1 GiB or 5% volume
   reserve.
@@ -20,7 +20,8 @@ systems.
 - The project policy disables cloud-to-controller measurements.
 - Provider throughput will run only between paired agents.
 - Public DDoS, spoofing, reflection, and amplification are outside project
-  scope. Web resilience tests will use authenticated lab targets and rate caps.
+  scope. Future resilience tests require authenticated, operator-owned targets
+  with enforced rate and duration caps.
 
 ## Bootstrap
 

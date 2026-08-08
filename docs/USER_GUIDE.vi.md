@@ -1,9 +1,16 @@
 # Hướng dẫn sử dụng CloudMark
 
-Tài liệu này áp dụng cho `0.1.0-alpha`. Bản alpha đã chạy được inventory, nhận
-diện metadata AWS/Azure/GCP, lập kế hoạch bootstrap, chạy `fio` an toàn, lưu lịch
-sử SQLite, tạo phiên pairing và hiển thị dashboard local. Network peer executor,
-web/database workload và scoring đầy đủ đang ở các milestone tiếp theo.
+Tài liệu này áp dụng cho `0.1.0`. Phiên bản hiện tại vận hành được inventory,
+nhận diện metadata AWS/Azure/GCP, bootstrap tool, storage assessment bằng `fio`,
+lưu lịch sử SQLite, đăng ký topology nhiều máy và dashboard local. Dashboard
+phân biệt rõ chức năng `Available`, `Partial` và `Roadmap`; các executor chưa có
+không được chấm điểm hoặc mô tả là đã sẵn sàng.
+
+CloudMark có catalog 17 miền kỹ thuật bao phủ cloud, VPS và bare metal: inventory,
+provider identity, virtualization, CPU, RAM/NUMA, storage, network, GPU, web/API,
+database/cache, container/K8s, security, HA/DR, observability, control plane,
+cost và tính ổn định/noisy neighbor. Storage là executor hoàn thiện đầu tiên,
+không phải giới hạn phạm vi sản phẩm.
 
 ## 1. Mô hình triển khai
 
@@ -41,7 +48,7 @@ Controller không nhận traffic benchmark từ cloud. Dữ liệu benchmark net
 - Ubuntu/Debian;
 - RHEL/CentOS-compatible;
 - SLES 12.5/15;
-- Windows đang ở mức hỗ trợ inventory alpha;
+- Windows hỗ trợ Controller và inventory; benchmark automation ở mức một phần;
 - quyền `root`, `sudo` hoặc Administrator để bootstrap tool.
 
 Agent không cần Node.js hoặc dashboard.
@@ -51,7 +58,7 @@ Agent không cần Node.js hoặc dashboard.
 Clone repository:
 
 ```bash
-git clone <URL_GITHUB_CUA_DU_AN>
+git clone https://github.com/ToanHuyPham/CloudMark.git
 cd CloudMark
 ```
 
@@ -112,6 +119,23 @@ Trong dashboard:
 2. Dán token từ terminal API.
 3. Chọn **Kết nối**.
 4. Token chỉ tồn tại trong session của tab trình duyệt.
+
+### Đọc dashboard đúng cách
+
+- **Tổng quan** hiển thị bằng chứng live của máy đang kết nối và mức độ sẵn sàng
+  của phép đánh giá; các thẻ CPU/RAM/storage/network không đại diện cho toàn bộ
+  phạm vi sản phẩm.
+- **Danh mục đánh giá** liệt kê 17 miền kỹ thuật và trạng thái triển khai của
+  từng miền: `Available`, `Partial`, `Roadmap`.
+- **Đánh giá Storage** là executor có thể chạy ở phiên bản hiện tại.
+- **Kiểm thử phân tán** tạo topology nhiều agent; network traffic executor vẫn
+  được ghi `Partial` cho đến khi đủ safety guard.
+- **Mức độ phù hợp** ánh xạ bằng chứng kỹ thuật sang 12 nhóm nhu cầu. Thiếu metric
+  bắt buộc sẽ trả `Insufficient evidence`, không tự gán điểm 0.
+- **Lịch sử** lưu raw result để có thể tính lại kết luận khi methodology thay đổi.
+
+Xem toàn bộ metric và số máy tối thiểu tại
+[`ASSESSMENT_CATALOG.vi.md`](ASSESSMENT_CATALOG.vi.md).
 
 ## 5. Inventory
 
@@ -196,9 +220,9 @@ hoặc offline bundle thay vì thay thế Python hệ thống.
 
 ### Windows
 
-MVP nhận diện `winget`, nhưng chưa tự động ánh xạ toàn bộ `fio`/`iperf3` portable
-package. Inventory và Controller chạy được; bootstrap benchmark Windows sẽ được
-hoàn thiện ở milestone riêng.
+CloudMark nhận diện `winget`, nhưng chưa tự động ánh xạ toàn bộ `fio`/`iperf3`
+portable package. Inventory và Controller chạy được; dashboard hiển thị phần
+benchmark Windows là `Partial` cho đến khi package mapping được hoàn thiện.
 
 ## 8. Chạy storage benchmark
 
@@ -222,7 +246,7 @@ Không có `--yes`, CloudMark chỉ kiểm tra:
 python -m cloudmark run storage --profile disk-quick --yes
 ```
 
-Hoặc mở **Storage Lab** và chọn **Chạy Disk Quick**.
+Hoặc mở **Đánh giá Storage** và chọn **Chạy Disk Quick**.
 
 Mặc định:
 
@@ -252,7 +276,7 @@ tải nếu muốn kết quả dùng cho so sánh provider.
 
 ## 9. Tạo phiên nhiều máy
 
-Trong dashboard mở **Multi-node** → **Tạo phiên pairing**. Hệ thống sinh:
+Trong dashboard mở **Kiểm thử phân tán** → **Tạo phiên kết nối**. Hệ thống sinh:
 
 - session ID;
 - join token;
@@ -281,9 +305,10 @@ python -m cloudmark join \
 Nếu Controller chỉ có HTTP trên một VPN/private network đáng tin cậy, thêm
 `--allow-http`. Không dùng tùy chọn này qua Internet công cộng.
 
-Trong alpha, agent registration và inventory persistence đã hoạt động. Tự động
-chạy `iperf3` trực tiếp A↔B chưa được bật; đây là giới hạn có chủ đích để không
-mở một arbitrary network-load endpoint trước khi hoàn tất mTLS và rate limits.
+Agent registration và inventory persistence đã hoạt động. Tự động chạy `iperf3`
+trực tiếp A↔B chưa được bật; dashboard ghi coverage là `Partial`. Giới hạn này
+ngăn việc mở network-load endpoint trước khi hoàn tất mTLS, watchdog và rate
+limits.
 
 ## 10. Đọc dashboard
 
@@ -294,25 +319,29 @@ mở một arbitrary network-load endpoint trước khi hoàn tất mTLS và rat
 - tool readiness;
 - workload profile coverage.
 
-### Storage Lab
+### Đánh giá Storage
 
 - profile và file size;
 - safety state;
 - IOPS và latency sau benchmark;
 - raw run ID để truy xuất API.
 
-### Multi-node
+### Kiểm thử phân tán
 
 - topology Controller/Target/Generator;
 - chính sách traffic;
 - pairing token;
 - các phép đo network dự kiến.
 
-### Nhu cầu
+### Mức độ phù hợp
 
-Danh sách 12 workload. `Profile ready` nghĩa là profile dữ liệu đã được định
-nghĩa; không có nghĩa máy đã đạt yêu cầu. Score chỉ xuất hiện sau khi có đủ raw
-evidence.
+Danh sách 12 workload sử dụng ba mức coverage:
+
+- `Available`: executor và profile hiện có thể chạy;
+- `Partial`: chỉ có một phần bằng chứng hoặc topology;
+- `Roadmap`: chưa có executor, không chấm 0 điểm giả tạo.
+
+Kết luận phù hợp chỉ xuất hiện sau khi có đủ raw evidence bắt buộc.
 
 ### Lịch sử
 
@@ -391,9 +420,10 @@ signed self-hosted manifest sẽ được bổ sung.
 
 ### Agent không join được Controller
 
-Controller mặc định bind loopback nên VM bên ngoài không truy cập được. Bản
-alpha chỉ nên join qua VPN/reverse proxy HTTPS do bạn kiểm soát. Thiết kế relay
-outbound và mTLS enrollment sẽ được bổ sung trước khi bật network executor.
+Controller mặc định bind loopback nên VM bên ngoài không truy cập được. Khi cần
+đăng ký Agent từ xa, triển khai qua VPN hoặc reverse proxy HTTPS do bạn kiểm
+soát. Không dùng `--allow-http` qua Internet công cộng. Relay outbound và mTLS
+enrollment phải hoàn tất trước khi bật network executor tự động.
 
 ## 15. Kiểm thử dự án
 

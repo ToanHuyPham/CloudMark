@@ -1,6 +1,7 @@
 {
   "name": "cloudmark-dashboard",
   "version": "0.1.0",
+  "description": "Evidence-driven infrastructure assessment dashboard for CloudMark",
   "private": true,
   "engines": {
     "node": ">=22.13.0"

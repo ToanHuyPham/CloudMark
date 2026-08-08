@@ -13,7 +13,7 @@ traffic.
 The standard profile records A→B, B→A, and bidirectional results independently.
 It never averages directions before storing the raw measurements.
 
-## Planned measurements
+## Target measurement contract
 
 - TCP with 1, 4, 8, and 16 streams;
 - UDP rate sweep with loss, jitter, and reorder;
@@ -30,6 +30,6 @@ tests, not for provider fabric claims. Provider-grade results should use
 anti-affinity or placement evidence and repeat across fresh instances and time
 windows.
 
-Peer execution is not enabled in `0.1.0-alpha`; pairing, roles, persistence, and
-direction policy are implemented so the executor can be added without changing
-the API contract.
+The automated peer executor is not enabled in `0.1.0`. Pairing, roles,
+persistence, and direction policy are implemented; the dashboard marks network
+coverage as partial until guarded traffic execution is released.

@@ -18,15 +18,16 @@ test("server-renders the CloudMark dashboard shell", async () => {
   assert.equal(response.status, 200);
   assert.match(response.headers.get("content-type") ?? "", /^text\/html\b/i);
   const html = await response.text();
-  assert.match(html, /<title>CloudMark — Cloud qualification lab<\/title>/i);
+  assert.match(html, /<title>CloudMark — Infrastructure Assessment Platform<\/title>/i);
   assert.match(html, /CloudMark/);
-  assert.match(html, /System qualification/);
-  assert.match(html, /Storage Lab/);
+  assert.match(html, /Infrastructure assessment/);
+  assert.match(html, /Danh mục đánh giá/);
+  assert.match(html, /Đánh giá Storage/);
   assert.match(html, /Cloud → controller test disabled/);
-  assert.doesNotMatch(html, /codex-preview|Your site is taking shape|react-loading-skeleton/i);
+  assert.doesNotMatch(html, /codex-preview|Your site is taking shape|react-loading-skeleton|qualification lab/i);
 });
 
-test("removes starter metadata and keeps project policy explicit", async () => {
+test("keeps production metadata and project policy explicit", async () => {
   const [page, layout, packageJson, readme] = await Promise.all([
     readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/layout.tsx", import.meta.url), "utf8"),
@@ -35,10 +36,13 @@ test("removes starter metadata and keeps project policy explicit", async () => {
   ]);
   assert.doesNotMatch(page, /_sites-preview|SkeletonPreview/);
   assert.doesNotMatch(packageJson, /react-loading-skeleton/);
-  assert.match(layout, /CloudMark — Cloud qualification lab/);
+  assert.match(layout, /CloudMark — Infrastructure Assessment Platform/);
   assert.match(layout, /og\.png/);
   assert.match(page, /cloud_to_controller_network_test/);
-  assert.match(readme, /Cloud-to-controller network measurement is intentionally disabled/);
+  assert.match(page, /FULL-STACK INFRASTRUCTURE COVERAGE/);
+  assert.match(page, /domainCounts\.total \|\| 17/);
+  assert.doesNotMatch(`${page}\n${layout}\n${readme}`, /\bqualification lab\b|\b0\.1\.0-alpha\b|\bMVP\b/i);
+  assert.match(readme, /cloud-to-controller performance measurement\s+is disabled by policy/i);
   await access(new URL("../public/og.png", import.meta.url));
   await assert.rejects(access(new URL("../app/_sites-preview/SkeletonPreview.tsx", import.meta.url)));
 });

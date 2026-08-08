@@ -5,6 +5,34 @@ luận một máy phù hợp với workload nào khi đã có đủ metric bắt
 của lần chạy. Không dùng tên CPU, dung lượng RAM hoặc quảng cáo của provider để
 thay thế benchmark.
 
+## Phạm vi sản phẩm
+
+Thứ tự milestone bên dưới là **thứ tự triển khai**, không phải giới hạn phạm vi
+của CloudMark. Catalog sản phẩm gồm 17 miền kỹ thuật:
+
+1. system/hardware inventory;
+2. provider và instance identity;
+3. virtualization và topology;
+4. CPU/compute;
+5. memory/NUMA;
+6. storage/filesystem/object;
+7. network/connectivity;
+8. GPU/accelerator;
+9. web/API/TLS;
+10. database/cache;
+11. container/Kubernetes;
+12. security/isolation;
+13. reliability/HA/DR;
+14. observability/operations;
+15. provisioning/control plane;
+16. cost/efficiency;
+17. consistency/noisy neighbor.
+
+Chi tiết metric, topology tối thiểu và trạng thái từng miền nằm trong
+[`ASSESSMENT_CATALOG.vi.md`](ASSESSMENT_CATALOG.vi.md). Tất cả miền cùng cấp về
+phạm vi sản phẩm; storage được triển khai sớm vì đây là tiêu chí ưu tiên của
+người vận hành và executor an toàn đã trưởng thành hơn.
+
 ## Nguyên tắc cố định
 
 - Controller chỉ điều phối và lưu kết quả; không nằm trên data path benchmark.
@@ -15,7 +43,7 @@ thay thế benchmark.
 - Không suy diễn durability, SLA, snapshot, managed service hoặc compliance từ
   benchmark hiệu năng của một VM.
 
-## M0 — Nền tảng an toàn (đã có trong 0.1-alpha)
+## M0 — Nền tảng an toàn (đã có trong 0.1.0)
 
 - inventory đa nền tảng;
 - nhận diện AWS/Azure/GCP bằng metadata tin cậy;
@@ -26,7 +54,7 @@ thay thế benchmark.
 - pairing session 30 phút, tối đa 8 agent, đủ 2 agent mới `ready`;
 - dashboard local và OpenAPI v1.
 
-## M1 — Storage qualification (ưu tiên cao nhất)
+## M1 — Storage qualification (executor ưu tiên đầu tiên)
 
 ### Block/local storage
 
@@ -91,7 +119,7 @@ network trên cùng máy.
 - web tĩnh, API JSON, TLS, keep-alive và concurrency ramp;
 - reverse proxy, compression và HTTP/2/HTTP/3 khi được hỗ trợ;
 - soak test, error rate, P95/P99 và saturation point;
-- DDoS chỉ là **authorized resilience test** trong lab do người dùng sở hữu,
+- DDoS chỉ là **authorized resilience test** trên hệ thống do người dùng sở hữu,
   có giới hạn rate/duration; không phát sinh traffic tới hệ thống bên thứ ba.
 
 ## M5 — Container, K8s, HA và vận hành
@@ -107,7 +135,7 @@ network trên cùng máy.
 
 Các bài HA/failover cần 3 node trở lên để tách target, load generator và
 replica/witness. VM lồng trong một máy vật lý chỉ phù hợp để kiểm tra chức năng,
-không đủ bằng chứng cho availability hoặc provider fabric.
+không đủ bằng chứng cho availability hoặc provider fabric trong môi trường thật.
 
 ## M6 — Suitability và provider score
 
@@ -140,10 +168,11 @@ control-plane drill tương ứng.
 
 ## Thứ tự triển khai đề xuất
 
-1. Hoàn thiện M1 và schema time series vì storage là tiêu chí trọng tâm.
+1. Hoàn thiện M1 và schema time series vì storage là executor đang trưởng thành
+   nhất và là tiêu chí ưu tiên triển khai đầu tiên.
 2. Bật M2 sau khi mTLS, watchdog và generator saturation guard hoàn tất.
 3. Thêm M3 để tách giới hạn compute/memory khỏi storage/network.
 4. Xây M4 trên runner đã ổn định.
 5. Bổ sung adapter provider và các drill M5.
 6. Chỉ khóa ngưỡng suitability/provider score ở M6 sau khi có tập dữ liệu thực
-   từ nhiều cloud Việt Nam, cloud quốc tế và bare-metal cloud lab.
+   từ nhiều cloud Việt Nam, cloud quốc tế và hạ tầng bare-metal tự vận hành.

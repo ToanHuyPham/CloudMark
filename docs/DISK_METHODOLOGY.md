@@ -38,7 +38,7 @@ latency where supplied by `fio`. Read and write metrics remain separate.
 CloudMark will not infer durability, replication, snapshot quality, or SLA from
 disk performance. Those require provider API evidence and restore tests.
 
-## Planned deep profile
+## Extended storage profile roadmap
 
 The deep profile will add longer steady-state observation, per-second time
 series, metadata/small-file workloads, integrity verification, and optional

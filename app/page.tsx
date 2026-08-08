@@ -50,7 +50,8 @@ type Run = {
   result?: { jobs?: StorageMetric[] };
 };
 
-type Scenario = { id: string; label: string; status: string; primary: string };
+type Scenario = { id: string; label: string; status: "available" | "partial" | "roadmap"; primary: string; coverage: string };
+type AssessmentDomain = { id: string; label: string; status: "available" | "partial" | "roadmap"; summary: string };
 
 type Dashboard = {
   version: string;
@@ -59,6 +60,7 @@ type Dashboard = {
   profiles: {
     storage: Record<string, { label: string; description: string; estimated_minutes: number; jobs: { name: string }[] }>;
     network: Record<string, { label: string; description: string; requires_agents: number }>;
+    domains: AssessmentDomain[];
     scenarios: Scenario[];
   };
   policy: {
@@ -92,6 +94,14 @@ function statusLabel(status: string) {
     completed: "Hoàn tất",
     failed: "Thất bại",
   }[status] || status;
+}
+
+function coverageLabel(status: Scenario["status"]) {
+  return {
+    available: "Đã hỗ trợ",
+    partial: "Hỗ trợ một phần",
+    roadmap: "Theo lộ trình",
+  }[status];
 }
 
 export default function Home() {
@@ -146,6 +156,22 @@ export default function Home() {
     const benchmarkEvidence = dashboard?.runs.some((run) => run.status === "completed") ? 18 : 0;
     return Math.min(100, inventoryEvidence + toolEvidence + providerEvidence + benchmarkEvidence);
   }, [dashboard?.runs, inventory, provider?.confidence]);
+  const scenarioCounts = useMemo(() => {
+    const scenarios = dashboard?.profiles.scenarios || [];
+    return {
+      available: scenarios.filter((scenario) => scenario.status === "available").length,
+      partial: scenarios.filter((scenario) => scenario.status === "partial").length,
+    };
+  }, [dashboard?.profiles.scenarios]);
+  const domainCounts = useMemo(() => {
+    const domains = dashboard?.profiles.domains || [];
+    return {
+      total: domains.length,
+      available: domains.filter((domain) => domain.status === "available").length,
+      partial: domains.filter((domain) => domain.status === "partial").length,
+      roadmap: domains.filter((domain) => domain.status === "roadmap").length,
+    };
+  }, [dashboard?.profiles.domains]);
 
   async function refreshSystem() {
     setBusy(true);
@@ -202,7 +228,7 @@ export default function Home() {
       const response = await fetch(`${API}/sessions`, {
         method: "POST",
         headers: { "Content-Type": "application/json", "X-CloudMark-Token": token },
-        body: JSON.stringify({ label: "Provider internal network lab" }),
+        body: JSON.stringify({ label: "Provider internal network assessment" }),
       });
       const payload = await response.json();
       if (!response.ok) throw new Error(payload.error || "Không thể tạo phiên pairing");
@@ -224,10 +250,11 @@ export default function Home() {
 
   const nav = [
     ["overview", "Tổng quan", "01"],
-    ["storage", "Storage Lab", "02"],
-    ["network", "Multi-node", "03"],
-    ["scenarios", "Nhu cầu", "04"],
-    ["history", "Lịch sử", "05"],
+    ["catalog", "Danh mục đánh giá", "02"],
+    ["storage", "Đánh giá Storage", "03"],
+    ["network", "Kiểm thử phân tán", "04"],
+    ["scenarios", "Mức độ phù hợp", "05"],
+    ["history", "Lịch sử", "06"],
   ];
 
   return (
@@ -235,7 +262,7 @@ export default function Home() {
       <aside className="sidebar">
         <div className="brand">
           <span className="brand-mark">CM</span>
-          <span><strong>CloudMark</strong><small>qualification lab</small></span>
+          <span><strong>CloudMark</strong><small>infrastructure intelligence</small></span>
         </div>
         <nav aria-label="Điều hướng dashboard">
           {nav.map(([id, label, number]) => (
@@ -255,7 +282,7 @@ export default function Home() {
         <header className="topbar">
           <div>
             <div className="eyebrow">LOCAL CONTROLLER / {inventory?.hostname || "WAITING"}</div>
-            <h1>{activeView === "overview" ? "System qualification" : nav.find(([id]) => id === activeView)?.[1]}</h1>
+            <h1>{activeView === "overview" ? "Infrastructure assessment" : nav.find(([id]) => id === activeView)?.[1]}</h1>
           </div>
           <div className="top-actions">
             <span className={`api-state ${apiState}`}><i />API {apiState === "online" ? "online" : apiState === "offline" ? "offline" : "checking"}</span>
@@ -271,8 +298,8 @@ export default function Home() {
             <section className="hero-panel">
               <div className="hero-copy">
                 <div className="provider-line">
-                  <span className={provider?.provider === "Unknown" ? "provider-badge unknown" : "provider-badge"}>
-                    {provider?.provider === "Unknown" ? "UNVERIFIED ENVIRONMENT" : "VERIFIED CLOUD"}
+                  <span className={(provider?.confidence || 0) < 0.95 ? "provider-badge unknown" : "provider-badge"}>
+                    {(provider?.confidence || 0) >= 0.95 ? "METADATA VERIFIED" : provider?.confidence ? "DECLARED ENVIRONMENT" : "UNVERIFIED ENVIRONMENT"}
                   </span>
                   <span>{provider?.source || "Đang tìm bằng chứng metadata"}</span>
                 </div>
@@ -287,7 +314,7 @@ export default function Home() {
                 </div>
               </div>
               <div className="readiness-ring" style={{ "--value": evidenceReadiness } as React.CSSProperties}>
-                <div><strong>{inventory ? evidenceReadiness : "—"}</strong><span>%</span><small>evidence ready</small></div>
+                <div><strong>{inventory ? evidenceReadiness : "—"}</strong><span>%</span><small>evidence coverage</small></div>
               </div>
             </section>
 
@@ -305,7 +332,7 @@ export default function Home() {
               <article className="metric-card accent-orange">
                 <span className="metric-index">STORAGE / 03</span>
                 <strong>{formatBytes(primaryDisk?.size_bytes, true)}<small>{primaryDisk?.filesystem || "volume"}</small></strong>
-                <p>{formatBytes(primaryDisk?.free_bytes, true)} available · {primaryDisk?.health || "Unknown"}</p>
+                <p>{formatBytes(primaryDisk?.free_bytes, true)} còn trống · {primaryDisk?.health || "Unknown"}</p>
               </article>
               <article className="metric-card accent-violet">
                 <span className="metric-index">NETWORK / 04</span>
@@ -316,9 +343,9 @@ export default function Home() {
 
             <section className="dashboard-grid">
               <article className="panel storage-summary">
-                <div className="panel-head"><div><span className="section-kicker">PRIORITY MODULE</span><h3>Storage readiness</h3></div><button className="text-button" onClick={() => setActiveView("storage")}>Mở Storage Lab →</button></div>
+                <div className="panel-head"><div><span className="section-kicker">PRIORITY ASSESSMENT</span><h3>Năng lực lưu trữ</h3></div><button className="text-button" onClick={() => setActiveView("storage")}>Mở đánh giá Storage →</button></div>
                 <div className="storage-content">
-                  <div className="disk-visual"><div className="disk-core"><span>{primaryDisk?.name || "DISK"}</span><strong>{inventory?.capabilities.fio ? "READY" : "NEEDS FIO"}</strong></div></div>
+                  <div className="disk-visual"><div className="disk-core"><span>{primaryDisk?.name || "DISK"}</span><strong>{inventory?.capabilities.fio ? "FIO AVAILABLE" : "INSTALL FIO"}</strong></div></div>
                   <div className="check-list">
                     <div><span className="ok">✓</span><p><strong>Filesystem-safe</strong><small>Chỉ dùng file tạm, không raw device</small></p></div>
                     <div><span className={inventory?.capabilities.fio ? "ok" : "warn"}>{inventory?.capabilities.fio ? "✓" : "!"}</span><p><strong>fio runtime</strong><small>{inventory?.capabilities.fio ? "Đã sẵn sàng" : "Cần bootstrap storage pack"}</small></p></div>
@@ -328,10 +355,10 @@ export default function Home() {
               </article>
 
               <article className="panel scenario-summary">
-                <div className="panel-head"><div><span className="section-kicker">WORKLOAD COVERAGE</span><h3>12 nhu cầu đánh giá</h3></div><span className="count-badge">3 ready / 12</span></div>
+                <div className="panel-head"><div><span className="section-kicker">ASSESSMENT CATALOG</span><h3>{domainCounts.total || 17} miền kỹ thuật</h3></div><button className="text-button" onClick={() => setActiveView("catalog")}>Xem toàn bộ →</button></div>
                 <div className="mini-scenarios">
-                  {dashboard?.profiles.scenarios.slice(0, 6).map((scenario) => (
-                    <div key={scenario.id}><span className={scenario.status} /><p>{scenario.label}</p><small>{scenario.status === "ready" ? "Profile sẵn sàng" : "Đang xây dựng"}</small></div>
+                  {dashboard?.profiles.domains.slice(0, 6).map((domain) => (
+                    <div key={domain.id}><span className={domain.status} /><p>{domain.label}</p><small>{coverageLabel(domain.status)}</small></div>
                   ))}
                 </div>
               </article>
@@ -339,10 +366,32 @@ export default function Home() {
           </div>
         )}
 
+        {activeView === "catalog" && (
+          <div className="view catalog-view">
+            <section className="section-intro">
+              <div><span className="section-kicker">FULL-STACK INFRASTRUCTURE COVERAGE</span><h2>Từ phần cứng và hypervisor đến workload, vận hành và control plane.</h2><p>CloudMark tổ chức bằng chứng thành các miền kỹ thuật độc lập, sau đó mới ánh xạ sang mục đích sử dụng. Module chưa đủ executor được ghi rõ là Hỗ trợ một phần hoặc Theo lộ trình.</p></div>
+            </section>
+            <section className="coverage-strip" aria-label="Trạng thái danh mục đánh giá">
+              <article className="coverage-stat available"><span>AVAILABLE</span><strong>{domainCounts.available}</strong><small>có thể thu thập hoặc chạy ngay</small></article>
+              <article className="coverage-stat partial"><span>PARTIAL</span><strong>{domainCounts.partial}</strong><small>đã có một phần bằng chứng</small></article>
+              <article className="coverage-stat roadmap"><span>ROADMAP</span><strong>{domainCounts.roadmap}</strong><small>chưa dùng để chấm điểm</small></article>
+            </section>
+            <section className="domain-grid">
+              {dashboard?.profiles.domains.map((domain, index) => (
+                <article key={domain.id} className={`domain-card ${domain.status}`}>
+                  <div><span>{String(index + 1).padStart(2, "0")}</span><i className={domain.status} /></div>
+                  <h3>{domain.label}</h3><p>{domain.summary}</p>
+                  <footer><span>{coverageLabel(domain.status)}</span><strong>DOMAIN</strong></footer>
+                </article>
+              ))}
+            </section>
+          </div>
+        )}
+
         {activeView === "storage" && (
           <div className="view storage-view">
             <section className="section-intro">
-              <div><span className="section-kicker">SAFE FILESYSTEM BENCHMARK</span><h2>Đo ổ cứng theo workload, không theo một con số MB/s.</h2><p>Quick dùng 512 MiB; Standard dùng 4 GiB. Cả hai luôn giữ safety reserve và xóa file tạm sau khi hoàn thành.</p></div>
+              <div><span className="section-kicker">CURRENT AVAILABLE EXECUTOR</span><h2>Đo ổ cứng theo workload, không theo một con số MB/s.</h2><p>Storage là một miền trong catalog full-stack. Quick dùng 512 MiB; Standard dùng 4 GiB. Cả hai luôn giữ safety reserve và xóa file tạm sau khi hoàn thành.</p></div>
               <button className="button primary" onClick={startDiskQuick} disabled={busy}>Chạy Disk Quick</button>
             </section>
             <section className="storage-layout">
@@ -364,7 +413,7 @@ export default function Home() {
                 <div className="profile-jobs">
                   {dashboard?.profiles.storage["disk-quick"]?.jobs.map((job, index) => <div key={job.name}><span>{String(index + 1).padStart(2, "0")}</span><strong>{job.name}</strong><small>filesystem-safe</small></div>)}
                 </div>
-                <div className="safety-note"><strong>Safety gate</strong><p>Raw device, TRIM và destructive preconditioning đều bị vô hiệu hóa trong MVP.</p></div>
+                <div className="safety-note"><strong>Safety gate</strong><p>Raw device, TRIM và destructive preconditioning bị vô hiệu hóa trong cấu hình mặc định.</p></div>
               </article>
             </section>
           </div>
@@ -372,10 +421,10 @@ export default function Home() {
 
         {activeView === "network" && (
           <div className="view network-view">
-            <section className="section-intro"><div><span className="section-kicker">PROVIDER-INTERNAL ONLY</span><h2>Network test chạy trực tiếp giữa các cloud agent.</h2><p>Controller chỉ điều phối và lưu kết quả. Không có chiều đo từ máy nhà cung cấp về máy của bạn.</p></div><button className="button primary" onClick={createPairing} disabled={busy}>Tạo phiên pairing</button></section>
+            <section className="section-intro"><div><span className="section-kicker">DISTRIBUTED ASSESSMENT</span><h2>Tách luồng điều khiển khỏi luồng dữ liệu benchmark.</h2><p>Controller đăng ký máy và lưu bằng chứng; traffic hiệu năng chỉ đi trực tiếp giữa các agent của nhà cung cấp. Network executor tự động chưa được bật trong bản phát hành hiện tại.</p></div><button className="button primary" onClick={createPairing} disabled={busy}>Tạo phiên kết nối</button></section>
             <section className="topology-panel panel">
               <div className="topology-node controller"><span>LOCAL</span><strong>Controller</strong><small>Dashboard + API</small></div>
-              <div className="control-line"><span>mTLS control</span></div>
+              <div className="control-line"><span>HTTPS / VPN control</span></div>
               <div className="cloud-boundary">
                 <span className="boundary-label">PROVIDER NETWORK</span>
                 <div className="topology-node target"><span>VM A</span><strong>Target</strong><small>web · db · storage</small></div>
@@ -384,22 +433,22 @@ export default function Home() {
               </div>
               <div className="blocked-line"><span>×</span><p><strong>Cloud → controller measurement</strong><small>Disabled by project policy</small></p></div>
             </section>
-            {pairing && <section className="pairing-card"><div><span>PAIRING SESSION</span><strong>{pairing.id}</strong><small>Hết hạn {new Date(pairing.expires_at).toLocaleTimeString("vi-VN")}</small></div><code>{pairing.join_token}</code></section>}
+            {pairing && <section className="pairing-card"><div><span>ASSESSMENT SESSION</span><strong>{pairing.id}</strong><small>Hết hạn {new Date(pairing.expires_at).toLocaleTimeString("vi-VN")}</small></div><code>{pairing.join_token}</code></section>}
             <section className="network-checks">
-              {[["TCP", "1 / 4 / 8 / 16 streams"], ["UDP", "jitter · loss · rate sweep"], ["LATENCY", "idle · loaded · bufferbloat"], ["DIRECTION", "A→B · B→A · bidirectional"]].map(([name, detail]) => <article key={name}><span>{name}</span><strong>{detail}</strong><small>Chạy khi đủ 2 agent</small></article>)}
+              {[["TCP", "1 / 4 / 8 / 16 streams"], ["UDP", "jitter · loss · rate sweep"], ["LATENCY", "idle · loaded · bufferbloat"], ["DIRECTION", "A→B · B→A · bidirectional"]].map(([name, detail]) => <article key={name}><span>{name}</span><strong>{detail}</strong><small>Phạm vi network executor</small></article>)}
             </section>
           </div>
         )}
 
         {activeView === "scenarios" && (
           <div className="view scenarios-view">
-            <section className="section-intro"><div><span className="section-kicker">SUITABILITY ENGINE</span><h2>Mỗi workload có hard gates, bằng chứng và confidence riêng.</h2><p>Tiêu chí chưa đo được hiển thị “chưa đủ dữ liệu”, không tự động cho 0 điểm.</p></div></section>
+            <section className="section-intro"><div><span className="section-kicker">SUITABILITY COVERAGE</span><h2>Biến bằng chứng full-stack thành khuyến nghị đúng mục đích.</h2><p>12 nhóm nhu cầu được tổng hợp từ {domainCounts.total || 17} miền kỹ thuật. CloudMark không chấm điểm cho workload khi chưa có executor hoặc chưa đủ bằng chứng bắt buộc; hiện có {scenarioCounts.available} nhóm đã hỗ trợ và {scenarioCounts.partial} nhóm có bằng chứng một phần.</p></div></section>
             <section className="scenario-grid">
               {dashboard?.profiles.scenarios.map((scenario, index) => (
-                <article key={scenario.id} className={scenario.status === "ready" ? "scenario-card ready" : "scenario-card"}>
+                <article key={scenario.id} className={`scenario-card ${scenario.status}`}>
                   <div><span>{String(index + 1).padStart(2, "0")}</span><i className={scenario.status} /></div>
-                  <h3>{scenario.label}</h3><p>Primary evidence: {scenario.primary}</p>
-                  <footer><span>{scenario.status === "ready" ? "Profile ready" : "Planned"}</span><strong>{scenario.status === "ready" ? "—" : "0%"}</strong></footer>
+                  <h3>{scenario.label}</h3><p>{scenario.coverage}</p>
+                  <footer><span>{coverageLabel(scenario.status)}</span><strong>{scenario.primary}</strong></footer>
                 </article>
               ))}
             </section>
@@ -408,7 +457,7 @@ export default function Home() {
 
         {activeView === "history" && (
           <div className="view history-view">
-            <section className="section-intro"><div><span className="section-kicker">IMMUTABLE RAW RESULTS</span><h2>Lịch sử benchmark local.</h2><p>Raw metrics được giữ trong SQLite để có thể tính lại score khi methodology thay đổi.</p></div></section>
+            <section className="section-intro"><div><span className="section-kicker">IMMUTABLE RAW RESULTS</span><h2>Lịch sử đánh giá trên Controller.</h2><p>Raw metrics được giữ trong SQLite để có thể tính lại kết quả khi methodology thay đổi.</p></div></section>
             <section className="panel history-table">
               <div className="table-head"><span>RUN</span><span>SUITE / PROFILE</span><span>STATUS</span><span>STARTED</span></div>
               {dashboard?.runs.length ? dashboard.runs.map((run) => (
@@ -418,7 +467,7 @@ export default function Home() {
           </div>
         )}
 
-        <footer className="app-footer"><span>CLOUDMARK / LOCAL-FIRST</span><span>RAW DEVICE TESTS OFF</span><span>CLOUD → CONTROLLER OFF</span></footer>
+        <footer className="app-footer"><span>CLOUDMARK / EVIDENCE-DRIVEN</span><span>RESULTS STORED LOCALLY</span><span>CLOUD → CONTROLLER OFF</span></footer>
       </section>
 
       {tokenOpen && (

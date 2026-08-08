@@ -25,7 +25,7 @@ def join_session(
     parsed = urlparse(base)
     local_hosts = {"127.0.0.1", "localhost", "::1"}
     if parsed.scheme != "https" and parsed.hostname not in local_hosts and not allow_http:
-        raise ValueError("Remote controller must use HTTPS. Add --allow-http only inside a trusted private lab network.")
+        raise ValueError("Remote controller must use HTTPS. Add --allow-http only on a trusted, isolated private network.")
     body = json.dumps(
         {
             "join_token": join_token,

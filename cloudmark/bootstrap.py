@@ -85,7 +85,7 @@ def create_plan(packs: list[str]) -> BootstrapPlan:
         commands = [["zypper", "--non-interactive", "refresh"], ["zypper", "--non-interactive", "install", *packages]]
         notes.append("SLES may require an active SUSE registration or the offline CloudMark tool bundle.")
     elif manager == "winget":
-        notes.append("Windows MVP uses winget plus portable CloudMark tool bundles; package mapping is not yet automatic.")
+        notes.append("Windows uses winget plus portable CloudMark tool bundles; benchmark package mapping is not yet automatic.")
     elif manager == "windows-bundle":
         notes.append("winget is unavailable; use the signed CloudMark Windows tool bundle.")
     else:

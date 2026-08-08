@@ -15,6 +15,30 @@ model never destroys or rewrites the original benchmark result.
    They never accept arbitrary shell fragments.
 5. **Profiles** define workload size, duration, safety limits, and required
    agent topology.
+6. **Assessment catalog** describes all technical domains independently of
+   executor availability, and records whether each domain is available,
+   partial, or roadmap.
+7. **Suitability engine** consumes only valid catalog evidence and maps it to
+   workload-specific gates. Missing evidence remains unknown rather than zero.
+
+## Evidence flow
+
+```text
+Inventory + versioned benchmark runs + provider/control-plane evidence
+                              │
+                              ▼
+              17-domain assessment catalog
+                              │
+                              ▼
+      workload gates + confidence + stability + cost context
+                              │
+                              ▼
+               12 suitability recommendations
+```
+
+Catalog breadth and executor availability are intentionally separate. Adding a
+domain to the product scope never permits it to influence a score before its
+measurement and safety gates are implemented.
 
 ## Network direction policy
 
@@ -35,7 +59,7 @@ the operator's home machine.
 SQLite tables:
 
 - `runs`: immutable request and result payloads with lifecycle state;
-- `sessions`: short-lived multi-node labs;
+- `sessions`: short-lived distributed assessment sessions;
 - `agents`: participants and their inventory evidence.
 
 WAL mode permits dashboard reads while a benchmark updates its job state.

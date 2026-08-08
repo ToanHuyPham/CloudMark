@@ -18,7 +18,7 @@ def _print(value: object) -> None:
 
 
 def parser() -> argparse.ArgumentParser:
-    root = argparse.ArgumentParser(prog="cloudmark", description="CloudMark local cloud qualification agent")
+    root = argparse.ArgumentParser(prog="cloudmark", description="CloudMark infrastructure assessment controller and agent")
     root.add_argument("--version", action="version", version=__version__)
     sub = root.add_subparsers(dest="command", required=True)
 
@@ -42,7 +42,7 @@ def parser() -> argparse.ArgumentParser:
     run.add_argument("--workspace", type=Path, default=Path(".cloudmark/benchmark-workspace"))
     run.add_argument("--yes", action="store_true", help="Confirm writing a temporary benchmark file")
 
-    join = sub.add_parser("join", help="Join a multi-node lab session")
+    join = sub.add_parser("join", help="Join a distributed assessment session")
     join.add_argument("--controller", required=True, help="Controller base URL, for example https://controller.example")
     join.add_argument("--session", required=True)
     join.add_argument("--token", required=True, help="One-time join token")

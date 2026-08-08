@@ -10,7 +10,7 @@ from cloudmark.benchmarks import _metrics
 from cloudmark.bootstrap import create_plan
 from cloudmark.database import Database
 from cloudmark.inventory import collect_inventory
-from cloudmark.profiles import NETWORK_PROFILES, STORAGE_PROFILES
+from cloudmark.profiles import ASSESSMENT_DOMAINS, NETWORK_PROFILES, SCENARIOS, STORAGE_PROFILES
 from cloudmark.provider import _declared_manifest
 
 
@@ -66,6 +66,22 @@ class CloudMarkTests(unittest.TestCase):
         self.assertFalse(profile["cloud_to_controller"])
         self.assertEqual(profile["requires_agents"], 2)
 
+    def test_scenario_coverage_does_not_overstate_executors(self) -> None:
+        statuses = {scenario["id"]: scenario["status"] for scenario in SCENARIOS}
+        self.assertEqual(statuses["storage-backup"], "available")
+        self.assertEqual(statuses["database"], "partial")
+        self.assertEqual(statuses["network"], "partial")
+        self.assertEqual(statuses["web-app"], "roadmap")
+
+    def test_assessment_catalog_covers_full_infrastructure_stack(self) -> None:
+        domains = {domain["id"]: domain["status"] for domain in ASSESSMENT_DOMAINS}
+        self.assertGreaterEqual(len(domains), 15)
+        self.assertTrue({"compute", "memory", "storage", "network", "gpu", "web", "database"}.issubset(domains))
+        self.assertTrue({"containers", "security", "reliability", "observability", "control-plane", "cost", "consistency"}.issubset(domains))
+        self.assertEqual(domains["storage"], "available")
+        self.assertEqual(domains["network"], "partial")
+        self.assertEqual(domains["reliability"], "roadmap")
+
     def test_bootstrap_includes_base_pack(self) -> None:
         plan = create_plan(["storage"])
         self.assertEqual(plan.packs[0], "base")
@@ -74,11 +90,11 @@ class CloudMarkTests(unittest.TestCase):
     def test_declared_provider_manifest_is_labelled_unverified(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             manifest = Path(directory) / "provider.json"
-            manifest.write_text('{"provider":"Lab Cloud","region":"hcm-1"}', encoding="utf-8")
+            manifest.write_text('{"provider":"Regional Cloud","region":"hcm-1"}', encoding="utf-8")
             with patch.dict("os.environ", {"CLOUDMARK_PROVIDER_MANIFEST": str(manifest)}):
                 detected = _declared_manifest()
             self.assertIsNotNone(detected)
-            self.assertEqual(detected["provider"], "Lab Cloud")
+            self.assertEqual(detected["provider"], "Regional Cloud")
             self.assertIn("unverified", detected["source"].lower())
 
     def test_remote_agent_join_requires_https_by_default(self) -> None:

@@ -15,4 +15,4 @@ python -m venv .venv
 & .\.venv\Scripts\python.exe -m cloudmark inventory
 & .\.venv\Scripts\python.exe -m cloudmark doctor --packs storage,network,database,web
 
-Write-Host "CloudMark Controller is installed. Windows benchmark tool automation is still alpha." -ForegroundColor Green
+Write-Host "CloudMark Controller is installed. Windows benchmark tool automation currently has partial support." -ForegroundColor Green

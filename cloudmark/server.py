@@ -68,7 +68,7 @@ class CloudMarkController:
         suite = str(request.get("suite", ""))
         profile = str(request.get("profile", ""))
         if suite not in {"inventory", "storage"}:
-            raise ValueError("MVP supports inventory and storage runs. Multi-node network execution is next.")
+            raise ValueError("This release supports inventory and storage runs. The distributed network executor is not enabled yet.")
         if suite == "storage":
             if not request.get("confirm_write"):
                 raise ValueError("Storage test requires confirm_write=true because it writes a temporary test file.")
