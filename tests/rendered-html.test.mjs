@@ -28,9 +28,10 @@ test("server-renders the CloudMark dashboard shell", async () => {
 });
 
 test("keeps production metadata and project policy explicit", async () => {
-  const [page, layout, packageJson, readme] = await Promise.all([
+  const [page, layout, styles, packageJson, readme] = await Promise.all([
     readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/layout.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
     readFile(new URL("../package.json", import.meta.url), "utf8"),
     readFile(new URL("../README.md", import.meta.url), "utf8"),
   ]);
@@ -47,6 +48,10 @@ test("keeps production metadata and project policy explicit", async () => {
   assert.match(page, /LOCAL SATURATION EXECUTORS/);
   assert.match(page, /EXCLUSIVE LOAD POLICY/);
   assert.match(page, /EXECUTION TARGET/);
+  assert.match(styles, /@media \(max-width: 900px\)/);
+  assert.match(styles, /grid-template-columns: repeat\(7, minmax\(0, 1fr\)\)/);
+  assert.match(styles, /overflow-x: hidden/);
+  assert.doesNotMatch(styles, /\.nav-item:not\(\.active\)\s*\{\s*font-size:\s*0/);
   assert.equal(JSON.parse(packageJson).version, "0.5.0");
   assert.doesNotMatch(`${page}\n${layout}\n${readme}`, /\bqualification lab\b|\b0\.1\.0-alpha\b|\bMVP\b/i);
   assert.match(readme, /cloud-to-controller performance measurement\s+is disabled by policy/i);
