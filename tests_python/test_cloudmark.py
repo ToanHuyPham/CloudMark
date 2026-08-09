@@ -14,10 +14,18 @@ from unittest.mock import patch
 from cloudmark.agent import AgentWorker, join_session
 from cloudmark.benchmarks import _metrics, _parse_fio_log, run_storage
 from cloudmark.bootstrap import create_plan
+from cloudmark.compute import ComputeError, parse_sysbench_cpu, run_system_benchmark, system_preflight
 from cloudmark.database import Database
 from cloudmark.inventory import collect_inventory
 from cloudmark.network import NetworkError, run_network, validate_network_run
-from cloudmark.profiles import ASSESSMENT_DOMAINS, NETWORK_PROFILES, SCENARIOS, STORAGE_PROFILES
+from cloudmark.profiles import (
+    ASSESSMENT_DOMAINS,
+    COMPUTE_PROFILES,
+    MEMORY_PROFILES,
+    NETWORK_PROFILES,
+    SCENARIOS,
+    STORAGE_PROFILES,
+)
 from cloudmark.provider import _declared_manifest
 from cloudmark.runner import CancellationToken, JobContext, ProcessResult, RunCancelled, RunTimedOut
 from cloudmark.server import CloudMarkController, Server
@@ -209,6 +217,12 @@ class CloudMarkTests(unittest.TestCase):
             self.assertEqual(result["tool"]["version"], "iperf 3.17")
 
     def test_profiles_enforce_network_direction_policy(self) -> None:
+        self.assertIn("compute-quick", COMPUTE_PROFILES)
+        self.assertIn("compute-standard", COMPUTE_PROFILES)
+        self.assertIn("memory-quick", MEMORY_PROFILES)
+        self.assertIn("memory-standard", MEMORY_PROFILES)
+        self.assertTrue(all(profile["methodology_version"] == "compute-v1" for profile in COMPUTE_PROFILES.values()))
+        self.assertTrue(all(profile["methodology_version"] == "memory-v1" for profile in MEMORY_PROFILES.values()))
         self.assertIn("disk-quick", STORAGE_PROFILES)
         self.assertIn("disk-database", STORAGE_PROFILES)
         self.assertIn("disk-throughput", STORAGE_PROFILES)
@@ -238,6 +252,142 @@ class CloudMarkTests(unittest.TestCase):
         plan = create_plan(["storage"])
         self.assertEqual(plan.packs[0], "base")
         self.assertIn("storage", plan.packs)
+
+    def test_bootstrap_compute_and_memory_packs_include_required_tools(self) -> None:
+        with patch("cloudmark.bootstrap.detect_manager", return_value="apt"):
+            plan = create_plan(["compute", "memory"])
+        self.assertIn("sysbench", plan.packages)
+        self.assertIn("gcc", plan.packages)
+        self.assertIn("libgomp1", plan.packages)
+
+    def test_memory_preflight_rejects_unsupported_platforms_before_compilation(self) -> None:
+        with tempfile.TemporaryDirectory() as directory, patch("cloudmark.compute.sys.platform", "win32"):
+            with self.assertRaisesRegex(ComputeError, "currently supports Linux"):
+                system_preflight("memory", "memory-quick", Path(directory))
+
+    def test_sysbench_cpu_parser_keeps_rate_latency_and_stability(self) -> None:
+        output = """
+[ 1s ] thds: 1 eps: 1000.00 lat (ms,95%): 1.20
+[ 2s ] thds: 1 eps: 1100.00 lat (ms,95%): 1.10
+CPU speed:
+    events per second: 1050.50
+General statistics:
+    total time: 2.0010s
+    total number of events: 2102
+Latency (ms):
+    min: 0.80
+    avg: 0.95
+    max: 1.80
+    95th percentile: 1.20
+"""
+        result = parse_sysbench_cpu(output)
+        self.assertEqual(result["events"], 2102)
+        self.assertEqual(result["events_per_second"], 1050.5)
+        self.assertEqual(result["latency"]["p95_ms"], 1.2)
+        self.assertEqual(len(result["time_series"]), 2)
+        self.assertGreater(result["stability"]["cv_percent"], 0)
+
+    def test_compute_runner_records_versioned_jobs_and_scaling(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            output = """
+[ 1s ] thds: 1 eps: 1000.00 lat (ms,95%): 1.00
+events per second: 1000.00
+total time: 15.0000s
+total number of events: 15000
+min: 0.50
+avg: 0.75
+max: 1.50
+95th percentile: 1.00
+"""
+            preflight = {
+                "suite": "compute",
+                "profile": "compute-quick",
+                "profile_version": "1.0",
+                "methodology_version": "compute-v1",
+                "workspace": directory,
+                "logical_cores": 4,
+                "job_count": 3,
+                "estimated_seconds": 106,
+                "default_timeout_seconds": 286,
+                "requires_admin": False,
+                "writes_benchmark_data": False,
+                "tool": "sysbench",
+                "tool_name": "sysbench",
+                "tool_version": "sysbench 1.0.20",
+            }
+            context = JobContext("run_compute", total_steps=3, timeout_seconds=30)
+            with patch("cloudmark.compute.system_preflight", return_value=preflight), patch.object(
+                context,
+                "run_process",
+                side_effect=[ProcessResult(("sysbench",), 0, output, "", 0.01) for _ in range(3)],
+            ):
+                result = run_system_benchmark(
+                    "compute",
+                    "compute-quick",
+                    Path(directory),
+                    "run_compute",
+                    context=context,
+                )
+            self.assertEqual(result["methodology_version"], "compute-v1")
+            self.assertEqual(result["tool"]["version"], "sysbench 1.0.20")
+            self.assertEqual(len(result["compute_jobs"]), 3)
+            self.assertEqual(result["compute_jobs"][1]["threads"], 4)
+            self.assertEqual(result["scaling"]["all_core_threads"], 4)
+            self.assertEqual(context.completed_steps, 3)
+
+    def test_memory_runner_records_native_bandwidth_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            payload = json.dumps(
+                {
+                    "benchmark_version": "1.0",
+                    "kernel": "copy",
+                    "threads": 4,
+                    "array_bytes": 134217728,
+                    "allocated_bytes": 402653184,
+                    "iterations": 10,
+                    "elapsed_seconds": 20.0,
+                    "bytes_processed": 2684354560,
+                    "bandwidth_bytes_per_second": 134217728,
+                    "checksum": 10.0,
+                }
+            )
+            preflight = {
+                "suite": "memory",
+                "profile": "memory-quick",
+                "profile_version": "1.0",
+                "methodology_version": "memory-v1",
+                "workspace": directory,
+                "logical_cores": 4,
+                "job_count": 5,
+                "estimated_seconds": 90,
+                "default_timeout_seconds": 270,
+                "requires_admin": False,
+                "writes_benchmark_data": False,
+                "tool": "cloudmark-memory-bench",
+                "tool_name": "cloudmark-memory-bench",
+                "tool_version": "1.0",
+                "compiler_version": "gcc 13.2",
+                "array_bytes": 134217728,
+                "allocated_bytes": 402653184,
+            }
+            context = JobContext("run_memory", total_steps=5, timeout_seconds=30)
+            with patch("cloudmark.compute.system_preflight", return_value=preflight), patch.object(
+                context,
+                "run_process",
+                side_effect=[ProcessResult(("cloudmark-memory-bench",), 0, payload, "", 0.01) for _ in range(5)],
+            ):
+                result = run_system_benchmark(
+                    "memory",
+                    "memory-quick",
+                    Path(directory),
+                    "run_memory",
+                    context=context,
+                )
+            self.assertEqual(result["methodology_version"], "memory-v1")
+            self.assertEqual(result["tool"]["compiler_version"], "gcc 13.2")
+            self.assertEqual(len(result["memory_jobs"]), 5)
+            self.assertEqual(result["memory_jobs"][0]["metrics"]["bandwidth_bytes_per_second"], 134217728)
+            self.assertEqual(context.completed_steps, 5)
 
     def test_declared_provider_manifest_is_labelled_unverified(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -288,7 +438,16 @@ class CloudMarkTests(unittest.TestCase):
             run = controller.cancel_run("run_cancel")
             self.assertTrue(run["cancel_requested"])
 
-    def test_http_api_exposes_v030_dashboard_and_cancel_endpoint(self) -> None:
+    def test_controller_prevents_overlapping_local_saturation_runs(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            controller = CloudMarkController(Path(directory))
+            controller.database.create_run("run_storage_active", "storage", "disk-quick", {"suite": "storage"})
+            with self.assertRaisesRegex(ValueError, "already queued"):
+                controller.submit_run(
+                    {"suite": "compute", "profile": "compute-quick", "confirm_load": True}
+                )
+
+    def test_http_api_exposes_v040_dashboard_and_cancel_endpoint(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             controller = CloudMarkController(Path(directory))
             controller._inventory = {"hostname": "api-test"}
@@ -301,7 +460,9 @@ class CloudMarkTests(unittest.TestCase):
             try:
                 with urllib.request.urlopen(f"{base}/dashboard", timeout=5) as response:
                     dashboard = json.load(response)
-                self.assertEqual(dashboard["version"], "0.3.0")
+                self.assertEqual(dashboard["version"], "0.4.0")
+                self.assertIn("compute-quick", dashboard["profiles"]["compute"])
+                self.assertIn("memory-quick", dashboard["profiles"]["memory"])
                 self.assertIn("disk-sustained", dashboard["profiles"]["storage"])
                 self.assertIn("network-peer-quick", dashboard["profiles"]["network"])
                 self.assertIn("sessions", dashboard)

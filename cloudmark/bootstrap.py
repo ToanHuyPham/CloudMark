@@ -24,6 +24,16 @@ PACKAGES = {
         "dnf": ["iperf3", "ethtool", "mtr", "bind-utils"],
         "zypper": ["iperf3", "ethtool", "mtr", "bind-utils"],
     },
+    "compute": {
+        "apt": ["sysbench"],
+        "dnf": ["sysbench"],
+        "zypper": ["sysbench"],
+    },
+    "memory": {
+        "apt": ["gcc", "libgomp1"],
+        "dnf": ["gcc", "libgomp"],
+        "zypper": ["gcc", "libgomp1"],
+    },
     "database": {
         "apt": ["sysbench", "postgresql", "postgresql-contrib", "redis-server"],
         "dnf": ["sysbench", "postgresql-server", "redis"],

@@ -6,7 +6,7 @@ systems.
 
 ## Storage
 
-- Filesystem test-file mode is the only enabled storage mode in `0.3.0`.
+- Filesystem test-file mode is the only enabled storage mode in `0.4.0`.
 - The selected directory is resolved before execution.
 - Free space must cover the test file plus the larger of 1 GiB or 5% volume
   reserve.
@@ -14,6 +14,20 @@ systems.
 - The file and fio log files are removed in a `finally` block after completion,
   failure, timeout, cancellation, or an interrupted CLI session.
 - Raw devices, TRIM, full-device preconditioning, and power-loss tests are off.
+
+## Compute and memory
+
+- CPU and memory profiles require explicit load confirmation.
+- CPU, memory, and storage saturation suites cannot overlap locally.
+- CPU duration, warm-up, prime limit, and thread count come from versioned
+  profiles rather than caller-controlled command fragments.
+- The native memory tool accepts only read, write, copy, and triad kernels.
+- Memory profiles allocate a fixed working set and preserve at least 512 MiB of
+  available memory when the operating system exposes that measurement.
+- The native source is compiled in the benchmark workspace with an exact GCC
+  argument list; compiler output is retained when compilation fails.
+- Cancellation terminates the current child process. A failed or cancelled run
+  retains completed jobs only as partial evidence.
 
 ## Runner controls
 

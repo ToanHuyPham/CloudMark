@@ -43,8 +43,46 @@ The response is `202 Accepted`. Poll `/runs/{id}` until the state is
 
 While running, the response includes `progress`, `phase`, `current_job`,
 `completed_steps`, `total_steps`, `heartbeat_at`, and version fields for the
-runner, methodology, and measurement tool. Storage results are updated after
-each completed fio job so a failed or cancelled run preserves partial evidence.
+runner, methodology, and measurement tool. Compute, memory, and storage results
+are updated after each completed job so a failed or cancelled run preserves
+partial evidence.
+
+## Create a compute run
+
+```json
+{
+  "suite": "compute",
+  "profile": "compute-quick",
+  "confirm_load": true,
+  "timeout_seconds": 600
+}
+```
+
+Supported profiles are `compute-quick` and `compute-standard`. `confirm_load`
+is mandatory because the executor intentionally saturates selected CPU cores.
+The result contains `compute_jobs`, per-second sysbench samples, latency,
+stability, host telemetry, and all-core scaling evidence.
+
+## Create a memory run
+
+```json
+{
+  "suite": "memory",
+  "profile": "memory-quick",
+  "confirm_load": true,
+  "timeout_seconds": 600
+}
+```
+
+Supported profiles are `memory-quick` and `memory-standard`. The Linux executor
+compiles the packaged C/OpenMP tool with GCC after enforcing its fixed allocation
+and 512 MiB memory reserve. The result contains `memory_jobs`, bandwidth,
+processed bytes, checksums, tool/compiler identity, and host telemetry.
+
+Compute, memory, and storage are mutually exclusive local saturation suites.
+The API returns `400` if another one is queued or running.
+They execute on the Controller host in version `0.4.0`; this endpoint does not
+silently redirect a local suite to a registered remote Agent.
 
 ## Create a storage run
 
@@ -78,7 +116,7 @@ Supported storage profiles are `disk-quick`, `disk-standard`, `disk-database`,
 The session must contain an online `target` and `generator`. Both must advertise
 a peer-reachable IP and report `iperf3`. `confirm_network_load` is mandatory.
 Supported profiles are `network-peer-quick` and `network-peer-standard`.
-Version 0.3 executes TCP A→B and B→A only; it does not execute UDP or send data
+Version 0.4 executes TCP A→B and B→A only; it does not execute UDP or send data
 to the Controller.
 
 ## Cancel a run

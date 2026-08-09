@@ -45,6 +45,32 @@ type StorageMetric = {
   };
 };
 
+type ComputeMetric = {
+  name: string;
+  threads: number;
+  metrics: {
+    events: number;
+    events_per_second: number;
+    elapsed_seconds: number;
+    latency: { minimum_ms?: number; average_ms?: number; maximum_ms?: number; p95_ms?: number };
+    stability: { mean?: number; minimum?: number; maximum?: number; cv_percent?: number };
+  };
+  host: { utilization_percent?: number; steal_percent?: number };
+};
+
+type MemoryMetric = {
+  name: string;
+  threads: number;
+  metrics: {
+    kernel: string;
+    elapsed_seconds: number;
+    array_bytes: number;
+    allocated_bytes: number;
+    bandwidth_bytes_per_second: number;
+  };
+  host: { utilization_percent?: number; steal_percent?: number };
+};
+
 type Run = {
   id: string;
   suite: string;
@@ -64,6 +90,14 @@ type Run = {
   tool_version?: string;
   result?: {
     jobs?: StorageMetric[];
+    compute_jobs?: ComputeMetric[];
+    memory_jobs?: MemoryMetric[];
+    scaling?: {
+      single_events_per_second: number;
+      all_core_events_per_second: number;
+      all_core_threads: number;
+      efficiency_percent?: number;
+    };
     measurements?: {
       direction: string;
       sender: { id: string; name: string; role: string };
@@ -103,6 +137,8 @@ type Dashboard = {
   runs: Run[];
   sessions: Session[];
   profiles: {
+    compute: Record<string, { label: string; description: string; estimated_minutes: number; profile_version: string; methodology_version: string; jobs: { name: string }[] }>;
+    memory: Record<string, { label: string; description: string; estimated_minutes: number; profile_version: string; methodology_version: string; jobs: { name: string }[] }>;
     storage: Record<string, { label: string; description: string; estimated_minutes: number; profile_version: string; methodology_version: string; jobs: { name: string }[] }>;
     network: Record<string, { label: string; description: string; requires_agents: number; tcp_streams: number[]; duration_seconds: number }>;
     domains: AssessmentDomain[];
@@ -160,6 +196,8 @@ export default function Home() {
     typeof window === "undefined" ? "" : sessionStorage.getItem("cloudmark-controller-token") || "",
   );
   const [tokenOpen, setTokenOpen] = useState(false);
+  const [selectedComputeProfile, setSelectedComputeProfile] = useState("compute-quick");
+  const [selectedMemoryProfile, setSelectedMemoryProfile] = useState("memory-quick");
   const [selectedStorageProfile, setSelectedStorageProfile] = useState("disk-quick");
   const [selectedNetworkProfile, setSelectedNetworkProfile] = useState("network-peer-quick");
   const [selectedSessionId, setSelectedSessionId] = useState("");
@@ -187,10 +225,27 @@ export default function Home() {
 
   const inventory = dashboard?.system.inventory;
   const provider = dashboard?.system.provider;
+  const memoryReady = inventory?.os.system === "Linux" && Boolean(inventory.capabilities.gcc);
   const primaryDisk = inventory?.disks?.[0];
   const activeStorage = dashboard?.runs.find(
     (run) => run.suite === "storage" && ["queued", "running"].includes(run.status),
   );
+  const activeSystem = dashboard?.runs.find(
+    (run) => ["compute", "memory"].includes(run.suite) && ["queued", "running"].includes(run.status),
+  );
+  const activeLocal = dashboard?.runs.find(
+    (run) => ["compute", "memory", "storage"].includes(run.suite) && ["queued", "running"].includes(run.status),
+  );
+  const latestCompute = dashboard?.runs.find(
+    (run) => run.suite === "compute" && run.status === "completed" && run.result?.compute_jobs?.length,
+  );
+  const latestMemory = dashboard?.runs.find(
+    (run) => run.suite === "memory" && run.status === "completed" && run.result?.memory_jobs?.length,
+  );
+  const computeJobs = latestCompute?.result?.compute_jobs || [];
+  const memoryJobs = latestMemory?.result?.memory_jobs || [];
+  const maxComputeRate = Math.max(1, ...computeJobs.map((job) => job.metrics.events_per_second || 0));
+  const maxMemoryRate = Math.max(1, ...memoryJobs.map((job) => job.metrics.bandwidth_bytes_per_second || 0));
   const activeNetwork = dashboard?.runs.find(
     (run) => run.suite === "network" && ["queued", "running"].includes(run.status),
   );
@@ -338,6 +393,57 @@ export default function Home() {
     }
   }
 
+  async function startSystemBenchmark(suite: "compute" | "memory") {
+    if (!requireToken()) return;
+    if (suite === "memory" && inventory?.os.system !== "Linux") {
+      setNotice("The native memory executor currently requires Linux with GCC and OpenMP.");
+      return;
+    }
+    const capability = suite === "compute" ? "sysbench" : "gcc";
+    if (!inventory?.capabilities[capability]) {
+      setNotice(`${capability} is not installed. Run CloudMark bootstrap --packs ${suite} first.`);
+      return;
+    }
+    const profile = suite === "compute" ? selectedComputeProfile : selectedMemoryProfile;
+    setBusy(true);
+    setNotice(null);
+    try {
+      const response = await fetch(`${API}/runs`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-CloudMark-Token": token },
+        body: JSON.stringify({ suite, profile, confirm_load: true }),
+      });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || `Unable to start the ${suite} assessment`);
+      setNotice(`Created ${payload.id}. Avoid other workloads until the intentional saturation run completes.`);
+      await loadDashboard();
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : `${suite} assessment failed`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function cancelSystemBenchmark() {
+    if (!activeSystem || !requireToken()) return;
+    setBusy(true);
+    try {
+      const response = await fetch(`${API}/runs/${activeSystem.id}/cancel`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-CloudMark-Token": token },
+        body: "{}",
+      });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || "Unable to cancel the assessment");
+      setNotice(`Cancellation requested for ${activeSystem.id}.`);
+      await loadDashboard();
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Unable to cancel the assessment");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function startNetwork() {
     if (!requireToken()) return;
     if (!selectedSession || selectedSession.status !== "ready") {
@@ -398,10 +504,11 @@ export default function Home() {
   const nav = [
     ["overview", "Overview", "01"],
     ["catalog", "Assessment Catalog", "02"],
-    ["storage", "Storage Assessment", "03"],
-    ["network", "Distributed Testing", "04"],
-    ["scenarios", "Workload Suitability", "05"],
-    ["history", "History", "06"],
+    ["compute", "Compute & Memory", "03"],
+    ["storage", "Storage Assessment", "04"],
+    ["network", "Distributed Testing", "05"],
+    ["scenarios", "Workload Suitability", "06"],
+    ["history", "History", "07"],
   ];
 
   return (
@@ -422,7 +529,7 @@ export default function Home() {
           <span className="policy-dot" />
           <div><strong>Private by default</strong><small>No automatic result uploads</small></div>
         </div>
-        <div className="version">CORE / {dashboard?.version || "0.3.0"}</div>
+        <div className="version">CORE / {dashboard?.version || "0.4.0"}</div>
       </aside>
 
       <section className="workspace">
@@ -535,13 +642,51 @@ export default function Home() {
           </div>
         )}
 
+        {activeView === "compute" && (
+          <div className="view compute-view">
+            <section className="section-intro">
+              <div><span className="section-kicker">LOCAL SATURATION EXECUTORS</span><h2>Separate single-core speed, scaling, sustained compute, and memory bandwidth.</h2><p>CPU profiles use a versioned sysbench workload with warm-up and one-second stability evidence. Memory profiles compile CloudMark&apos;s cache-resistant OpenMP kernels and retain the compiler version, working set, host utilization, and steal time.</p></div>
+              <div className="load-policy"><span>EXCLUSIVE LOAD POLICY</span><strong>{activeLocal ? `${activeLocal.suite} run active` : "Local runner available"}</strong><small>Compute, memory, and storage never run concurrently.</small></div>
+            </section>
+            <section className="system-runner-grid">
+              <article className="panel system-runner-card compute-card">
+                <div className="panel-head"><div><span className="section-kicker">CPU / INTEGER SCALING</span><h3>Compute assessment</h3></div><span className={inventory?.capabilities.sysbench ? "tool-ready" : "tool-missing"}>{inventory?.capabilities.sysbench ? "SYSBENCH READY" : "INSTALL SYSBENCH"}</span></div>
+                <p>{dashboard?.profiles.compute[selectedComputeProfile]?.description}</p>
+                <label><span>PROFILE</span><select value={selectedComputeProfile} onChange={(event) => setSelectedComputeProfile(event.target.value)} disabled={Boolean(activeLocal)}>{Object.entries(dashboard?.profiles.compute || {}).map(([id, profile]) => <option key={id} value={id}>{profile.label} · ≈ {profile.estimated_minutes} min</option>)}</select></label>
+                <div className="runner-matrix">{dashboard?.profiles.compute[selectedComputeProfile]?.jobs.map((job) => <span key={job.name}>{job.name}</span>)}</div>
+                <button className="button primary" onClick={() => startSystemBenchmark("compute")} disabled={busy || Boolean(activeLocal)}>Run compute profile</button>
+              </article>
+              <article className="panel system-runner-card memory-card">
+                <div className="panel-head"><div><span className="section-kicker">RAM / BANDWIDTH</span><h3>Memory assessment</h3></div><span className={memoryReady ? "tool-ready" : "tool-missing"}>{memoryReady ? "LINUX + GCC READY" : inventory?.os.system === "Linux" ? "INSTALL GCC" : "LINUX REQUIRED"}</span></div>
+                <p>{dashboard?.profiles.memory[selectedMemoryProfile]?.description}</p>
+                <label><span>PROFILE</span><select value={selectedMemoryProfile} onChange={(event) => setSelectedMemoryProfile(event.target.value)} disabled={Boolean(activeLocal)}>{Object.entries(dashboard?.profiles.memory || {}).map(([id, profile]) => <option key={id} value={id}>{profile.label} · ≈ {profile.estimated_minutes} min</option>)}</select></label>
+                <div className="runner-matrix">{dashboard?.profiles.memory[selectedMemoryProfile]?.jobs.map((job) => <span key={job.name}>{job.name}</span>)}</div>
+                <button className="button primary" onClick={() => startSystemBenchmark("memory")} disabled={busy || Boolean(activeLocal) || !memoryReady}>Run memory profile</button>
+              </article>
+            </section>
+            {activeSystem && <section className="panel run-progress" aria-live="polite"><div><span className="section-kicker">ACTIVE {activeSystem.suite.toUpperCase()} RUN / {activeSystem.id}</span><strong>{activeSystem.current_job || activeSystem.phase || "Starting"}</strong><small>{activeSystem.completed_steps || 0} of {activeSystem.total_steps || 1} jobs · {Math.round((activeSystem.progress || 0) * 100)}%</small></div><div className="progress-track"><i style={{ width: `${Math.max(2, (activeSystem.progress || 0) * 100)}%` }} /></div><button className="button danger" onClick={cancelSystemBenchmark} disabled={busy || activeSystem.cancel_requested}>{activeSystem.cancel_requested ? "Cancelling" : "Cancel run"}</button></section>}
+            <section className="system-results-grid">
+              <article className="panel system-result-panel">
+                <div className="panel-head"><div><span className="section-kicker">LATEST COMPUTE EVIDENCE</span><h3>Integer events per second</h3></div><span className="run-id">{latestCompute?.id || "NO RUN YET"}</span></div>
+                {computeJobs.length ? <div className="bar-chart">{computeJobs.map((job) => <div className="bar-row" key={job.name}><span>{job.name} · T{job.threads}</span><div><i style={{ width: `${Math.max(3, (job.metrics.events_per_second / maxComputeRate) * 100)}%` }} /></div><strong>{Math.round(job.metrics.events_per_second).toLocaleString()} eps</strong></div>)}</div> : <div className="empty-chart compact"><div className="chart-grid" /><strong>No compute result yet</strong><p>Run Compute Quick on an otherwise idle machine to establish the first versioned baseline.</p></div>}
+                {latestCompute?.result?.scaling && <div className="result-summary"><div><span>ALL-CORE SCALE</span><strong>{latestCompute.result.scaling.all_core_threads}× threads</strong></div><div><span>SCALING EFFICIENCY</span><strong>{latestCompute.result.scaling.efficiency_percent == null ? "—" : `${latestCompute.result.scaling.efficiency_percent.toFixed(1)}%`}</strong></div></div>}
+              </article>
+              <article className="panel system-result-panel">
+                <div className="panel-head"><div><span className="section-kicker">LATEST MEMORY EVIDENCE</span><h3>Effective kernel bandwidth</h3></div><span className="run-id">{latestMemory?.id || "NO RUN YET"}</span></div>
+                {memoryJobs.length ? <div className="bar-chart">{memoryJobs.map((job) => <div className="bar-row" key={job.name}><span>{job.name} · T{job.threads}</span><div><i style={{ width: `${Math.max(3, (job.metrics.bandwidth_bytes_per_second / maxMemoryRate) * 100)}%` }} /></div><strong>{formatBytes(job.metrics.bandwidth_bytes_per_second)}/s</strong></div>)}</div> : <div className="empty-chart compact"><div className="chart-grid" /><strong>No memory result yet</strong><p>Memory Quick allocates three fixed arrays and preserves GCC and native benchmark versions.</p></div>}
+              </article>
+            </section>
+            <section className="validity-panel panel"><span>COMPARISON CONTRACT</span><p>Compare only identical CloudMark profile, methodology, tool/compiler version, architecture, thread count, and controlled background-load conditions. CPU events and native memory bandwidth are evidence dimensions—not a universal machine score.</p></section>
+          </div>
+        )}
+
         {activeView === "storage" && (
           <div className="view storage-view">
             <section className="section-intro">
               <div><span className="section-kicker">CURRENT AVAILABLE EXECUTOR</span><h2>Measure storage by workload, not by a single MB/s number.</h2><p>Five profiles cover short validation, general-purpose, database, large-block throughput, and sustained behavior using safe 512 MiB–8 GiB temporary files.</p></div>
               <div className="runner-actions">
-                <label><span>PROFILE</span><select value={selectedStorageProfile} onChange={(event) => setSelectedStorageProfile(event.target.value)} disabled={Boolean(activeStorage)}>{Object.entries(dashboard?.profiles.storage || {}).map(([id, profile]) => <option key={id} value={id}>{profile.label} · ≈ {profile.estimated_minutes} min</option>)}</select></label>
-                <button className="button primary" onClick={startStorage} disabled={busy || Boolean(activeStorage)}>Run assessment</button>
+                <label><span>PROFILE</span><select value={selectedStorageProfile} onChange={(event) => setSelectedStorageProfile(event.target.value)} disabled={Boolean(activeLocal)}>{Object.entries(dashboard?.profiles.storage || {}).map(([id, profile]) => <option key={id} value={id}>{profile.label} · ≈ {profile.estimated_minutes} min</option>)}</select></label>
+                <button className="button primary" onClick={startStorage} disabled={busy || Boolean(activeLocal)}>Run assessment</button>
               </div>
             </section>
             {activeStorage && (

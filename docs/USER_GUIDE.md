@@ -1,10 +1,11 @@
 # CloudMark user guide
 
-This guide applies to version `0.3.0`. The current release provides system
+This guide applies to version `0.4.0`. The current release provides system
 inventory, AWS/Azure/Google Cloud metadata detection, tool bootstrap planning,
-filesystem-safe storage assessment through `fio`, SQLite history, multi-system
-topology registration, authenticated persistent agents, guarded two-direction
-TCP testing, and a local dashboard. The dashboard distinguishes
+versioned CPU and memory-bandwidth assessment, filesystem-safe storage
+assessment through `fio`, SQLite history, multi-system topology registration,
+authenticated persistent agents, guarded two-direction TCP testing, and a local
+dashboard. The dashboard distinguishes
 `Available`, `Partial`, and `Roadmap`; unavailable executors are never scored or
 presented as ready.
 
@@ -19,11 +20,12 @@ Storage is the first mature executor, not the limit of the product.
 ### Assess one system
 
 ```text
-Controller/dashboard + Agent on the system under assessment
+Controller/dashboard on the system under assessment
 ```
 
 Use this model for inventory, provider detection, CPU/memory evidence, GPU
-inventory, and local or block storage.
+inventory, and local or block storage. An Agent is not required for the local
+executors.
 
 ### Assess a provider using multiple VMs
 
@@ -35,6 +37,11 @@ Optional:       VM C (replica/failover)
 
 The Controller never receives cloud benchmark traffic. Network benchmark data
 flows directly between VM A and VM B.
+
+In version `0.4.0`, dashboard-triggered CPU, memory, and storage suites execute
+on the Controller host. If the Controller stays on the operator system, run
+those CLI commands directly on each provider VM. Central Agent dispatch for
+single-system suites is not yet claimed as available.
 
 ## 2. Requirements
 
@@ -131,6 +138,8 @@ In the dashboard:
   product scope.
 - **Assessment Catalog** lists all 17 technical domains and their `Available`,
   `Partial`, or `Roadmap` state.
+- **Compute & Memory** runs CPU integer scaling/sustained profiles and native
+  cache-resistant memory-bandwidth profiles with live progress and cancellation.
 - **Storage Assessment** provides Quick, Standard, Database, Throughput, and
   Sustained profiles with live progress and cancellation.
 - **Distributed Testing** creates an authenticated multi-agent topology and
@@ -177,7 +186,7 @@ based on `examples/provider-manifest.json` at `/etc/cloudmark/provider.json`,
 ## 6. Inspect dependencies before installation
 
 ```bash
-python -m cloudmark doctor --packs storage,network,database,web
+python -m cloudmark doctor --packs compute,memory,storage,network,database,web
 ```
 
 This command displays a plan and does not modify the system.
@@ -185,6 +194,8 @@ This command displays a plan and does not modify the system.
 | Pack | Contents |
 |---|---|
 | `base` | curl, jq, dmidecode, sysstat, numactl |
+| `compute` | sysbench |
+| `memory` | GCC and the OpenMP runtime |
 | `storage` | fio, smartmontools, nvme-cli |
 | `network` | iperf3, ethtool, mtr, DNS tools |
 | `database` | sysbench, PostgreSQL, Redis |
@@ -196,7 +207,7 @@ This command displays a plan and does not modify the system.
 
 ```bash
 sudo python -m cloudmark bootstrap \
-  --packs storage,network,database,web \
+  --packs compute,memory,storage,network,database,web \
   --yes
 ```
 
@@ -205,7 +216,7 @@ sudo python -m cloudmark bootstrap \
 CloudMark detects `dnf` or `yum` automatically:
 
 ```bash
-sudo python -m cloudmark bootstrap --packs storage,network,database,web --yes
+sudo python -m cloudmark bootstrap --packs compute,memory,storage,network,database,web --yes
 ```
 
 Some packages such as `sysbench` may require an additional repository. If the
@@ -214,7 +225,7 @@ package manager rejects the operation, bootstrap stops and preserves the error.
 ### SLES 12.5 or 15
 
 ```bash
-sudo python -m cloudmark bootstrap --packs storage,network,database,web --yes
+sudo python -m cloudmark bootstrap --packs compute,memory,storage,network,database,web --yes
 ```
 
 SLES may require valid registration. When a repository does not provide a tool,
@@ -231,7 +242,50 @@ CloudMark detects `winget`, but does not yet map every portable `fio` and
 the dashboard marks Windows benchmark automation as `Partial` until the package
 mapping is complete.
 
-## 8. Run the storage assessment
+## 8. Run compute and memory assessments
+
+Install the two execution packs:
+
+```bash
+sudo python -m cloudmark bootstrap --packs compute,memory --yes
+```
+
+Run preflight without generating load:
+
+```bash
+python -m cloudmark run compute --profile compute-quick
+python -m cloudmark run memory --profile memory-quick
+```
+
+Execute the quick profiles on an idle assessment system:
+
+```bash
+python -m cloudmark run compute --profile compute-quick --yes
+python -m cloudmark run memory --profile memory-quick --yes
+```
+
+The same controls are available under **Compute & Memory** in the dashboard.
+Only one local saturation suite (compute, memory, or storage) can be queued or
+running at a time. Cancellation stops the active child process and preserves
+completed jobs as partial evidence.
+
+The CPU profile records single-core and all-core event rate, scaling efficiency,
+P95 latency, one-second stability, and Linux host telemetry. The memory profile
+compiles the packaged C/OpenMP benchmark, uses a fixed 384 MiB allocation in
+quick mode, and preserves a 512 MiB available-memory reserve. Standard mode uses
+a 768 MiB allocation and more read, write, copy, and triad phases.
+
+Do not compare results across CPU architectures as if the event represents
+identical work. Match the profile, tool version, architecture, OS/power context,
+and background-load policy. See
+[`COMPUTE_MEMORY_METHODOLOGY.md`](COMPUTE_MEMORY_METHODOLOGY.md) for the complete
+validity contract and current limitations.
+
+The native memory executor currently targets Linux with GCC/OpenMP. Windows is
+supported for the Controller and inventory, but version `0.4.0` does not claim
+complete Windows CPU/memory qualification.
+
+## 9. Run the storage assessment
 
 ### Preflight only
 
@@ -293,13 +347,14 @@ never treated as a completed assessment.
 - precondition the entire device;
 - cut power to test power-loss protection.
 
-## 9. Create a multi-system session
+## 10. Create a multi-system session
 
 Open **Distributed Testing** and select **Create pairing session**. CloudMark
 creates a session ID, join token, and 30-minute expiry.
 
 After upgrading from 0.2, create a new session. Earlier registrations do not
-have the per-agent credentials or advertised peer address required by 0.3.
+have the per-agent credentials or advertised peer address required by 0.3 and
+newer releases.
 
 Bootstrap the network pack on both VMs:
 
@@ -345,7 +400,7 @@ has an independent watchdog deadline. UDP, loaded latency, and simultaneous
 bidirectional mode are still excluded, so overall network coverage remains
 `Partial`.
 
-## 10. Workload suitability
+## 11. Workload suitability
 
 The 12 use cases use three coverage states:
 
@@ -356,7 +411,7 @@ The 12 use cases use three coverage states:
 A suitability conclusion appears only after all mandatory raw evidence is
 available. See the assessment catalog for each use case's hard gates.
 
-## 11. API quick reference
+## 12. API quick reference
 
 Health:
 
@@ -379,7 +434,7 @@ curl -X POST http://127.0.0.1:8787/api/v1/runs \
   -d '{"suite":"inventory","profile":"default"}'
 ```
 
-## 12. Local data
+## 13. Local data
 
 ```text
 .cloudmark/
@@ -392,19 +447,19 @@ curl -X POST http://127.0.0.1:8787/api/v1/runs \
 
 The complete directory is excluded by `.gitignore`.
 
-## 13. Recommended provider-assessment procedure
+## 14. Recommended provider-assessment procedure
 
 1. Create two clean VMs with the same SKU, OS, and disk type.
 2. Use anti-affinity when possible so the VMs do not share a physical host.
 3. Bootstrap the same CloudMark and tool versions.
 4. Collect inventory on both systems.
-5. Run storage profiles on each VM separately.
-6. Run them concurrently only when intentionally measuring contention.
+5. Run compute, memory, and storage profiles on each VM separately.
+6. Run saturation profiles concurrently only when intentionally measuring contention.
 7. Pair A and B for network, web, and database client/server tests.
 8. Create fresh instances and repeat in different time windows.
 9. Never generalize one VM or one run to the complete provider.
 
-## 14. Troubleshooting
+## 15. Troubleshooting
 
 ### Dashboard reports API offline
 
@@ -416,6 +471,12 @@ The complete directory is excluded by `.gitignore`.
 ### Storage reports missing fio
 
 Run `doctor`, then run `bootstrap --packs storage --yes` with sudo or root.
+
+### Compute or memory preflight fails
+
+Run `doctor --packs compute,memory`. CPU assessment requires sysbench 1.0 or
+newer. Memory assessment requires Linux, GCC, and OpenMP, and refuses to start
+when its fixed allocation would violate the 512 MiB available-memory reserve.
 
 ### Insufficient free space
 
@@ -433,7 +494,7 @@ The Controller binds to loopback by default, so remote VMs cannot reach it.
 For remote agents, use a VPN or an operator-controlled HTTPS reverse proxy to
 the Controller. Confirm that each VM can reach the other VM's advertised IP on
 TCP 5201–5210. Never use `--allow-http` over the public Internet. mTLS and relay
-enrollment are roadmap security layers; version 0.3 uses per-agent bearer
+enrollment are roadmap security layers; version 0.4 uses per-agent bearer
 credentials and requires HTTPS for remote control connections by default.
 
 ### A network run remains queued or times out
@@ -446,7 +507,7 @@ credentials and requires HTTPS for remote control connections by default.
   management address hidden behind NAT;
 - do not expose the iperf3 port range to the public Internet.
 
-## 15. Validate the project
+## 16. Validate the project
 
 Python tests:
 
@@ -460,4 +521,4 @@ Dashboard production build:
 pnpm run build
 ```
 
-Never run full storage benchmarks in shared CI environments.
+Never run CPU, memory, or full storage benchmarks in shared CI environments.

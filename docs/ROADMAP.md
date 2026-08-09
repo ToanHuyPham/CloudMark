@@ -106,11 +106,15 @@ Required topology: Controller + Agent A + Agent B.
 There is no cloud-to-controller profile. Public-Internet results must not be
 combined with private or VPC network results.
 
-## M3 — Compute, memory, and GPU
+## M3 — Compute, memory, and GPU (partial in 0.4.0)
 
-- CPU single/multi-thread, integer, floating-point, compression, and crypto;
-- sustained CPU runs for steal time, throttling, and noisy-neighbor detection;
-- memory bandwidth/latency, NUMA topology, and remote-node penalties;
+- CPU single/multi-thread integer scaling through sysbench — available;
+- sustained CPU runs with event-rate stability and steal-time telemetry — available;
+- native userspace memory read/write/copy/triad bandwidth — available;
+- floating-point, compression, crypto, and compilation workloads — planned;
+- memory latency, NUMA topology, and remote-node penalties — planned;
+- repeated-run and same-SKU variance analysis — planned;
+- authenticated remote dispatch and result ingestion for single-system suites — planned;
 - GPU inventory, H2D/D2H bandwidth, compute, VRAM, and thermal/power stability;
 - real media encode/decode through FFmpeg;
 - CUDA, ROCm, and oneAPI framework probes when available;
@@ -178,7 +182,7 @@ matching control-plane drills.
 
 1. Complete M1 and the time-series schema because storage is the most mature executor.
 2. Complete M2 with mTLS, UDP, loaded latency, and generator-saturation guards.
-3. Add M3 to separate compute and memory constraints from storage and network.
+3. Complete M3 beyond the available integer CPU and memory-bandwidth subsets.
 4. Build M4 on the stable runner.
 5. Add provider adapters and M5 drills.
 6. Lock suitability/provider thresholds in M6 only after collecting real data

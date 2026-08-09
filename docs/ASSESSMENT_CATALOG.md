@@ -40,6 +40,12 @@ exists; it does not mean that every measurement in the row is complete. Raw
 results must record profile, tool, methodology, timestamp, and topology versions
 so actual coverage remains auditable.
 
+Version `0.4.0` implements the integer single/all-core and sustained subset of
+domain 4, plus the native read/write/copy/triad bandwidth subset of domain 5.
+Floating-point, crypto, compilation, true memory latency, and NUMA penalty
+measurements remain missing; both domains therefore remain `Partial` and cannot
+independently unlock a suitability label.
+
 ## Mapping evidence to intended use
 
 Each workload combines multiple domains rather than relying on one benchmark:
@@ -75,6 +81,8 @@ Each workload combines multiple domains rather than relying on one benchmark:
   resources owned by or explicitly authorized for the operator.
 - Storage tests use filesystem temporary files by default, preserve a free-space
   reserve, never format or target raw devices, and always clean up.
+- CPU and memory saturation tests require confirmation, fixed profile limits,
+  local mutual exclusion, cancellation, and a memory-reserve preflight.
 - Load-generating tests require rate and duration limits, a watchdog, health
   checks, and an emergency stop path.
 - Provider API adapters use least privilege, and every infrastructure mutation

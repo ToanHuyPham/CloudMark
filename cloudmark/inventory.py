@@ -200,6 +200,7 @@ def collect_inventory(workspace: Path | None = None) -> dict[str, Any]:
             "fio": shutil.which("fio") is not None,
             "iperf3": shutil.which("iperf3") is not None,
             "sysbench": shutil.which("sysbench") is not None,
+            "gcc": shutil.which("gcc") is not None,
             "docker": shutil.which("docker") is not None,
             "podman": shutil.which("podman") is not None,
         },

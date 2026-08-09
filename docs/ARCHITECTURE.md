@@ -32,10 +32,10 @@ queued → running → completed
 ```
 
 SQLite stores phase, current job, completed/total steps, normalized progress,
-heartbeat, cancellation request, and runner/methodology/tool versions. Storage
-persists completed jobs as partial results during execution. A Controller
-restart marks unfinished runs as interrupted instead of leaving them running
-forever.
+heartbeat, cancellation request, and runner/methodology/tool versions. Compute,
+memory, and storage persist completed jobs as partial results during execution.
+A Controller restart marks unfinished runs as interrupted instead of leaving
+them running forever.
 
 Cancellation is cooperative at the runner boundary and forcefully terminates
 the current allow-listed child process when necessary. Benchmark cleanup still
@@ -59,6 +59,22 @@ Inventory + versioned benchmark runs + provider/control-plane evidence
 Catalog breadth and executor availability are intentionally separate. Adding a
 domain to the product scope never permits it to influence a score before its
 measurement and safety gates are implemented.
+
+## Local saturation executors
+
+CPU, memory, and storage share one exclusive Controller admission group. A
+second saturation run is rejected while one is queued or active, preventing
+CloudMark from invalidating its own baseline. The CPU executor calls sysbench
+with exact arguments. The Linux memory executor compiles the packaged C/OpenMP
+source into the configured workspace, then executes only allow-listed kernels.
+Its compiler identity is part of the evidence. No profile accepts an arbitrary
+binary, shell fragment, kernel name, thread count, or duration from an API
+caller.
+
+These saturation executors run on the Controller/CLI host in version `0.4.0`.
+Persistent remote agents currently execute only guarded peer-network tasks;
+remote dispatch and ingestion of single-system executor results are a separate
+milestone so local results cannot be accidentally attributed to a remote VM.
 
 ## Network direction policy
 
@@ -96,7 +112,7 @@ by session.
   hash is persisted, and it can claim or finish tasks assigned to that agent.
 - Remote joins require HTTPS unless the operator explicitly enables HTTP inside
   a trusted private network.
-- Version 0.3 does not yet provide mTLS enrollment. HTTPS/VPN termination and
+- Version 0.4 does not yet provide mTLS enrollment. HTTPS/VPN termination and
   access control remain operator responsibilities for remote deployments.
 - Provider metadata probes use fixed link-local endpoints, ignore proxies, have
   short timeouts, and never retrieve user-data or credentials.

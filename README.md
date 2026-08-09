@@ -1,6 +1,6 @@
 # CloudMark
 
-![CloudMark infrastructure assessment platform](public/og-v030.png)
+![CloudMark infrastructure assessment platform](public/og-v040.png)
 
 CloudMark is an evidence-driven infrastructure assessment platform for cloud
 instances, VPS, bare-metal servers, and self-hosted cloud environments. It
@@ -18,6 +18,8 @@ timestamp, and raw result.
 | Available | Cross-platform inventory and system evidence |
 | Available | AWS, Azure, and Google Cloud metadata detection |
 | Available | Declared provider manifests for regional and self-hosted clouds |
+| Partial | Versioned CPU integer scaling and sustained-load profiles through `sysbench` |
+| Partial | Cache-resistant native memory read, write, copy, and triad bandwidth profiles |
 | Available | Filesystem-safe `fio` storage profiles with latency percentiles |
 | Available | Versioned job runner with progress, heartbeat, timeout, cancellation, cleanup, and partial results |
 | Available | Quick, Standard, Database, Throughput, and Sustained storage profiles with one-second time series |
@@ -25,7 +27,7 @@ timestamp, and raw result.
 | Available | Authenticated persistent agents, heartbeat, and durable task queues |
 | Partial | Guarded direct TCP network executor in both directions between paired agents |
 | Roadmap | UDP, loaded latency, mTLS enrollment, and remaining network validity checks |
-| Roadmap | Remaining compute, memory, GPU, application, platform, operations, and provider executors |
+| Roadmap | Remaining CPU, memory/NUMA, GPU, application, platform, operations, and provider executors |
 | Roadmap | Final workload suitability and provider scoring engine |
 
 `Partial` and `Roadmap` capabilities never receive an artificial zero score.
@@ -93,13 +95,28 @@ Controller under **Controller key** before starting write operations.
 
 ```bash
 python -m cloudmark inventory
-python -m cloudmark doctor --packs storage,network,database,web
-sudo python -m cloudmark bootstrap --packs storage,network,database,web --yes
+python -m cloudmark doctor --packs compute,memory,storage,network,database,web
+sudo python -m cloudmark bootstrap --packs compute,memory,storage,network,database,web --yes
+python -m cloudmark run compute --profile compute-quick --yes
+python -m cloudmark run memory --profile memory-quick --yes
 python -m cloudmark run storage --profile disk-quick --yes
 python -m cloudmark run storage --profile disk-database --yes
 python -m cloudmark run storage --profile disk-throughput --yes
 python -m cloudmark run storage --profile disk-sustained --yes
 ```
+
+CPU and memory profiles deliberately saturate the selected cores. Run them on
+an idle assessment system. CloudMark prevents CPU, memory, and storage
+saturation jobs from overlapping locally. Memory profiles compile the packaged
+C/OpenMP kernel with GCC and preserve a 512 MiB available-memory reserve. These
+executors currently target Linux; results from different CPU architectures are
+not treated as directly comparable.
+
+Single-system compute, memory, and storage suites execute on the host running
+the Controller/CLI. When the central Controller stays on an operator workstation,
+run those CLI suites directly on each provider VM; version `0.4.0` uses remote
+agents only for the peer-network data path. Remote dispatch and result ingestion
+for local saturation suites are a following milestone.
 
 Storage runs use a temporary file, preserve a free-space reserve, never target
 a raw device, and remove the test file after completion, failure, timeout, or
@@ -123,19 +140,20 @@ Controller is never an iperf3 endpoint.
 - [Architecture](docs/ARCHITECTURE.md)
 - [API](docs/API.md)
 - [Disk methodology](docs/DISK_METHODOLOGY.md)
+- [Compute and memory methodology](docs/COMPUTE_MEMORY_METHODOLOGY.md)
 - [Network methodology](docs/NETWORK_METHODOLOGY.md)
 - [Safety model](docs/SAFETY.md)
 - [Product roadmap and machine topology matrix](docs/ROADMAP.md)
 
 ## Release status
 
-Version `0.3.0` is operational for inventory collection, provider evidence,
-versioned and cancellable job execution, production-oriented safe storage
-profiles, one-second fio time series, partial-result persistence, dashboard
-reporting, authenticated agent task orchestration, and guarded two-direction
-TCP peer measurement. Network remains partial until UDP, loaded latency,
-generator-validity checks, and mTLS enrollment are implemented. Application
-and control-plane executors remain explicitly unavailable.
+Version `0.4.0` adds versioned CPU integer scaling, sustained-load telemetry,
+and native cache-resistant memory-bandwidth executors to the existing inventory,
+storage, and peer-network foundation. Compute and memory remain `Partial` until
+floating-point, crypto, compilation, latency, NUMA, and broader architecture
+coverage are implemented. Network remains partial until UDP, loaded latency,
+generator-validity checks, and mTLS enrollment are implemented. Application and
+control-plane executors remain explicitly unavailable.
 
 ## License
 

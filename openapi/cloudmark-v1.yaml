@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: CloudMark Controller API
-  version: 0.3.0
+  version: 0.4.0
   description: Local-first API for machine evidence, benchmark jobs, authenticated agents, and multi-node sessions.
 servers:
   - url: http://127.0.0.1:8787/api/v1
@@ -25,8 +25,12 @@ components:
       type: object
       required: [suite]
       properties:
-        suite: { type: string, enum: [inventory, storage, network] }
+        suite: { type: string, enum: [inventory, compute, memory, storage, network] }
         profile: { type: string }
+        confirm_load:
+          type: boolean
+          default: false
+          description: Required for CPU and memory saturation profiles.
         confirm_write: { type: boolean, default: false }
         confirm_network_load: { type: boolean, default: false }
         session_id: { type: string }
@@ -100,7 +104,7 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Run" }
         "400":
-          description: Invalid request or failed safety gate
+          description: Invalid request, failed safety gate, or conflicting local saturation run
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }

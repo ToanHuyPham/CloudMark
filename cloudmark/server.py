@@ -15,10 +15,11 @@ from urllib.parse import parse_qs, urlparse
 
 from . import __version__
 from .benchmarks import BenchmarkError, run_storage, storage_preflight
+from .compute import ComputeError, run_system_benchmark, system_preflight
 from .database import Database
 from .inventory import collect_inventory
 from .network import NetworkError, run_network, validate_network_run
-from .profiles import NETWORK_PROFILES, STORAGE_PROFILES, all_profiles
+from .profiles import COMPUTE_PROFILES, MEMORY_PROFILES, NETWORK_PROFILES, STORAGE_PROFILES, all_profiles
 from .provider import detect_provider
 from .runner import RUNNER_VERSION, CancellationToken, JobContext, RunCancelled, RunTimedOut
 
@@ -48,6 +49,7 @@ class CloudMarkController:
         self._provider: dict[str, Any] | None = None
         self._active_runs: dict[str, CancellationToken] = {}
         self._active_runs_lock = threading.RLock()
+        self._submission_lock = threading.Lock()
 
     def system(self, refresh: bool = False) -> dict[str, Any]:
         if refresh or self._inventory is None:
@@ -71,11 +73,29 @@ class CloudMarkController:
         }
 
     def submit_run(self, request: dict[str, Any]) -> dict[str, Any]:
+        with self._submission_lock:
+            return self._submit_run_locked(request)
+
+    def _submit_run_locked(self, request: dict[str, Any]) -> dict[str, Any]:
         request = dict(request)
         suite = str(request.get("suite", ""))
         profile = str(request.get("profile", ""))
-        if suite not in {"inventory", "storage", "network"}:
-            raise ValueError("Supported suites are inventory, storage, and network.")
+        if suite not in {"inventory", "compute", "memory", "storage", "network"}:
+            raise ValueError("Supported suites are inventory, compute, memory, storage, and network.")
+        if suite in {"compute", "memory", "storage"}:
+            active_local = next(
+                (
+                    run
+                    for run in self.database.list_runs(200)
+                    if run["suite"] in {"compute", "memory", "storage"} and run["status"] in {"queued", "running"}
+                ),
+                None,
+            )
+            if active_local:
+                raise ValueError(
+                    f"Local benchmark {active_local['id']} is already {active_local['status']}. "
+                    "Wait for it to finish or cancel it before starting another local load."
+                )
         if suite == "storage":
             if not request.get("confirm_write"):
                 raise ValueError("Storage test requires confirm_write=true because it writes a temporary test file.")
@@ -83,6 +103,15 @@ class CloudMarkController:
             total_steps = len(STORAGE_PROFILES[profile]["jobs"]) + 2
             methodology_version = str(STORAGE_PROFILES[profile]["methodology_version"])
             tool_version = str(preflight["fio_version"])
+            default_timeout = int(preflight["default_timeout_seconds"])
+        elif suite in {"compute", "memory"}:
+            if not request.get("confirm_load"):
+                raise ValueError(f"{suite.title()} test requires confirm_load=true because it intentionally saturates local resources.")
+            preflight = system_preflight(suite, profile, self.benchmark_dir)
+            profiles = COMPUTE_PROFILES if suite == "compute" else MEMORY_PROFILES
+            total_steps = len(profiles[profile]["jobs"])
+            methodology_version = str(profiles[profile]["methodology_version"])
+            tool_version = str(preflight["tool_version"])
             default_timeout = int(preflight["default_timeout_seconds"])
         elif suite == "network":
             if not request.get("confirm_network_load"):
@@ -157,6 +186,14 @@ class CloudMarkController:
                 context.complete_step("completed", None, partial_result=result)
             elif request["suite"] == "storage":
                 result = run_storage(str(request["profile"]), self.benchmark_dir, run_id, context=context)
+            elif request["suite"] in {"compute", "memory"}:
+                result = run_system_benchmark(
+                    str(request["suite"]),
+                    str(request["profile"]),
+                    self.benchmark_dir,
+                    run_id,
+                    context=context,
+                )
             else:
                 result = run_network(
                     self.database,
@@ -198,7 +235,7 @@ class CloudMarkController:
                 error=str(exc),
                 phase="failed",
             )
-        except (BenchmarkError, OSError, ValueError, json.JSONDecodeError) as exc:
+        except (BenchmarkError, ComputeError, OSError, ValueError, json.JSONDecodeError) as exc:
             self.database.update_run(run_id, status="failed", error=str(exc), phase="failed")
         except Exception as exc:  # defensive runner boundary
             self.database.update_run(
@@ -310,7 +347,7 @@ class CloudMarkController:
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "CloudMark/0.3"
+    server_version = "CloudMark/0.4"
 
     @property
     def controller(self) -> CloudMarkController:
@@ -440,7 +477,7 @@ class Handler(BaseHTTPRequestHandler):
             self._send(403, {"error": str(exc)})
         except LookupError as exc:
             self._send(404, {"error": str(exc)})
-        except (ValueError, BenchmarkError, NetworkError, json.JSONDecodeError) as exc:
+        except (ValueError, BenchmarkError, ComputeError, NetworkError, json.JSONDecodeError) as exc:
             self._send(400, {"error": str(exc)})
         except Exception as exc:  # defensive API boundary
             self._send(500, {"error": str(exc)})

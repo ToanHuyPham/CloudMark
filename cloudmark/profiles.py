@@ -3,6 +3,72 @@ from __future__ import annotations
 from typing import Any
 
 
+COMPUTE_PROFILES: dict[str, dict[str, Any]] = {
+    "compute-quick": {
+        "label": "Compute Quick",
+        "description": "Short integer CPU scaling and sustained-load checks for baseline qualification.",
+        "estimated_minutes": 3,
+        "profile_version": "1.0",
+        "methodology_version": "compute-v1",
+        "jobs": [
+            {"name": "integer-single", "threads": 1, "runtime": 15, "warmup": 3, "cpu_max_prime": 20000},
+            {"name": "integer-all-cores", "threads": "all", "runtime": 20, "warmup": 3, "cpu_max_prime": 20000},
+            {"name": "integer-sustained", "threads": "all", "runtime": 60, "warmup": 5, "cpu_max_prime": 20000},
+        ],
+    },
+    "compute-standard": {
+        "label": "Compute Standard",
+        "description": "Longer single-, half-, and all-core integer scaling with a five-minute sustained phase.",
+        "estimated_minutes": 9,
+        "profile_version": "1.0",
+        "methodology_version": "compute-v1",
+        "jobs": [
+            {"name": "integer-single", "threads": 1, "runtime": 30, "warmup": 5, "cpu_max_prime": 20000},
+            {"name": "integer-half-cores", "threads": "half", "runtime": 45, "warmup": 5, "cpu_max_prime": 20000},
+            {"name": "integer-all-cores", "threads": "all", "runtime": 60, "warmup": 10, "cpu_max_prime": 20000},
+            {"name": "integer-sustained", "threads": "all", "runtime": 300, "warmup": 15, "cpu_max_prime": 20000},
+        ],
+    },
+}
+
+
+MEMORY_PROFILES: dict[str, dict[str, Any]] = {
+    "memory-quick": {
+        "label": "Memory Quick",
+        "description": "Short cache-resistant read/copy/triad bandwidth checks at one thread and all logical cores.",
+        "estimated_minutes": 3,
+        "profile_version": "1.0",
+        "methodology_version": "memory-v1",
+        "array_size_mib": 128,
+        "jobs": [
+            {"name": "read-single", "kernel": "read", "threads": 1, "runtime": 15},
+            {"name": "copy-single", "kernel": "copy", "threads": 1, "runtime": 15},
+            {"name": "read-all-cores", "kernel": "read", "threads": "all", "runtime": 20},
+            {"name": "copy-all-cores", "kernel": "copy", "threads": "all", "runtime": 20},
+            {"name": "triad-all-cores", "kernel": "triad", "threads": "all", "runtime": 20},
+        ],
+    },
+    "memory-standard": {
+        "label": "Memory Standard",
+        "description": "Longer read, write, copy and triad bandwidth checks with a 768 MiB total working set.",
+        "estimated_minutes": 8,
+        "profile_version": "1.0",
+        "methodology_version": "memory-v1",
+        "array_size_mib": 256,
+        "jobs": [
+            {"name": "read-single", "kernel": "read", "threads": 1, "runtime": 30},
+            {"name": "write-single", "kernel": "write", "threads": 1, "runtime": 30},
+            {"name": "copy-single", "kernel": "copy", "threads": 1, "runtime": 30},
+            {"name": "triad-single", "kernel": "triad", "threads": 1, "runtime": 30},
+            {"name": "read-all-cores", "kernel": "read", "threads": "all", "runtime": 45},
+            {"name": "write-all-cores", "kernel": "write", "threads": "all", "runtime": 45},
+            {"name": "copy-all-cores", "kernel": "copy", "threads": "all", "runtime": 45},
+            {"name": "triad-all-cores", "kernel": "triad", "threads": "all", "runtime": 45},
+        ],
+    },
+}
+
+
 STORAGE_PROFILES: dict[str, dict[str, Any]] = {
     "disk-quick": {
         "label": "Disk Quick",
@@ -113,8 +179,8 @@ ASSESSMENT_DOMAINS: list[dict[str, Any]] = [
     {"id": "system-inventory", "label": "System & Hardware Inventory", "status": "available", "summary": "OS, kernel, CPU, RAM, disks, NICs and runtime capabilities"},
     {"id": "provider-identity", "label": "Provider & Instance Identity", "status": "available", "summary": "Trusted metadata, declared manifests, region, zone and confidence"},
     {"id": "virtualization", "label": "Virtualization & Topology", "status": "partial", "summary": "Hypervisor evidence available; placement and deep topology pending"},
-    {"id": "compute", "label": "CPU & Compute", "status": "partial", "summary": "CPU topology available; single-thread, multi-thread and sustained tests pending"},
-    {"id": "memory", "label": "Memory & NUMA", "status": "partial", "summary": "Capacity available; bandwidth, latency and NUMA penalties pending"},
+    {"id": "compute", "label": "CPU & Compute", "status": "partial", "summary": "Versioned integer single-, multi-core and sustained profiles available; floating point, crypto and compilation pending"},
+    {"id": "memory", "label": "Memory & NUMA", "status": "partial", "summary": "Versioned userspace bandwidth profiles available; true latency, STREAM and NUMA penalties pending"},
     {"id": "storage", "label": "Storage, Filesystem & Object", "status": "available", "summary": "Safe block/filesystem profiles available; object and snapshot tests pending"},
     {"id": "network", "label": "Network & Connectivity", "status": "partial", "summary": "Guarded two-agent TCP executor available; UDP and loaded-latency profiles pending"},
     {"id": "gpu", "label": "GPU & Accelerators", "status": "roadmap", "summary": "GPU inventory, VRAM, transfer, compute and framework profiles"},
@@ -148,6 +214,8 @@ SCENARIOS: list[dict[str, Any]] = [
 
 def all_profiles() -> dict[str, Any]:
     return {
+        "compute": COMPUTE_PROFILES,
+        "memory": MEMORY_PROFILES,
         "storage": STORAGE_PROFILES,
         "network": NETWORK_PROFILES,
         "domains": ASSESSMENT_DOMAINS,
