@@ -418,8 +418,8 @@ max: 1.50
             with patch("cloudmark.compute.system_preflight", return_value=preflight), patch.object(
                 context,
                 "run_process",
-                side_effect=[ProcessResult(("sysbench",), 0, output, "", 0.01) for _ in range(3)],
-            ):
+                side_effect=[ProcessResult(("sysbench",), 0, output, "", 0.01) for _ in range(6)],
+            ) as run_process:
                 result = run_system_benchmark(
                     "compute",
                     "compute-quick",
@@ -433,6 +433,12 @@ max: 1.50
             self.assertEqual(result["compute_jobs"][1]["threads"], 4)
             self.assertEqual(result["scaling"]["all_core_threads"], 4)
             self.assertEqual(context.completed_steps, 3)
+            commands = [call.args[0] for call in run_process.call_args_list]
+            self.assertEqual(len(commands), 6)
+            self.assertIn("--time=3", commands[0])
+            self.assertIn("--time=15", commands[1])
+            self.assertFalse(any(arg.startswith("--warmup-time=") for command in commands for arg in command))
+            self.assertIsNotNone(result["compute_jobs"][0]["raw"]["warmup"])
 
     def test_memory_runner_records_native_bandwidth_evidence(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

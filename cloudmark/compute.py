@@ -319,14 +319,29 @@ def run_system_benchmark(
             name = str(workload["name"])
             threads = _resolve_threads(workload["threads"], int(preflight["logical_cores"]))
             partial = _partial_result(suite, profile_name, profile, preflight, results, started)
-            context.report("benchmarking", name, partial_result=partial)
+            warmup_result = None
             if suite == "compute":
+                warmup_seconds = int(workload.get("warmup", 0))
+                if warmup_seconds:
+                    context.report("warming-up", name, partial_result=partial)
+                    warmup_command = [
+                        str(preflight["tool"]),
+                        "cpu",
+                        f"--threads={threads}",
+                        f"--time={warmup_seconds}",
+                        "--events=0",
+                        f"--cpu-max-prime={int(workload['cpu_max_prime'])}",
+                        "run",
+                    ]
+                    warmup_result = context.run_process(warmup_command, label=f"compute warm-up {name}")
+                    if warmup_result.returncode != 0:
+                        raise ComputeError(f"compute warm-up {name} failed: {warmup_result.stderr.strip()[:1200]}")
+                context.report("benchmarking", name, partial_result=partial)
                 command = [
                     str(preflight["tool"]),
                     "cpu",
                     f"--threads={threads}",
                     f"--time={int(workload['runtime'])}",
-                    f"--warmup-time={int(workload.get('warmup', 0))}",
                     "--events=0",
                     "--percentile=95",
                     "--report-interval=1",
@@ -368,6 +383,15 @@ def run_system_benchmark(
                         "stdout": completed.stdout,
                         "stderr": completed.stderr,
                         "process_elapsed_seconds": completed.elapsed_seconds,
+                        "warmup": (
+                            {
+                                "command": list(warmup_result.args),
+                                "stderr": warmup_result.stderr,
+                                "process_elapsed_seconds": warmup_result.elapsed_seconds,
+                            }
+                            if warmup_result is not None
+                            else None
+                        ),
                     },
                 }
             )

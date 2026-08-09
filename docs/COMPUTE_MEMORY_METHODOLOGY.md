@@ -38,6 +38,12 @@ Every CPU job uses `--cpu-max-prime=20000`, a one-second report interval, and a
 efficiency relative to the single-thread event rate. Scaling efficiency is
 diagnostic evidence; it is not a universal CPU quality percentage.
 
+Warm-up is executed as a separate bounded `sysbench cpu` invocation with the
+same thread count and prime limit. This keeps the measured one-second series
+free of warm-up samples and remains compatible with distribution builds such
+as sysbench 1.0.20 that do not implement `--warmup-time`. The warm-up command,
+elapsed time, and stderr are retained with each job as execution evidence.
+
 This initial executor does not yet claim floating-point, vector/SIMD, crypto,
 compression, compilation, language-runtime, or application-level performance.
 
