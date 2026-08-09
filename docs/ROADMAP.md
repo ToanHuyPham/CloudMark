@@ -87,18 +87,21 @@ M1 emits separate capabilities for transactional databases, latency-sensitive
 web, general purpose, analytics throughput, media scratch, and backup targets.
 It does not collapse everything into one disk score.
 
-## M2 — Provider-internal network executor
+## M2 — Provider-internal network executor (partial in 0.3.0)
 
 Required topology: Controller + Agent A + Agent B.
 
-- TCP A→B, B→A, and bidirectional using 1/4/8/16 streams;
+- TCP A→B and B→A using 1/4/8/16 streams — available;
+- authenticated agent heartbeat and durable allow-listed task queues — available;
+- fixed port range, duration/stream caps, one-shot servers, watchdog, and cleanup — available;
+- simultaneous bidirectional mode — planned;
 - UDP rate sweep, loss, jitter, reorder, and practical ceiling;
 - idle RTT, loaded RTT, and bufferbloat;
 - retransmissions, congestion control, MTU, route, and NIC-offload evidence;
 - sender/receiver CPU to detect generator bottlenecks;
 - separate same-zone, cross-zone, and cross-region labels;
 - short-burst and sustained runs;
-- mandatory mTLS, allow-listed ports, rate limits, watchdog, and cleanup.
+- mTLS enrollment and policy-configurable rate limits — planned.
 
 There is no cloud-to-controller profile. Public-Internet results must not be
 combined with private or VPC network results.
@@ -174,7 +177,7 @@ matching control-plane drills.
 ## Recommended implementation order
 
 1. Complete M1 and the time-series schema because storage is the most mature executor.
-2. Enable M2 after mTLS, watchdog, and generator-saturation guards are complete.
+2. Complete M2 with mTLS, UDP, loaded latency, and generator-saturation guards.
 3. Add M3 to separate compute and memory constraints from storage and network.
 4. Build M4 on the stable runner.
 5. Add provider adapters and M5 drills.

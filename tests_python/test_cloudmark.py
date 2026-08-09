@@ -6,15 +6,17 @@ import sys
 import threading
 import time
 import unittest
+import urllib.error
 import urllib.request
 from pathlib import Path
 from unittest.mock import patch
 
-from cloudmark.agent import join_session
+from cloudmark.agent import AgentWorker, join_session
 from cloudmark.benchmarks import _metrics, _parse_fio_log, run_storage
 from cloudmark.bootstrap import create_plan
 from cloudmark.database import Database
 from cloudmark.inventory import collect_inventory
+from cloudmark.network import NetworkError, run_network, validate_network_run
 from cloudmark.profiles import ASSESSMENT_DOMAINS, NETWORK_PROFILES, SCENARIOS, STORAGE_PROFILES
 from cloudmark.provider import _declared_manifest
 from cloudmark.runner import CancellationToken, JobContext, ProcessResult, RunCancelled, RunTimedOut
@@ -106,6 +108,106 @@ class CloudMarkTests(unittest.TestCase):
             database.add_agent("agent_b", "session_test", "b", "generator", {})
             self.assertEqual(database.get_session("session_test")["status"], "ready")
 
+    def test_agent_task_queue_is_scoped_and_persistent(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            database = Database(Path(directory) / "test.sqlite3")
+            database.create_session("session_test", "pair", "join-hash", "2099-01-01T00:00:00+00:00")
+            database.add_agent("agent_a", "session_test", "a", "target", {}, "agent-hash", {"address": "10.0.0.10"})
+            database.create_run("run_network", "network", "network-peer-quick", {"suite": "network"})
+            database.create_agent_task(
+                "task_test",
+                "run_network",
+                "session_test",
+                "agent_a",
+                "network-server-start",
+                {"port": 5201},
+            )
+            task = database.claim_agent_task("agent_a")
+            self.assertEqual(task["kind"], "network-server-start")
+            self.assertEqual(task["payload"], {"port": 5201})
+            self.assertTrue(database.finish_agent_task("task_test", "agent_a", status="completed", result={"ready": True}))
+            self.assertEqual(database.get_agent_task("task_test")["result"], {"ready": True})
+            self.assertFalse(database.authenticate_agent("agent_a", "wrong-hash"))
+            self.assertTrue(database.authenticate_agent("agent_a", "agent-hash"))
+            database.create_agent_task(
+                "task_cancel",
+                "run_network",
+                "session_test",
+                "agent_a",
+                "network-client",
+                {"target_address": "10.0.0.11"},
+            )
+            self.assertEqual(database.cancel_queued_run_tasks("run_network"), 1)
+            self.assertIsNone(database.claim_agent_task("agent_a"))
+
+    def test_network_run_requires_roles_capability_and_peer_addresses(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            database = Database(Path(directory) / "test.sqlite3")
+            database.create_session("session_test", "pair", "hash", "2099-01-01T00:00:00+00:00")
+            system = {"inventory": {"capabilities": {"iperf3": True}}}
+            database.add_agent("agent_a", "session_test", "a", "target", system, endpoint={"address": "10.0.0.10"})
+            with self.assertRaises(ValueError):
+                validate_network_run(database, "session_test", "network-peer-quick")
+            database.add_agent("agent_b", "session_test", "b", "generator", system, endpoint={"address": "10.0.0.11"})
+            session, target, generator = validate_network_run(database, "session_test", "network-peer-quick")
+            self.assertEqual(session["status"], "ready")
+            self.assertEqual(target["role"], "target")
+            self.assertEqual(generator["role"], "generator")
+
+    def test_agent_refuses_loopback_network_destination(self) -> None:
+        worker = AgentWorker("http://127.0.0.1:8787", "agent", "token")
+        with self.assertRaises(NetworkError):
+            worker._run_client({"target_address": "127.0.0.1", "port": 5201, "duration_seconds": 1, "streams": 1})
+
+    def test_network_orchestrator_records_both_directions_without_controller_traffic(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            database = Database(Path(directory) / "test.sqlite3")
+            database.create_session("session_test", "pair", "hash", "2099-01-01T00:00:00+00:00")
+            system = {"inventory": {"capabilities": {"iperf3": True}}}
+            database.add_agent("agent_a", "session_test", "target", "target", system, endpoint={"address": "10.0.0.10"})
+            database.add_agent("agent_b", "session_test", "generator", "generator", system, endpoint={"address": "10.0.0.11"})
+            database.create_run("run_network", "network", "network-peer-quick", {"suite": "network"}, total_steps=4)
+            done = threading.Event()
+
+            def complete_tasks() -> None:
+                iperf = {
+                    "start": {"version": "iperf 3.17"},
+                    "end": {
+                        "sum_sent": {"bits_per_second": 1_100_000_000, "bytes": 1_000_000, "retransmits": 2},
+                        "sum_received": {"bits_per_second": 1_000_000_000, "bytes": 990_000},
+                    },
+                }
+                while not done.is_set():
+                    handled = False
+                    for agent_id in ("agent_a", "agent_b"):
+                        task = database.claim_agent_task(agent_id)
+                        if not task:
+                            continue
+                        handled = True
+                        result = {"ready": True} if task["kind"] == "network-server-start" else {"iperf": iperf}
+                        database.finish_agent_task(task["id"], agent_id, status="completed", result=result)
+                    if not handled:
+                        time.sleep(0.01)
+
+            worker = threading.Thread(target=complete_tasks, daemon=True)
+            worker.start()
+            try:
+                context = JobContext("run_network", total_steps=4, timeout_seconds=20)
+                result = run_network(
+                    database,
+                    "run_network",
+                    "session_test",
+                    "network-peer-quick",
+                    context=context,
+                )
+            finally:
+                done.set()
+                worker.join(timeout=2)
+            self.assertEqual(len(result["measurements"]), 4)
+            self.assertEqual({item["sender"]["id"] for item in result["measurements"]}, {"agent_a", "agent_b"})
+            self.assertFalse(result["policy"]["controller_in_data_path"])
+            self.assertEqual(result["tool"]["version"], "iperf 3.17")
+
     def test_profiles_enforce_network_direction_policy(self) -> None:
         self.assertIn("disk-quick", STORAGE_PROFILES)
         self.assertIn("disk-database", STORAGE_PROFILES)
@@ -186,7 +288,7 @@ class CloudMarkTests(unittest.TestCase):
             run = controller.cancel_run("run_cancel")
             self.assertTrue(run["cancel_requested"])
 
-    def test_http_api_exposes_v020_dashboard_and_cancel_endpoint(self) -> None:
+    def test_http_api_exposes_v030_dashboard_and_cancel_endpoint(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             controller = CloudMarkController(Path(directory))
             controller._inventory = {"hostname": "api-test"}
@@ -199,8 +301,10 @@ class CloudMarkTests(unittest.TestCase):
             try:
                 with urllib.request.urlopen(f"{base}/dashboard", timeout=5) as response:
                     dashboard = json.load(response)
-                self.assertEqual(dashboard["version"], "0.2.0")
+                self.assertEqual(dashboard["version"], "0.3.0")
                 self.assertIn("disk-sustained", dashboard["profiles"]["storage"])
+                self.assertIn("network-peer-quick", dashboard["profiles"]["network"])
+                self.assertIn("sessions", dashboard)
                 request = urllib.request.Request(
                     f"{base}/runs/run_http/cancel",
                     data=b"{}",
@@ -213,6 +317,57 @@ class CloudMarkTests(unittest.TestCase):
                 with urllib.request.urlopen(request, timeout=5) as response:
                     cancelled = json.load(response)
                 self.assertTrue(cancelled["cancel_requested"])
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=5)
+
+    def test_http_agent_queue_requires_its_own_credential(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            controller = CloudMarkController(Path(directory))
+            pairing = controller.create_session("agent api")
+            joined = controller.join_session(
+                pairing["id"],
+                {
+                    "join_token": pairing["join_token"],
+                    "role": "target",
+                    "name": "target-a",
+                    "endpoint": {"address": "10.0.0.10"},
+                    "system": {"inventory": {"capabilities": {"iperf3": True}}},
+                },
+            )
+            controller.database.create_run("run_agent_api", "network", "network-peer-quick", {"suite": "network"})
+            controller.database.create_agent_task(
+                "task_agent_api",
+                "run_agent_api",
+                pairing["id"],
+                joined["agent_id"],
+                "network-server-start",
+                {"port": 5201},
+            )
+            server = Server(("127.0.0.1", 0), controller)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            url = f"http://127.0.0.1:{server.server_port}/api/v1/agents/{joined['agent_id']}/tasks/next"
+            try:
+                rejected = urllib.request.Request(
+                    url,
+                    data=b"{}",
+                    method="POST",
+                    headers={"Content-Type": "application/json", "X-CloudMark-Agent-Token": "wrong"},
+                )
+                with self.assertRaises(urllib.error.HTTPError) as rejected_error:
+                    urllib.request.urlopen(rejected, timeout=5)
+                self.assertEqual(rejected_error.exception.code, 401)
+                accepted = urllib.request.Request(
+                    url,
+                    data=b"{}",
+                    method="POST",
+                    headers={"Content-Type": "application/json", "X-CloudMark-Agent-Token": joined["agent_token"]},
+                )
+                with urllib.request.urlopen(accepted, timeout=5) as response:
+                    payload = json.load(response)
+                self.assertEqual(payload["task"]["id"], "task_agent_api")
             finally:
                 server.shutdown()
                 server.server_close()

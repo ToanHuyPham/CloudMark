@@ -17,7 +17,8 @@ from . import __version__
 from .benchmarks import BenchmarkError, run_storage, storage_preflight
 from .database import Database
 from .inventory import collect_inventory
-from .profiles import STORAGE_PROFILES, all_profiles
+from .network import NetworkError, run_network, validate_network_run
+from .profiles import NETWORK_PROFILES, STORAGE_PROFILES, all_profiles
 from .provider import detect_provider
 from .runner import RUNNER_VERSION, CancellationToken, JobContext, RunCancelled, RunTimedOut
 
@@ -60,6 +61,7 @@ class CloudMarkController:
             "version": __version__,
             "system": self.system(),
             "runs": self.database.list_runs(10),
+            "sessions": self.database.list_sessions(10),
             "profiles": all_profiles(),
             "policy": {
                 "cloud_to_controller_network_test": False,
@@ -72,8 +74,8 @@ class CloudMarkController:
         request = dict(request)
         suite = str(request.get("suite", ""))
         profile = str(request.get("profile", ""))
-        if suite not in {"inventory", "storage"}:
-            raise ValueError("This release supports inventory and storage runs. The distributed network executor is not enabled yet.")
+        if suite not in {"inventory", "storage", "network"}:
+            raise ValueError("Supported suites are inventory, storage, and network.")
         if suite == "storage":
             if not request.get("confirm_write"):
                 raise ValueError("Storage test requires confirm_write=true because it writes a temporary test file.")
@@ -82,6 +84,16 @@ class CloudMarkController:
             methodology_version = str(STORAGE_PROFILES[profile]["methodology_version"])
             tool_version = str(preflight["fio_version"])
             default_timeout = int(preflight["default_timeout_seconds"])
+        elif suite == "network":
+            if not request.get("confirm_network_load"):
+                raise ValueError("Network test requires confirm_network_load=true because it generates sustained peer traffic.")
+            session_id = str(request.get("session_id", ""))
+            validate_network_run(self.database, session_id, profile)
+            profile_config = NETWORK_PROFILES[profile]
+            total_steps = len(profile_config["tcp_streams"]) * 2
+            methodology_version = str(profile_config["methodology_version"])
+            tool_version = "iperf3-agent"
+            default_timeout = total_steps * (int(profile_config["duration_seconds"]) + 60) + 120
         else:
             total_steps = 1
             methodology_version = "inventory-v1"
@@ -143,9 +155,25 @@ class CloudMarkController:
                 context.report("collecting", "system-inventory")
                 result = self.system(refresh=True)
                 context.complete_step("completed", None, partial_result=result)
-            else:
+            elif request["suite"] == "storage":
                 result = run_storage(str(request["profile"]), self.benchmark_dir, run_id, context=context)
-            self.database.update_run(run_id, status="completed", result=result, phase="completed", progress=1)
+            else:
+                result = run_network(
+                    self.database,
+                    run_id,
+                    str(request["session_id"]),
+                    str(request["profile"]),
+                    context=context,
+                )
+            result_tool = result.get("tool") if isinstance(result, dict) else None
+            self.database.update_run(
+                run_id,
+                status="completed",
+                result=result,
+                phase="completed",
+                progress=1,
+                tool_version=str(result_tool.get("version")) if isinstance(result_tool, dict) and result_tool.get("version") else None,
+            )
         except RunCancelled as exc:
             self.database.update_run(
                 run_id,
@@ -162,6 +190,14 @@ class CloudMarkController:
                 error=str(exc),
                 phase="timed-out",
             )
+        except NetworkError as exc:
+            self.database.update_run(
+                run_id,
+                status="failed",
+                result=exc.partial_result,
+                error=str(exc),
+                phase="failed",
+            )
         except (BenchmarkError, OSError, ValueError, json.JSONDecodeError) as exc:
             self.database.update_run(run_id, status="failed", error=str(exc), phase="failed")
         except Exception as exc:  # defensive runner boundary
@@ -172,6 +208,7 @@ class CloudMarkController:
                 phase="failed",
             )
         finally:
+            self.database.cancel_queued_run_tasks(run_id)
             with self._active_runs_lock:
                 self._active_runs.pop(run_id, None)
 
@@ -182,6 +219,7 @@ class CloudMarkController:
         if run["status"] not in {"queued", "running"}:
             raise ValueError(f"Run is already {run['status']} and cannot be cancelled.")
         self.database.request_cancel(run_id)
+        self.database.cancel_queued_run_tasks(run_id)
         with self._active_runs_lock:
             token = self._active_runs.get(run_id)
         if token:
@@ -216,18 +254,63 @@ class CloudMarkController:
         if role not in {"target", "generator", "replica", "peer"}:
             raise ValueError("Unsupported agent role.")
         agent_id = f"agent_{uuid.uuid4().hex[:12]}"
+        agent_token = secrets.token_urlsafe(32)
+        endpoint = request.get("endpoint") or {}
+        if not isinstance(endpoint, dict):
+            raise ValueError("Agent endpoint must be a JSON object.")
+        system = request.get("system") or {}
+        if not isinstance(system, dict):
+            raise ValueError("Agent system evidence must be a JSON object.")
         self.database.add_agent(
             agent_id,
             session_id,
             str(request.get("name", agent_id)),
             role,
-            request.get("system") or {},
+            system,
+            hashlib.sha256(agent_token.encode()).hexdigest(),
+            endpoint,
         )
-        return {"agent_id": agent_id, "session": self.database.get_session(session_id)}
+        return {
+            "agent_id": agent_id,
+            "agent_token": agent_token,
+            "session": self.database.get_session(session_id),
+        }
+
+    def authenticate_agent(self, agent_id: str, token: str) -> bool:
+        token_hash = hashlib.sha256(token.encode()).hexdigest()
+        return self.database.authenticate_agent(agent_id, token_hash)
+
+    def heartbeat_agent(self, agent_id: str, request: dict[str, Any]) -> dict[str, Any]:
+        system = request.get("system")
+        if system is not None and not isinstance(system, dict):
+            raise ValueError("Agent system evidence must be a JSON object.")
+        agent = self.database.heartbeat_agent(agent_id, system)
+        if not agent:
+            raise LookupError("Agent not found.")
+        return agent
+
+    def next_agent_task(self, agent_id: str) -> dict[str, Any]:
+        self.database.heartbeat_agent(agent_id)
+        return {"task": self.database.claim_agent_task(agent_id)}
+
+    def finish_agent_task(self, agent_id: str, task_id: str, request: dict[str, Any]) -> dict[str, Any]:
+        status = str(request.get("status", ""))
+        result = request.get("result")
+        if result is not None and not isinstance(result, dict):
+            raise ValueError("Agent task result must be a JSON object.")
+        if not self.database.finish_agent_task(
+            task_id,
+            agent_id,
+            status=status,
+            result=result,
+            error=str(request.get("error", "")) or None,
+        ):
+            raise LookupError("Running task not found for this agent.")
+        return self.database.get_agent_task(task_id) or {"id": task_id, "status": status}
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "CloudMark/0.2"
+    server_version = "CloudMark/0.3"
 
     @property
     def controller(self) -> CloudMarkController:
@@ -277,12 +360,16 @@ class Handler(BaseHTTPRequestHandler):
         token = self.headers.get("X-CloudMark-Token", "")
         return secrets.compare_digest(token, self.controller.token)
 
+    def _agent_authorized(self, agent_id: str) -> bool:
+        token = self.headers.get("X-CloudMark-Agent-Token", "")
+        return bool(token and self.controller.authenticate_agent(agent_id, token))
+
     def do_OPTIONS(self) -> None:  # noqa: N802
         self.send_response(HTTPStatus.NO_CONTENT)
         origin = self._origin()
         if origin:
             self.send_header("Access-Control-Allow-Origin", origin)
-            self.send_header("Access-Control-Allow-Headers", "Content-Type, X-CloudMark-Token")
+            self.send_header("Access-Control-Allow-Headers", "Content-Type, X-CloudMark-Token, X-CloudMark-Agent-Token")
             self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
             self.send_header("Vary", "Origin")
         self.end_headers()
@@ -321,6 +408,22 @@ class Handler(BaseHTTPRequestHandler):
                 session_id = path.split("/")[-2]
                 self._send(200, self.controller.join_session(session_id, body))
                 return
+            if path.startswith("/api/v1/agents/"):
+                parts = path.split("/")
+                agent_id = parts[4] if len(parts) > 4 else ""
+                if not self._agent_authorized(agent_id):
+                    self._send(401, {"error": "Missing or invalid X-CloudMark-Agent-Token"})
+                    return
+                if path.endswith("/heartbeat"):
+                    self._send(200, self.controller.heartbeat_agent(agent_id, body))
+                elif path.endswith("/tasks/next"):
+                    self._send(200, self.controller.next_agent_task(agent_id))
+                elif "/tasks/" in path and path.endswith("/result"):
+                    task_id = parts[-2]
+                    self._send(200, self.controller.finish_agent_task(agent_id, task_id, body))
+                else:
+                    self._send(404, {"error": "Not found"})
+                return
             if not self._authorized():
                 self._send(401, {"error": "Missing or invalid X-CloudMark-Token"})
                 return
@@ -337,7 +440,7 @@ class Handler(BaseHTTPRequestHandler):
             self._send(403, {"error": str(exc)})
         except LookupError as exc:
             self._send(404, {"error": str(exc)})
-        except (ValueError, BenchmarkError, json.JSONDecodeError) as exc:
+        except (ValueError, BenchmarkError, NetworkError, json.JSONDecodeError) as exc:
             self._send(400, {"error": str(exc)})
         except Exception as exc:  # defensive API boundary
             self._send(500, {"error": str(exc)})

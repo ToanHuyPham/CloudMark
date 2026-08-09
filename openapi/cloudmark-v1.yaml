@@ -1,8 +1,8 @@
 openapi: 3.1.0
 info:
   title: CloudMark Controller API
-  version: 0.2.0
-  description: Local-first API for machine evidence, benchmark jobs, and multi-node sessions.
+  version: 0.3.0
+  description: Local-first API for machine evidence, benchmark jobs, authenticated agents, and multi-node sessions.
 servers:
   - url: http://127.0.0.1:8787/api/v1
 components:
@@ -11,6 +11,10 @@ components:
       type: apiKey
       in: header
       name: X-CloudMark-Token
+    agentToken:
+      type: apiKey
+      in: header
+      name: X-CloudMark-Agent-Token
   schemas:
     Error:
       type: object
@@ -21,9 +25,11 @@ components:
       type: object
       required: [suite]
       properties:
-        suite: { type: string, enum: [inventory, storage] }
+        suite: { type: string, enum: [inventory, storage, network] }
         profile: { type: string }
         confirm_write: { type: boolean, default: false }
+        confirm_network_load: { type: boolean, default: false }
+        session_id: { type: string }
         timeout_seconds: { type: integer, minimum: 30, maximum: 43200 }
     Run:
       type: object
@@ -175,7 +181,70 @@ paths:
                 join_token: { type: string }
                 role: { type: string, enum: [target, generator, replica, peer] }
                 name: { type: string }
+                endpoint:
+                  type: object
+                  properties:
+                    address: { type: string }
                 system: { type: object, additionalProperties: true }
       responses:
-        "200": { description: Joined }
+        "200": { description: Joined with a unique agent ID and agent credential }
         "403": { description: Invalid token }
+  /agents/{agentId}/heartbeat:
+    post:
+      summary: Refresh an authenticated agent heartbeat
+      security: [{ agentToken: [] }]
+      parameters:
+        - in: path
+          name: agentId
+          required: true
+          schema: { type: string }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                system: { type: object, additionalProperties: true }
+      responses:
+        "200": { description: Agent presence }
+        "401": { description: Missing or invalid agent credential }
+  /agents/{agentId}/tasks/next:
+    post:
+      summary: Atomically claim the next task assigned to an agent
+      security: [{ agentToken: [] }]
+      parameters:
+        - in: path
+          name: agentId
+          required: true
+          schema: { type: string }
+      responses:
+        "200": { description: Task object or null }
+        "401": { description: Missing or invalid agent credential }
+  /agents/{agentId}/tasks/{taskId}/result:
+    post:
+      summary: Complete or fail a claimed agent task
+      security: [{ agentToken: [] }]
+      parameters:
+        - in: path
+          name: agentId
+          required: true
+          schema: { type: string }
+        - in: path
+          name: taskId
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [status]
+              properties:
+                status: { type: string, enum: [completed, failed] }
+                result: { type: object, additionalProperties: true }
+                error: { type: string }
+      responses:
+        "200": { description: Terminal task }
+        "401": { description: Missing or invalid agent credential }
+        "404": { description: Running task not found for this agent }

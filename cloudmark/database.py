@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import hmac
 import json
 import sqlite3
 import threading
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -73,8 +74,29 @@ class Database:
                 FOREIGN KEY(session_id) REFERENCES sessions(id) ON DELETE CASCADE
             )
             """,
+            """
+            CREATE TABLE IF NOT EXISTS agent_tasks (
+                id TEXT PRIMARY KEY,
+                run_id TEXT NOT NULL,
+                session_id TEXT NOT NULL,
+                agent_id TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                status TEXT NOT NULL,
+                payload_json TEXT NOT NULL,
+                result_json TEXT,
+                error TEXT,
+                created_at TEXT NOT NULL,
+                claimed_at TEXT,
+                finished_at TEXT,
+                FOREIGN KEY(run_id) REFERENCES runs(id) ON DELETE CASCADE,
+                FOREIGN KEY(session_id) REFERENCES sessions(id) ON DELETE CASCADE,
+                FOREIGN KEY(agent_id) REFERENCES agents(id) ON DELETE CASCADE
+            )
+            """,
             "CREATE INDEX IF NOT EXISTS idx_runs_status_started ON runs(status, started_at)",
             "CREATE INDEX IF NOT EXISTS idx_agents_session_id ON agents(session_id)",
+            "CREATE INDEX IF NOT EXISTS idx_agent_tasks_next ON agent_tasks(agent_id, status, created_at)",
+            "CREATE INDEX IF NOT EXISTS idx_agent_tasks_run ON agent_tasks(run_id, created_at)",
         ]
         with self._lock, self._connection() as connection:
             for statement in statements:
@@ -95,6 +117,15 @@ class Database:
             for column, definition in migrations.items():
                 if column not in run_columns:
                     connection.execute(f"ALTER TABLE runs ADD COLUMN {column} {definition}")
+            agent_columns = {row[1] for row in connection.execute("PRAGMA table_info(agents)").fetchall()}
+            agent_migrations = {
+                "token_hash": "TEXT NOT NULL DEFAULT ''",
+                "last_seen_at": "TEXT",
+                "endpoint_json": "TEXT NOT NULL DEFAULT '{}'",
+            }
+            for column, definition in agent_migrations.items():
+                if column not in agent_columns:
+                    connection.execute(f"ALTER TABLE agents ADD COLUMN {column} {definition}")
             connection.execute("PRAGMA optimize")
 
     def create_run(
@@ -240,6 +271,14 @@ class Database:
                 """,
                 (now, now),
             )
+            connection.execute(
+                """
+                UPDATE agent_tasks SET status = 'cancelled', finished_at = ?,
+                    error = 'Controller restarted before the distributed task completed.'
+                WHERE status IN ('queued', 'running')
+                """,
+                (now,),
+            )
         return cursor.rowcount
 
     @staticmethod
@@ -289,16 +328,38 @@ class Database:
             if not session:
                 return None
             agents = connection.execute(
-                "SELECT id, name, role, status, joined_at, system_json FROM agents WHERE session_id = ?",
+                """
+                SELECT id, name, role, status, joined_at, last_seen_at,
+                       endpoint_json, system_json
+                FROM agents WHERE session_id = ? ORDER BY joined_at
+                """,
                 (session_id,),
             ).fetchall()
         result = dict(session)
         result["agents"] = []
+        online_cutoff = datetime.now(timezone.utc) - timedelta(seconds=30)
         for row in agents:
             item = dict(row)
             item["system"] = json.loads(item.pop("system_json"))
+            item["endpoint"] = json.loads(item.pop("endpoint_json"))
+            last_seen = item.get("last_seen_at")
+            try:
+                if not last_seen or datetime.fromisoformat(str(last_seen)) < online_cutoff:
+                    item["status"] = "offline"
+            except ValueError:
+                item["status"] = "offline"
             result["agents"].append(item)
+        roles_online = {item["role"] for item in result["agents"] if item["status"] == "online"}
+        result["status"] = "ready" if {"target", "generator"}.issubset(roles_online) else "waiting"
         return result
+
+    def list_sessions(self, limit: int = 20) -> list[dict[str, Any]]:
+        with self._connection() as connection:
+            rows = connection.execute(
+                "SELECT id FROM sessions ORDER BY created_at DESC LIMIT ?",
+                (max(1, min(limit, 100)),),
+            ).fetchall()
+        return [session for row in rows if (session := self.get_session(str(row[0]))) is not None]
 
     def get_session_token_hash(self, session_id: str) -> str | None:
         with self._connection() as connection:
@@ -315,19 +376,28 @@ class Database:
         name: str,
         role: str,
         system: dict[str, Any],
+        token_hash: str = "",
+        endpoint: dict[str, Any] | None = None,
     ) -> None:
+        now = utc_now()
         with self._lock, self._connection() as connection:
             connection.execute(
                 """
-                INSERT INTO agents(id, session_id, name, role, status, joined_at, system_json)
-                VALUES (?, ?, ?, ?, 'online', ?, ?)
+                INSERT INTO agents(
+                    id, session_id, name, role, status, joined_at, last_seen_at,
+                    token_hash, endpoint_json, system_json
+                )
+                VALUES (?, ?, ?, ?, 'online', ?, ?, ?, ?, ?)
                 """,
                 (
                     agent_id,
                     session_id,
                     name,
                     role,
-                    utc_now(),
+                    now,
+                    now,
+                    token_hash,
+                    json.dumps(endpoint or {}, ensure_ascii=False),
                     json.dumps(system, ensure_ascii=False),
                 ),
             )
@@ -343,3 +413,173 @@ class Database:
                 """,
                 (session_id, session_id),
             )
+
+    def authenticate_agent(self, agent_id: str, token_hash: str) -> bool:
+        with self._connection() as connection:
+            row = connection.execute(
+                "SELECT token_hash FROM agents WHERE id = ?",
+                (agent_id,),
+            ).fetchone()
+        return bool(row and row[0] and hmac.compare_digest(str(row[0]), token_hash))
+
+    def heartbeat_agent(self, agent_id: str, system: dict[str, Any] | None = None) -> dict[str, Any] | None:
+        now = utc_now()
+        with self._lock, self._connection() as connection:
+            if system is None:
+                connection.execute(
+                    "UPDATE agents SET status = 'online', last_seen_at = ? WHERE id = ?",
+                    (now, agent_id),
+                )
+            else:
+                connection.execute(
+                    """
+                    UPDATE agents SET status = 'online', last_seen_at = ?, system_json = ?
+                    WHERE id = ?
+                    """,
+                    (now, json.dumps(system, ensure_ascii=False), agent_id),
+                )
+            row = connection.execute(
+                "SELECT id, session_id, name, role, status, last_seen_at FROM agents WHERE id = ?",
+                (agent_id,),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def get_agent(self, agent_id: str) -> dict[str, Any] | None:
+        with self._connection() as connection:
+            row = connection.execute(
+                "SELECT * FROM agents WHERE id = ?",
+                (agent_id,),
+            ).fetchone()
+        if not row:
+            return None
+        item = dict(row)
+        item["system"] = json.loads(item.pop("system_json"))
+        item["endpoint"] = json.loads(item.pop("endpoint_json"))
+        item.pop("token_hash", None)
+        return item
+
+    def create_agent_task(
+        self,
+        task_id: str,
+        run_id: str,
+        session_id: str,
+        agent_id: str,
+        kind: str,
+        payload: dict[str, Any],
+    ) -> None:
+        with self._lock, self._connection() as connection:
+            connection.execute(
+                """
+                INSERT INTO agent_tasks(
+                    id, run_id, session_id, agent_id, kind, status,
+                    payload_json, created_at
+                ) VALUES (?, ?, ?, ?, ?, 'queued', ?, ?)
+                """,
+                (
+                    task_id,
+                    run_id,
+                    session_id,
+                    agent_id,
+                    kind,
+                    json.dumps(payload, ensure_ascii=False),
+                    utc_now(),
+                ),
+            )
+
+    @staticmethod
+    def _task_row(row: sqlite3.Row) -> dict[str, Any]:
+        item = dict(row)
+        item["payload"] = json.loads(item.pop("payload_json"))
+        result_json = item.pop("result_json")
+        item["result"] = json.loads(result_json) if result_json else None
+        return item
+
+    def claim_agent_task(self, agent_id: str) -> dict[str, Any] | None:
+        with self._lock, self._connection() as connection:
+            row = connection.execute(
+                """
+                SELECT * FROM agent_tasks
+                WHERE agent_id = ? AND status = 'queued'
+                ORDER BY created_at LIMIT 1
+                """,
+                (agent_id,),
+            ).fetchone()
+            if not row:
+                return None
+            cursor = connection.execute(
+                """
+                UPDATE agent_tasks SET status = 'running', claimed_at = ?
+                WHERE id = ? AND status = 'queued'
+                """,
+                (utc_now(), row["id"]),
+            )
+            if cursor.rowcount != 1:
+                return None
+            updated = connection.execute(
+                "SELECT * FROM agent_tasks WHERE id = ?",
+                (row["id"],),
+            ).fetchone()
+        return self._task_row(updated)
+
+    def finish_agent_task(
+        self,
+        task_id: str,
+        agent_id: str,
+        *,
+        status: str,
+        result: dict[str, Any] | None = None,
+        error: str | None = None,
+    ) -> bool:
+        if status not in {"completed", "failed"}:
+            raise ValueError("Agent task status must be completed or failed.")
+        with self._lock, self._connection() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE agent_tasks
+                SET status = ?, result_json = ?, error = ?, finished_at = ?
+                WHERE id = ? AND agent_id = ? AND status = 'running'
+                """,
+                (
+                    status,
+                    json.dumps(result, ensure_ascii=False) if result is not None else None,
+                    error,
+                    utc_now(),
+                    task_id,
+                    agent_id,
+                ),
+            )
+            if cursor.rowcount == 1:
+                return True
+            existing = connection.execute(
+                "SELECT status FROM agent_tasks WHERE id = ? AND agent_id = ?",
+                (task_id, agent_id),
+            ).fetchone()
+        return bool(existing and existing[0] in {"completed", "failed", "cancelled"})
+
+    def get_agent_task(self, task_id: str) -> dict[str, Any] | None:
+        with self._connection() as connection:
+            row = connection.execute(
+                "SELECT * FROM agent_tasks WHERE id = ?",
+                (task_id,),
+            ).fetchone()
+        return self._task_row(row) if row else None
+
+    def list_run_tasks(self, run_id: str) -> list[dict[str, Any]]:
+        with self._connection() as connection:
+            rows = connection.execute(
+                "SELECT * FROM agent_tasks WHERE run_id = ? ORDER BY created_at",
+                (run_id,),
+            ).fetchall()
+        return [self._task_row(row) for row in rows]
+
+    def cancel_queued_run_tasks(self, run_id: str) -> int:
+        with self._lock, self._connection() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE agent_tasks SET status = 'cancelled', finished_at = ?,
+                    error = 'Parent run was cancelled before the task started.'
+                WHERE run_id = ? AND status = 'queued'
+                """,
+                (utc_now(), run_id),
+            )
+        return cursor.rowcount

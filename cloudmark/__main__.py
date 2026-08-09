@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 
 from . import __version__
-from .agent import join_session
+from .agent import join_and_work, join_session
 from .benchmarks import run_storage, storage_preflight
 from .bootstrap import create_plan, execute_plan
 from .inventory import collect_inventory
@@ -46,13 +46,23 @@ def parser() -> argparse.ArgumentParser:
     run.add_argument("--timeout-seconds", type=int, help="Stop the run after this many seconds")
     run.add_argument("--yes", action="store_true", help="Confirm writing a temporary benchmark file")
 
-    join = sub.add_parser("join", help="Join a distributed assessment session")
+    join = sub.add_parser("join", help="Register once for diagnostics; use 'agent' for benchmark work")
     join.add_argument("--controller", required=True, help="Controller base URL, for example https://controller.example")
     join.add_argument("--session", required=True)
-    join.add_argument("--token", required=True, help="One-time join token")
+    join.add_argument("--token", required=True, help="Short-lived session join token")
     join.add_argument("--role", choices=["target", "generator", "replica", "peer"], default="peer")
     join.add_argument("--name")
+    join.add_argument("--advertise-address", help="Peer-reachable IP address used only by paired provider agents")
     join.add_argument("--allow-http", action="store_true", help="Allow HTTP only on a trusted private network")
+
+    agent = sub.add_parser("agent", help="Join a session and run the persistent distributed worker")
+    agent.add_argument("--controller", required=True, help="Controller base URL, for example https://controller.example")
+    agent.add_argument("--session", required=True)
+    agent.add_argument("--token", required=True, help="Short-lived session join token")
+    agent.add_argument("--role", choices=["target", "generator"], required=True)
+    agent.add_argument("--name")
+    agent.add_argument("--advertise-address", help="Peer-reachable IP address used by the other provider agent")
+    agent.add_argument("--allow-http", action="store_true", help="Allow HTTP only on a trusted private network")
 
     return root
 
@@ -98,8 +108,19 @@ def main() -> None:
                 args.token,
                 args.role,
                 args.name,
+                advertise_address=args.advertise_address,
                 allow_http=args.allow_http,
             )
+        )
+    elif args.command == "agent":
+        join_and_work(
+            args.controller,
+            args.session,
+            args.token,
+            args.role,
+            args.name,
+            advertise_address=args.advertise_address,
+            allow_http=args.allow_http,
         )
 
 

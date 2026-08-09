@@ -6,7 +6,7 @@ systems.
 
 ## Storage
 
-- Filesystem test-file mode is the only enabled mode in `0.2.0`.
+- Filesystem test-file mode is the only enabled storage mode in `0.3.0`.
 - The selected directory is resolved before execution.
 - Free space must cover the test file plus the larger of 1 GiB or 5% volume
   reserve.
@@ -28,7 +28,12 @@ systems.
 
 - There is no arbitrary target-IP load endpoint.
 - The project policy disables cloud-to-controller measurements.
-- Provider throughput will run only between paired agents.
+- Provider throughput runs only between paired, authenticated agents.
+- Agent tasks are restricted to exact iperf3 argument lists, ports 5201–5210,
+  stream counts 1/4/8/16, and a 60-second per-measurement duration cap.
+- Servers use one-shot mode and an independent watchdog deadline.
+- Cancelling a run prevents queued work from starting; active child processes
+  retain bounded task and watchdog timeouts.
 - Public DDoS, spoofing, reflection, and amplification are outside project
   scope. Future resilience tests require authenticated, operator-owned targets
   with enforced rate and duration caps.
@@ -46,4 +51,5 @@ systems.
   excluded from Git.
 - The browser retains it only in `sessionStorage`.
 - Pairing secrets are stored as hashes in SQLite.
+- Independent agent credentials are returned once and stored only as hashes.
 - Provider credentials and instance user-data are never included in reports.

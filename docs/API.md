@@ -23,7 +23,10 @@ X-CloudMark-Token: <token printed by cloudmark serve>
 | POST | `/runs/{id}/cancel` | Cancel a queued or running benchmark |
 | POST | `/sessions` | Create a 30-minute pairing session |
 | GET | `/sessions/{id}` | Session and joined agents |
-| POST | `/sessions/{id}/join` | Join with the one-time token |
+| POST | `/sessions/{id}/join` | Join with the short-lived session token |
+| POST | `/agents/{id}/heartbeat` | Refresh authenticated agent presence |
+| POST | `/agents/{id}/tasks/next` | Atomically claim the next allow-listed task |
+| POST | `/agents/{id}/tasks/{taskId}/result` | Complete or fail a claimed task |
 
 ## Create an inventory run
 
@@ -61,6 +64,23 @@ reserve cannot be maintained.
 Supported storage profiles are `disk-quick`, `disk-standard`, `disk-database`,
 `disk-throughput`, and `disk-sustained`.
 
+## Create a peer network run
+
+```json
+{
+  "suite": "network",
+  "profile": "network-peer-quick",
+  "session_id": "session_123",
+  "confirm_network_load": true
+}
+```
+
+The session must contain an online `target` and `generator`. Both must advertise
+a peer-reachable IP and report `iperf3`. `confirm_network_load` is mandatory.
+Supported profiles are `network-peer-quick` and `network-peer-standard`.
+Version 0.3 executes TCP A→B and B→A only; it does not execute UDP or send data
+to the Controller.
+
 ## Cancel a run
 
 ```http
@@ -79,9 +99,15 @@ results, and changes the run state to `cancelled`.
 
 1. `POST /sessions` with the controller token.
 2. Copy the returned session ID and short-lived join token to each agent.
-3. Each agent calls `/sessions/{id}/join` with a role: `target`, `generator`,
-   `replica`, or `peer`.
-4. Read `/sessions/{id}` to verify topology.
+3. Each persistent agent calls `/sessions/{id}/join`. The response includes a
+   unique `agent_id` and an agent credential that is never returned again.
+4. The agent uses `X-CloudMark-Agent-Token` for heartbeat, polling, and result
+   submission. The Controller stores only its SHA-256 hash.
+5. Read `/sessions/{id}` to verify the target and generator are online.
+
+Agent endpoints are internal protocol endpoints for `cloudmark agent`. They do
+not accept the Controller token. A task is scoped to one agent and can contain
+only an executor kind implemented by the agent allow-list.
 
 The complete machine-readable contract is in
 [`openapi/cloudmark-v1.yaml`](../openapi/cloudmark-v1.yaml).

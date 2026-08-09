@@ -1,9 +1,10 @@
 # CloudMark user guide
 
-This guide applies to version `0.2.0`. The current release provides system
+This guide applies to version `0.3.0`. The current release provides system
 inventory, AWS/Azure/Google Cloud metadata detection, tool bootstrap planning,
 filesystem-safe storage assessment through `fio`, SQLite history, multi-system
-topology registration, and a local dashboard. The dashboard distinguishes
+topology registration, authenticated persistent agents, guarded two-direction
+TCP testing, and a local dashboard. The dashboard distinguishes
 `Available`, `Partial`, and `Roadmap`; unavailable executors are never scored or
 presented as ready.
 
@@ -132,8 +133,9 @@ In the dashboard:
   `Partial`, or `Roadmap` state.
 - **Storage Assessment** provides Quick, Standard, Database, Throughput, and
   Sustained profiles with live progress and cancellation.
-- **Distributed Testing** creates a multi-agent topology. Network traffic
-  execution remains `Partial` until all safety guards are complete.
+- **Distributed Testing** creates an authenticated multi-agent topology and
+  runs guarded TCP profiles. Network remains `Partial` because UDP,
+  loaded-latency, and mTLS enrollment are not included yet.
 - **Workload Suitability** maps technical evidence to 12 use cases. Missing
   required metrics return `Insufficient evidence`, not zero.
 - **History** retains raw results so conclusions can be recalculated when the
@@ -296,34 +298,52 @@ never treated as a completed assessment.
 Open **Distributed Testing** and select **Create pairing session**. CloudMark
 creates a session ID, join token, and 30-minute expiry.
 
-On VM A:
+After upgrading from 0.2, create a new session. Earlier registrations do not
+have the per-agent credentials or advertised peer address required by 0.3.
+
+Bootstrap the network pack on both VMs:
 
 ```bash
-python -m cloudmark join \
-  --controller https://CONTROLLER \
-  --session SESSION_ID \
-  --token JOIN_TOKEN \
-  --role target
+sudo python -m cloudmark bootstrap --packs network --yes
 ```
 
-On VM B:
+On VM A, keep this process running:
 
 ```bash
-python -m cloudmark join \
+python -m cloudmark agent \
   --controller https://CONTROLLER \
   --session SESSION_ID \
   --token JOIN_TOKEN \
-  --role generator
+  --role target \
+  --advertise-address VM_A_PEER_IP
+```
+
+On VM B, keep this process running:
+
+```bash
+python -m cloudmark agent \
+  --controller https://CONTROLLER \
+  --session SESSION_ID \
+  --token JOIN_TOKEN \
+  --role generator \
+  --advertise-address VM_B_PEER_IP
 ```
 
 If the Controller is available only through HTTP inside a trusted VPN or
 private network, add `--allow-http`. Never use that option over the public
 Internet.
 
-Agent registration and inventory persistence are operational. Automatic direct
-`iperf3` execution between A and B is not enabled yet, so dashboard coverage is
-`Partial`. This restriction prevents exposing a load-generating network endpoint
-before mTLS, watchdog, and rate limits are complete.
+When both workers are online and report `iperf3`, select `Provider Peer Quick`
+or `Provider Internal Network`, then select **Run network assessment**. The
+quick profile runs 1- and 4-stream TCP in both directions. The standard profile
+runs 1, 4, 8, and 16 streams in both directions. The Controller never becomes
+an iperf3 endpoint.
+
+The executor accepts only paired-agent addresses, ports 5201–5210, durations up
+to 60 seconds, and an allow-list of stream counts. Each server is one-shot and
+has an independent watchdog deadline. UDP, loaded latency, and simultaneous
+bidirectional mode are still excluded, so overall network coverage remains
+`Partial`.
 
 ## 10. Workload suitability
 
@@ -410,9 +430,21 @@ packs and signed self-hosted manifests are planned.
 ### An Agent cannot join the Controller
 
 The Controller binds to loopback by default, so remote VMs cannot reach it.
-For remote registration, use a VPN or an operator-controlled HTTPS reverse
-proxy. Never use `--allow-http` over the public Internet. Outbound relay and
-mTLS enrollment must be complete before automated network execution is enabled.
+For remote agents, use a VPN or an operator-controlled HTTPS reverse proxy to
+the Controller. Confirm that each VM can reach the other VM's advertised IP on
+TCP 5201–5210. Never use `--allow-http` over the public Internet. mTLS and relay
+enrollment are roadmap security layers; version 0.3 uses per-agent bearer
+credentials and requires HTTPS for remote control connections by default.
+
+### A network run remains queued or times out
+
+- keep both `cloudmark agent` processes running;
+- verify the dashboard shows one online target and one online generator;
+- install `iperf3` on both VMs;
+- allow TCP 5201–5210 between the two provider VMs only;
+- verify `--advertise-address` is reachable from the peer, not a loopback or
+  management address hidden behind NAT;
+- do not expose the iperf3 port range to the public Internet.
 
 ## 15. Validate the project
 

@@ -32,9 +32,9 @@ export async function generateMetadata(): Promise<Metadata> {
       siteName: "CloudMark",
       title,
       description,
-      images: [{ url: new URL("/og.png", base).toString(), width: 1536, height: 1024, alt: "CloudMark infrastructure assessment platform" }],
+      images: [{ url: new URL("/og-v030.png", base).toString(), width: 1672, height: 941, alt: "CloudMark evidence-driven cloud assessment" }],
     },
-    twitter: { card: "summary_large_image", title, description, images: [new URL("/og.png", base).toString()] },
+    twitter: { card: "summary_large_image", title, description, images: [new URL("/og-v030.png", base).toString()] },
   };
 }
 

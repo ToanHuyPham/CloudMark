@@ -1,6 +1,6 @@
 # CloudMark
 
-![CloudMark infrastructure assessment platform](public/og.png)
+![CloudMark infrastructure assessment platform](public/og-v030.png)
 
 CloudMark is an evidence-driven infrastructure assessment platform for cloud
 instances, VPS, bare-metal servers, and self-hosted cloud environments. It
@@ -22,8 +22,9 @@ timestamp, and raw result.
 | Available | Versioned job runner with progress, heartbeat, timeout, cancellation, cleanup, and partial results |
 | Available | Quick, Standard, Database, Throughput, and Sustained storage profiles with one-second time series |
 | Available | Local Controller API, SQLite history, and responsive dashboard |
-| Partial | Distributed agent registration and two-node topology pairing |
-| Roadmap | Automated peer-to-peer network traffic executor |
+| Available | Authenticated persistent agents, heartbeat, and durable task queues |
+| Partial | Guarded direct TCP network executor in both directions between paired agents |
+| Roadmap | UDP, loaded latency, mTLS enrollment, and remaining network validity checks |
 | Roadmap | Remaining compute, memory, GPU, application, platform, operations, and provider executors |
 | Roadmap | Final workload suitability and provider scoring engine |
 
@@ -104,6 +105,17 @@ Storage runs use a temporary file, preserve a free-space reserve, never target
 a raw device, and remove the test file after completion, failure, timeout, or
 operator cancellation.
 
+For provider-internal network measurement, create a pairing session in the
+dashboard and keep one worker running on each provider VM:
+
+```bash
+cloudmark agent --controller https://CONTROLLER --session SESSION_ID --token JOIN_TOKEN --role target --advertise-address VM_A_IP
+cloudmark agent --controller https://CONTROLLER --session SESSION_ID --token JOIN_TOKEN --role generator --advertise-address VM_B_IP
+```
+
+The peer executor generates traffic only between those paired addresses. The
+Controller is never an iperf3 endpoint.
+
 ## Documentation
 
 - [User guide](docs/USER_GUIDE.md)
@@ -117,12 +129,13 @@ operator cancellation.
 
 ## Release status
 
-Version `0.2.0` is operational for inventory collection, provider evidence,
+Version `0.3.0` is operational for inventory collection, provider evidence,
 versioned and cancellable job execution, production-oriented safe storage
 profiles, one-second fio time series, partial-result persistence, dashboard
-reporting, and agent topology registration. Automated network, application,
-and control-plane executors remain explicitly marked as unavailable until their
-safety and validity gates are implemented.
+reporting, authenticated agent task orchestration, and guarded two-direction
+TCP peer measurement. Network remains partial until UDP, loaded latency,
+generator-validity checks, and mTLS enrollment are implemented. Application
+and control-plane executors remain explicitly unavailable.
 
 ## License
 

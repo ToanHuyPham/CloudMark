@@ -82,14 +82,29 @@ STORAGE_PROFILES: dict[str, dict[str, Any]] = {
 
 
 NETWORK_PROFILES: dict[str, dict[str, Any]] = {
+    "network-peer-quick": {
+        "label": "Provider Peer Quick",
+        "description": "Short TCP measurements in both directions between paired provider agents.",
+        "requires_agents": 2,
+        "directions": ["generator-to-target", "target-to-generator"],
+        "tcp_streams": [1, 4],
+        "duration_seconds": 10,
+        "udp": False,
+        "cloud_to_controller": False,
+        "profile_version": "1.0",
+        "methodology_version": "network-v1",
+    },
     "network-peer-standard": {
         "label": "Provider Internal Network",
-        "description": "Measures cloud agent A ↔ cloud agent B directly; never cloud → controller.",
+        "description": "Measures cloud agent A to B and B to A directly; never cloud to controller.",
         "requires_agents": 2,
-        "directions": ["agent-a-to-agent-b", "agent-b-to-agent-a", "bidirectional"],
+        "directions": ["generator-to-target", "target-to-generator"],
         "tcp_streams": [1, 4, 8, 16],
-        "udp": True,
+        "duration_seconds": 15,
+        "udp": False,
         "cloud_to_controller": False,
+        "profile_version": "1.0",
+        "methodology_version": "network-v1",
     }
 }
 
@@ -101,7 +116,7 @@ ASSESSMENT_DOMAINS: list[dict[str, Any]] = [
     {"id": "compute", "label": "CPU & Compute", "status": "partial", "summary": "CPU topology available; single-thread, multi-thread and sustained tests pending"},
     {"id": "memory", "label": "Memory & NUMA", "status": "partial", "summary": "Capacity available; bandwidth, latency and NUMA penalties pending"},
     {"id": "storage", "label": "Storage, Filesystem & Object", "status": "available", "summary": "Safe block/filesystem profiles available; object and snapshot tests pending"},
-    {"id": "network", "label": "Network & Connectivity", "status": "partial", "summary": "Topology and pairing available; guarded traffic executor pending"},
+    {"id": "network", "label": "Network & Connectivity", "status": "partial", "summary": "Guarded two-agent TCP executor available; UDP and loaded-latency profiles pending"},
     {"id": "gpu", "label": "GPU & Accelerators", "status": "roadmap", "summary": "GPU inventory, VRAM, transfer, compute and framework profiles"},
     {"id": "web", "label": "Web, API & TLS", "status": "roadmap", "summary": "HTTP, TLS, concurrency, tail latency and saturation profiles"},
     {"id": "database", "label": "Database & Cache", "status": "roadmap", "summary": "PostgreSQL, MySQL/MariaDB, Redis and persistence profiles"},
@@ -120,7 +135,7 @@ SCENARIOS: list[dict[str, Any]] = [
     {"id": "web-app", "label": "Web & App Hosting", "status": "roadmap", "primary": "web", "coverage": "Application executor required"},
     {"id": "dev-test", "label": "Dev & Test", "status": "roadmap", "primary": "compute", "coverage": "Compute profile required"},
     {"id": "database", "label": "Database Management", "status": "partial", "primary": "storage", "coverage": "Storage evidence only"},
-    {"id": "network", "label": "Networking & Connectivity", "status": "partial", "primary": "network", "coverage": "Topology and pairing"},
+    {"id": "network", "label": "Networking & Connectivity", "status": "partial", "primary": "network", "coverage": "Two-direction TCP peer measurements"},
     {"id": "big-data", "label": "Big Data & Analytics", "status": "roadmap", "primary": "compute", "coverage": "Distributed profile required"},
     {"id": "ai-ml", "label": "AI & Machine Learning", "status": "roadmap", "primary": "gpu", "coverage": "Accelerator profile required"},
     {"id": "containers", "label": "Container & K8s", "status": "roadmap", "primary": "container", "coverage": "Orchestration profile required"},

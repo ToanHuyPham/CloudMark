@@ -8,7 +8,8 @@ model never destroys or rewrites the original benchmark result.
 1. **Controller API** runs on the operator machine, binds to loopback by
    default, stores runs in SQLite, and issues short-lived pairing sessions.
 2. **Agent CLI** runs on clean Linux or Windows machines, collects inventory,
-   installs approved tools, and executes versioned profiles.
+   installs approved tools, heartbeats, polls its authenticated queue, and
+   executes versioned allow-listed tasks.
 3. **Dashboard** is a local React/vinext application. Read endpoints are public
    on loopback; writes require the controller token.
 4. **Benchmark runners** invoke allow-listed binaries with exact argument lists.
@@ -80,6 +81,7 @@ SQLite tables:
 - `runs`: immutable request and result payloads with lifecycle state;
 - `sessions`: short-lived distributed assessment sessions;
 - `agents`: participants and their inventory evidence.
+- `agent_tasks`: durable per-agent task lifecycle, payload, result, and error.
 
 WAL mode permits dashboard reads while a benchmark updates its job state.
 Indexes exist only for current query patterns: run status/start time and agents
@@ -90,8 +92,12 @@ by session.
 - Controller write operations require `X-CloudMark-Token`.
 - Join tokens are short-lived session secrets stored as SHA-256 hashes; one
   token can enroll the small set of agents participating in that session.
+- Every joined worker receives a separate random credential. Only its SHA-256
+  hash is persisted, and it can claim or finish tasks assigned to that agent.
 - Remote joins require HTTPS unless the operator explicitly enables HTTP inside
   a trusted private network.
+- Version 0.3 does not yet provide mTLS enrollment. HTTPS/VPN termination and
+  access control remain operator responsibilities for remote deployments.
 - Provider metadata probes use fixed link-local endpoints, ignore proxies, have
   short timeouts, and never retrieve user-data or credentials.
 

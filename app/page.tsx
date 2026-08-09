@@ -62,7 +62,36 @@ type Run = {
   runner_version?: string;
   methodology_version?: string;
   tool_version?: string;
-  result?: { jobs?: StorageMetric[] };
+  result?: {
+    jobs?: StorageMetric[];
+    measurements?: {
+      direction: string;
+      sender: { id: string; name: string; role: string };
+      receiver: { id: string; name: string; role: string; address: string };
+      streams: number;
+      duration_seconds: number;
+      metrics: { sent_bits_per_second?: number; received_bits_per_second?: number; retransmits?: number };
+    }[];
+  };
+};
+
+type Agent = {
+  id: string;
+  name: string;
+  role: string;
+  status: string;
+  last_seen_at?: string;
+  endpoint: { address?: string };
+  system: { inventory?: { capabilities?: Record<string, boolean> }; provider?: Provider };
+};
+
+type Session = {
+  id: string;
+  label: string;
+  status: string;
+  created_at: string;
+  expires_at: string;
+  agents: Agent[];
 };
 
 type Scenario = { id: string; label: string; status: "available" | "partial" | "roadmap"; primary: string; coverage: string };
@@ -72,9 +101,10 @@ type Dashboard = {
   version: string;
   system: { inventory: Inventory; provider: Provider };
   runs: Run[];
+  sessions: Session[];
   profiles: {
     storage: Record<string, { label: string; description: string; estimated_minutes: number; profile_version: string; methodology_version: string; jobs: { name: string }[] }>;
-    network: Record<string, { label: string; description: string; requires_agents: number }>;
+    network: Record<string, { label: string; description: string; requires_agents: number; tcp_streams: number[]; duration_seconds: number }>;
     domains: AssessmentDomain[];
     scenarios: Scenario[];
   };
@@ -131,6 +161,8 @@ export default function Home() {
   );
   const [tokenOpen, setTokenOpen] = useState(false);
   const [selectedStorageProfile, setSelectedStorageProfile] = useState("disk-quick");
+  const [selectedNetworkProfile, setSelectedNetworkProfile] = useState("network-peer-quick");
+  const [selectedSessionId, setSelectedSessionId] = useState("");
   const [pairing, setPairing] = useState<{ id: string; join_token: string; expires_at: string } | null>(null);
 
   const loadDashboard = useCallback(async () => {
@@ -159,6 +191,18 @@ export default function Home() {
   const activeStorage = dashboard?.runs.find(
     (run) => run.suite === "storage" && ["queued", "running"].includes(run.status),
   );
+  const activeNetwork = dashboard?.runs.find(
+    (run) => run.suite === "network" && ["queued", "running"].includes(run.status),
+  );
+  const latestNetwork = dashboard?.runs.find(
+    (run) => run.suite === "network" && run.status === "completed" && run.result?.measurements?.length,
+  );
+  const readySessions = dashboard?.sessions.filter((session) => session.status === "ready") || [];
+  const selectedSession = dashboard?.sessions.find((session) => session.id === selectedSessionId)
+    || readySessions[0]
+    || dashboard?.sessions[0];
+  const networkMeasurements = latestNetwork?.result?.measurements || [];
+  const maxNetworkRate = Math.max(1, ...networkMeasurements.map((item) => item.metrics.received_bits_per_second || 0));
   const latestStorage = dashboard?.runs.find(
     (run) => run.suite === "storage" && run.status === "completed" && run.result?.jobs?.length,
   );
@@ -284,9 +328,61 @@ export default function Home() {
       const payload = await response.json();
       if (!response.ok) throw new Error(payload.error || "Unable to create a pairing session");
       setPairing(payload);
+      setSelectedSessionId(payload.id);
       setNotice("A 30-minute pairing session is ready for two cloud agents.");
+      await loadDashboard();
     } catch (error) {
       setNotice(error instanceof Error ? error.message : "Unable to create the pairing session");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function startNetwork() {
+    if (!requireToken()) return;
+    if (!selectedSession || selectedSession.status !== "ready") {
+      setNotice("Join one target and one generator agent before starting a network run.");
+      return;
+    }
+    setBusy(true);
+    setNotice(null);
+    try {
+      const response = await fetch(`${API}/runs`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-CloudMark-Token": token },
+        body: JSON.stringify({
+          suite: "network",
+          profile: selectedNetworkProfile,
+          session_id: selectedSession.id,
+          confirm_network_load: true,
+        }),
+      });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || "Unable to start the network assessment");
+      setNotice(`Created ${payload.id}. TCP traffic will flow only between the paired agents.`);
+      await loadDashboard();
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Network assessment failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function cancelNetwork() {
+    if (!activeNetwork || !requireToken()) return;
+    setBusy(true);
+    try {
+      const response = await fetch(`${API}/runs/${activeNetwork.id}/cancel`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-CloudMark-Token": token },
+        body: "{}",
+      });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || "Unable to cancel the network assessment");
+      setNotice(`Cancellation requested for ${activeNetwork.id}. Agent safety deadlines remain active.`);
+      await loadDashboard();
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Unable to cancel the network assessment");
     } finally {
       setBusy(false);
     }
@@ -326,7 +422,7 @@ export default function Home() {
           <span className="policy-dot" />
           <div><strong>Private by default</strong><small>No automatic result uploads</small></div>
         </div>
-        <div className="version">CORE / {dashboard?.version || "0.2.0"}</div>
+        <div className="version">CORE / {dashboard?.version || "0.3.0"}</div>
       </aside>
 
       <section className="workspace">
@@ -487,28 +583,36 @@ export default function Home() {
                   </div>
                   <div className="timeline-legend"><span><i className="read" />READ</span><span><i className="write" />WRITE</span><strong>Peak {formatBytes(maxTimelineBandwidth)}/s</strong></div>
                 </div>
-              ) : <div className="timeline-empty">Run any 0.2.0 storage profile to capture one-second bandwidth, IOPS, and latency evidence.</div>}
+              ) : <div className="timeline-empty">Run any storage profile to capture one-second bandwidth, IOPS, and latency evidence.</div>}
             </section>
           </div>
         )}
 
         {activeView === "network" && (
           <div className="view network-view">
-            <section className="section-intro"><div><span className="section-kicker">DISTRIBUTED ASSESSMENT</span><h2>Keep the control path separate from benchmark data traffic.</h2><p>The Controller registers systems and stores evidence; performance traffic flows directly between provider agents. The automated network executor is not enabled in the current release.</p></div><button className="button primary" onClick={createPairing} disabled={busy}>Create pairing session</button></section>
+            <section className="section-intro"><div><span className="section-kicker">DISTRIBUTED ASSESSMENT</span><h2>Keep the control path separate from benchmark data traffic.</h2><p>The Controller schedules guarded tasks and stores evidence; iperf3 traffic flows directly between one target and one generator in the provider network.</p></div><div className="runner-actions"><label><span>PROFILE</span><select value={selectedNetworkProfile} onChange={(event) => setSelectedNetworkProfile(event.target.value)} disabled={Boolean(activeNetwork)}>{Object.entries(dashboard?.profiles.network || {}).map(([id, profile]) => <option key={id} value={id}>{profile.label}</option>)}</select></label><button className="button primary" onClick={createPairing} disabled={busy}>New session</button></div></section>
             <section className="topology-panel panel">
               <div className="topology-node controller"><span>LOCAL</span><strong>Controller</strong><small>Dashboard + API</small></div>
               <div className="control-line"><span>HTTPS / VPN control</span></div>
               <div className="cloud-boundary">
                 <span className="boundary-label">PROVIDER NETWORK</span>
                 <div className="topology-node target"><span>VM A</span><strong>Target</strong><small>web · db · storage</small></div>
-                <div className="data-line"><i /><span>A ↔ B direct traffic</span></div>
-                <div className="topology-node generator"><span>VM B</span><strong>Generator</strong><small>TCP · UDP · load</small></div>
+                <div className="data-line"><i /><span>A ↔ B direct TCP traffic</span></div>
+                <div className="topology-node generator"><span>VM B</span><strong>Generator</strong><small>iperf3 · guarded load</small></div>
               </div>
               <div className="blocked-line"><span>×</span><p><strong>Cloud → controller measurement</strong><small>Disabled by project policy</small></p></div>
             </section>
-            {pairing && <section className="pairing-card"><div><span>ASSESSMENT SESSION</span><strong>{pairing.id}</strong><small>Expires {new Date(pairing.expires_at).toLocaleTimeString("en-US")}</small></div><code>{pairing.join_token}</code></section>}
+            {pairing && <section className="pairing-card"><div><span>SHORT-LIVED JOIN CREDENTIAL</span><strong>{pairing.id}</strong><small>Expires {new Date(pairing.expires_at).toLocaleTimeString("en-US")}</small></div><code>{pairing.join_token}</code></section>}
+            {pairing && <section className="panel agent-commands"><div><span className="section-kicker">RUN ON PROVIDER VMS</span><h3>Start one persistent worker on each clean machine</h3></div><code>cloudmark agent --controller https://CONTROLLER --session {pairing.id} --token {pairing.join_token} --role target --advertise-address VM_A_IP</code><code>cloudmark agent --controller https://CONTROLLER --session {pairing.id} --token {pairing.join_token} --role generator --advertise-address VM_B_IP</code><p>Use <strong>--allow-http</strong> only when Controller access is restricted to a trusted private management network.</p></section>}
+            <section className="panel session-panel">
+              <div className="panel-head"><div><span className="section-kicker">AGENT CONTROL PLANE</span><h3>Pairing readiness</h3></div><label className="compact-select"><span>SESSION</span><select value={selectedSession?.id || ""} onChange={(event) => setSelectedSessionId(event.target.value)}>{dashboard?.sessions.map((session) => <option key={session.id} value={session.id}>{session.label} · {session.status}</option>)}</select></label></div>
+              {selectedSession ? <div className="agent-roster">{["target", "generator"].map((role) => { const agent = selectedSession.agents.find((item) => item.role === role); return <article key={role} className={agent ? "connected" : "waiting"}><span>{role.toUpperCase()}</span><strong>{agent?.name || `Waiting for ${role}`}</strong><small>{agent ? `${agent.endpoint.address || "No advertised IP"} · ${agent.system.inventory?.capabilities?.iperf3 ? "iperf3 ready" : "iperf3 missing"}` : "Join command has not connected"}</small></article>; })}</div> : <div className="empty-row">Create a session, then connect both provider agents.</div>}
+              <div className="session-actions"><p><strong>{selectedSession?.status === "ready" ? "Ready to measure" : "Two agents required"}</strong><small>Only allow-listed TCP tasks on ports 5201–5210 can be dispatched.</small></p><button className="button primary" onClick={startNetwork} disabled={busy || Boolean(activeNetwork) || selectedSession?.status !== "ready"}>Run network assessment</button></div>
+            </section>
+            {activeNetwork && <section className="panel run-progress" aria-live="polite"><div><span className="section-kicker">ACTIVE NETWORK RUN / {activeNetwork.id}</span><strong>{activeNetwork.current_job || activeNetwork.phase || "Waiting for agents"}</strong><small>{activeNetwork.completed_steps || 0} of {activeNetwork.total_steps || 1} measurements · {Math.round((activeNetwork.progress || 0) * 100)}%</small></div><div className="progress-track"><i style={{ width: `${Math.max(2, (activeNetwork.progress || 0) * 100)}%` }} /></div><button className="button danger" onClick={cancelNetwork} disabled={busy || activeNetwork.cancel_requested}>{activeNetwork.cancel_requested ? "Cancelling" : "Cancel run"}</button></section>}
+            <section className="panel network-results"><div className="panel-head"><div><span className="section-kicker">LATEST VERIFIED RUN</span><h3>Peer TCP throughput</h3></div><span className="run-id">{latestNetwork?.id || "NO RUN YET"}</span></div>{networkMeasurements.length ? <div className="bar-chart">{networkMeasurements.map((measurement, index) => { const rate = measurement.metrics.received_bits_per_second || 0; return <div className="bar-row" key={`${measurement.direction}-${measurement.streams}-${index}`}><span>{measurement.sender.name} → {measurement.receiver.name} · P{measurement.streams}</span><div><i style={{ width: `${Math.max(3, (rate / maxNetworkRate) * 100)}%` }} /></div><strong>{(rate / 1_000_000).toFixed(1)} Mb/s</strong></div>; })}</div> : <div className="empty-chart"><div className="chart-grid" /><strong>No peer result yet</strong><p>Connect two agents and run the quick profile to establish a directional baseline.</p></div>}</section>
             <section className="network-checks">
-              {[["TCP", "1 / 4 / 8 / 16 streams"], ["UDP", "jitter · loss · rate sweep"], ["LATENCY", "idle · loaded · bufferbloat"], ["DIRECTION", "A→B · B→A · bidirectional"]].map(([name, detail]) => <article key={name}><span>{name}</span><strong>{detail}</strong><small>Network executor scope</small></article>)}
+              {[["TCP", "1 / 4 / 8 / 16 streams", "AVAILABLE"], ["UDP", "jitter · loss · rate sweep", "PLANNED"], ["LATENCY", "idle · loaded · bufferbloat", "PLANNED"], ["DIRECTION", "A→B · B→A", "AVAILABLE"]].map(([name, detail, state]) => <article key={name}><span>{name}</span><strong>{detail}</strong><small>{state}</small></article>)}
             </section>
           </div>
         )}
