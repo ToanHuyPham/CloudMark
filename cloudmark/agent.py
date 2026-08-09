@@ -7,17 +7,25 @@ import os
 import shutil
 import socket
 import subprocess
+import threading
 import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
+from . import __version__
+from .benchmarks import run_storage
+from .compute import run_system_benchmark
 from .inventory import collect_inventory
 from .network import ALLOWED_PORT_MAX, ALLOWED_PORT_MIN, ALLOWED_STREAMS, NetworkError, parse_iperf_json
+from .profiles import COMPUTE_PROFILES, MEMORY_PROFILES, STORAGE_PROFILES
 from .provider import detect_provider
+from .remote import REMOTE_METHODOLOGY_VERSION
+from .runner import CancellationToken, JobContext, RunCancelled, RunTimedOut
 
 
 def _validate_controller(controller: str, allow_http: bool) -> str:
@@ -106,6 +114,13 @@ class ActiveServer:
     deadline: float
 
 
+class AgentBenchmarkFailure(RuntimeError):
+    def __init__(self, message: str, *, status: str, result: dict[str, Any] | None):
+        super().__init__(message)
+        self.status = status
+        self.result = result
+
+
 class AgentWorker:
     def __init__(
         self,
@@ -115,20 +130,23 @@ class AgentWorker:
         *,
         allow_http: bool = False,
         poll_seconds: float = 1.0,
+        workspace: Path = Path(".cloudmark/agent-workspace"),
     ) -> None:
         self.controller = _validate_controller(controller, allow_http)
         self.agent_id = agent_id
         self.agent_token = agent_token
         self.poll_seconds = max(0.25, min(poll_seconds, 10.0))
+        self.workspace = workspace.resolve()
+        self.workspace.mkdir(parents=True, exist_ok=True)
         self.active_servers: dict[str, ActiveServer] = {}
         self.pending_completions: dict[str, dict[str, Any]] = {}
 
-    def _api(self, suffix: str, data: dict[str, Any]) -> dict[str, Any]:
+    def _api(self, suffix: str, data: dict[str, Any], *, timeout: float = 45) -> dict[str, Any]:
         return _request_json(
             f"{self.controller}/api/v1/agents/{self.agent_id}/{suffix}",
             data=data,
             agent_token=self.agent_token,
-            timeout=45,
+            timeout=timeout,
         )
 
     @staticmethod
@@ -232,6 +250,128 @@ class AgentWorker:
             raise NetworkError(stderr.strip() or stdout.strip() or "iperf3 server failed.")
         return {"iperf": parse_iperf_json(stdout)}
 
+    def _benchmark_evidence(self) -> dict[str, Any]:
+        return {
+            "captured_at": datetime.now(timezone.utc).isoformat(),
+            "inventory": collect_inventory(self.workspace),
+            "provider": detect_provider(),
+        }
+
+    def _run_benchmark(self, task: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
+        kind = str(task.get("kind", ""))
+        suite = kind.removeprefix("benchmark-")
+        expected_kind = f"benchmark-{suite}"
+        if kind != expected_kind or suite not in {"compute", "memory", "storage"}:
+            raise ValueError("Agent refused an unsupported benchmark task kind.")
+        if payload.get("protocol_version") != REMOTE_METHODOLOGY_VERSION:
+            raise ValueError("Agent refused an incompatible remote benchmark protocol version.")
+        if payload.get("suite") != suite or payload.get("load_confirmed") is not True:
+            raise ValueError("Agent refused a benchmark task without an exact suite and load confirmation.")
+        profile_name = str(payload.get("profile", ""))
+        profiles = {"compute": COMPUTE_PROFILES, "memory": MEMORY_PROFILES, "storage": STORAGE_PROFILES}[suite]
+        if profile_name not in profiles:
+            raise ValueError(f"Agent refused unknown {suite} profile: {profile_name}")
+        try:
+            timeout_seconds = int(payload.get("timeout_seconds", 0))
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Agent benchmark timeout is invalid.") from exc
+        if not 30 <= timeout_seconds <= 43_200:
+            raise ValueError("Agent benchmark timeout is outside the 30–43200 second safety range.")
+
+        total_steps = len(profiles[profile_name]["jobs"]) + (2 if suite == "storage" else 0)
+        token = CancellationToken()
+        latest: dict[str, Any] = {
+            "progress": 0.0,
+            "phase": "preflight",
+            "current_job": None,
+            "completed_steps": 0,
+            "total_steps": total_steps,
+            "result": None,
+        }
+        latest_lock = threading.Lock()
+        stopped = threading.Event()
+        contact_lock = threading.Lock()
+        last_contact = [time.monotonic()]
+        task_id = str(task["id"])
+        evidence: dict[str, Any] = {}
+
+        def send_progress() -> None:
+            with latest_lock:
+                update = dict(latest)
+            try:
+                response = self._api(f"tasks/{task_id}/progress", update, timeout=5)
+            except (RuntimeError, urllib.error.URLError, TimeoutError, OSError):
+                with contact_lock:
+                    disconnected_for = time.monotonic() - last_contact[0]
+                if disconnected_for > 20:
+                    token.cancel()
+                return
+            with contact_lock:
+                last_contact[0] = time.monotonic()
+            if response.get("cancel_requested") or response.get("task_status") != "running":
+                token.cancel()
+
+        def monitor_control() -> None:
+            while not stopped.wait(1.0):
+                send_progress()
+
+        def report(update: dict[str, Any]) -> None:
+            with latest_lock:
+                latest.clear()
+                latest.update(update)
+            send_progress()
+
+        monitor = threading.Thread(target=monitor_control, daemon=True, name=f"cloudmark-control-{task_id}")
+        monitor.start()
+        context = JobContext(
+            str(task.get("run_id") or task_id),
+            total_steps=total_steps,
+            timeout_seconds=timeout_seconds,
+            token=token,
+            on_progress=report,
+        )
+        try:
+            evidence = self._benchmark_evidence()
+            if suite == "storage":
+                benchmark = run_storage(profile_name, self.workspace, str(task.get("run_id") or task_id), context=context)
+            else:
+                benchmark = run_system_benchmark(
+                    suite,
+                    profile_name,
+                    self.workspace,
+                    str(task.get("run_id") or task_id),
+                    context=context,
+                )
+            return {
+                "benchmark": benchmark,
+                "evidence": evidence,
+                "protocol_version": REMOTE_METHODOLOGY_VERSION,
+                "agent_version": __version__,
+            }
+        except Exception as exc:
+            with latest_lock:
+                partial = latest.get("result")
+            result = (
+                {
+                    "benchmark": partial,
+                    "evidence": evidence,
+                    "protocol_version": REMOTE_METHODOLOGY_VERSION,
+                    "agent_version": __version__,
+                }
+                if isinstance(partial, dict)
+                else None
+            )
+            status = "cancelled" if isinstance(exc, RunCancelled) else "failed"
+            if isinstance(exc, RunTimedOut):
+                status = "failed"
+            raise AgentBenchmarkFailure(str(exc), status=status, result=result) from exc
+        finally:
+            stopped.set()
+            # Progress requests use a five-second transport timeout. Give the
+            # monitor enough time to leave cleanly before posting the terminal
+            # task result, avoiding a late heartbeat after completion.
+            monitor.join(timeout=6)
+
     def _execute(self, task: dict[str, Any]) -> dict[str, Any]:
         kind = str(task.get("kind", ""))
         payload = task.get("payload") or {}
@@ -241,6 +381,8 @@ class AgentWorker:
             return self._run_client(payload)
         if kind == "network-server-collect":
             return self._collect_server(payload)
+        if kind in {"benchmark-compute", "benchmark-memory", "benchmark-storage"}:
+            return self._run_benchmark(task, payload)
         raise NetworkError(f"Agent refused unsupported task kind: {kind}")
 
     def _cleanup_expired(self) -> None:
@@ -268,6 +410,10 @@ class AgentWorker:
         try:
             result = self._execute(task)
             completion = {"status": "completed", "result": result}
+        except AgentBenchmarkFailure as exc:
+            completion = {"status": exc.status, "error": str(exc)}
+            if exc.result is not None:
+                completion["result"] = exc.result
         except (NetworkError, OSError, ValueError) as exc:
             completion = {"status": "failed", "error": str(exc)}
         task_id = str(task["id"])
@@ -279,7 +425,7 @@ class AgentWorker:
     def run_forever(self) -> None:
         fingerprint = hashlib.sha256(self.agent_token.encode()).hexdigest()[:10]
         print(f"CloudMark agent {self.agent_id} connected (credential {fingerprint}).")
-        print("Network data flows only between paired agents; the controller is not a traffic endpoint.")
+        print("The agent accepts only versioned CloudMark benchmark tasks; arbitrary shell commands are refused.")
         try:
             while True:
                 try:
@@ -308,6 +454,7 @@ def join_and_work(
     *,
     advertise_address: str | None = None,
     allow_http: bool = False,
+    workspace: Path = Path(".cloudmark/agent-workspace"),
 ) -> None:
     joined = join_session(
         controller,
@@ -323,4 +470,5 @@ def join_and_work(
         str(joined["agent_id"]),
         str(joined["agent_token"]),
         allow_http=allow_http,
+        workspace=workspace,
     ).run_forever()

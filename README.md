@@ -1,6 +1,6 @@
 # CloudMark
 
-![CloudMark infrastructure assessment platform](public/og-v040.png)
+![CloudMark infrastructure assessment platform](public/og-v050.png)
 
 CloudMark is an evidence-driven infrastructure assessment platform for cloud
 instances, VPS, bare-metal servers, and self-hosted cloud environments. It
@@ -25,6 +25,7 @@ timestamp, and raw result.
 | Available | Quick, Standard, Database, Throughput, and Sustained storage profiles with one-second time series |
 | Available | Local Controller API, SQLite history, and responsive dashboard |
 | Available | Authenticated persistent agents, heartbeat, and durable task queues |
+| Available | Explicit remote Agent dispatch for CPU, memory, and storage with live progress, cancellation, and result attribution |
 | Partial | Guarded direct TCP network executor in both directions between paired agents |
 | Roadmap | UDP, loaded latency, mTLS enrollment, and remaining network validity checks |
 | Roadmap | Remaining CPU, memory/NUMA, GPU, application, platform, operations, and provider executors |
@@ -65,7 +66,8 @@ Provider environment
 
 The Controller coordinates sessions and stores evidence. Provider throughput is
 measured directly between agents; cloud-to-controller performance measurement
-is disabled by policy.
+is disabled by policy. Single-system profiles can run either on the Controller
+host or on an explicitly selected authenticated Agent.
 
 ## Quick start
 
@@ -112,11 +114,12 @@ C/OpenMP kernel with GCC and preserve a 512 MiB available-memory reserve. These
 executors currently target Linux; results from different CPU architectures are
 not treated as directly comparable.
 
-Single-system compute, memory, and storage suites execute on the host running
-the Controller/CLI. When the central Controller stays on an operator workstation,
-run those CLI suites directly on each provider VM; version `0.4.0` uses remote
-agents only for the peer-network data path. Remote dispatch and result ingestion
-for local saturation suites are a following milestone.
+Version `0.5.0` can dispatch single-system compute, memory, and storage suites
+to an explicitly selected Agent. The Agent executes only installed CloudMark
+profiles, sends progress and partial evidence to the Controller, polls operator
+cancellation while a child process is active, and stops load after a bounded
+control-path outage. Omitting an Agent target still executes on the Controller
+host.
 
 Storage runs use a temporary file, preserve a free-space reserve, never target
 a raw device, and remove the test file after completion, failure, timeout, or
@@ -141,19 +144,21 @@ Controller is never an iperf3 endpoint.
 - [API](docs/API.md)
 - [Disk methodology](docs/DISK_METHODOLOGY.md)
 - [Compute and memory methodology](docs/COMPUTE_MEMORY_METHODOLOGY.md)
+- [Remote Agent execution](docs/REMOTE_EXECUTION.md)
 - [Network methodology](docs/NETWORK_METHODOLOGY.md)
 - [Safety model](docs/SAFETY.md)
 - [Product roadmap and machine topology matrix](docs/ROADMAP.md)
 
 ## Release status
 
-Version `0.4.0` adds versioned CPU integer scaling, sustained-load telemetry,
-and native cache-resistant memory-bandwidth executors to the existing inventory,
-storage, and peer-network foundation. Compute and memory remain `Partial` until
-floating-point, crypto, compilation, latency, NUMA, and broader architecture
-coverage are implemented. Network remains partial until UDP, loaded latency,
-generator-validity checks, and mTLS enrollment are implemented. Application and
-control-plane executors remain explicitly unavailable.
+Version `0.5.0` adds authenticated remote dispatch of CPU, memory, and storage
+profiles, per-task heartbeat and cancellation, same-target load exclusion,
+provider/Agent attribution, and strict result-version validation. Compute and
+memory remain `Partial` until floating-point, crypto, compilation, latency,
+NUMA, and broader architecture coverage are implemented. Network remains
+partial until UDP, loaded latency, generator-validity checks, and mTLS
+enrollment are implemented. Application and control-plane executors remain
+explicitly unavailable.
 
 ## License
 

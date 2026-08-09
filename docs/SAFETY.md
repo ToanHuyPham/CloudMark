@@ -6,7 +6,7 @@ systems.
 
 ## Storage
 
-- Filesystem test-file mode is the only enabled storage mode in `0.4.0`.
+- Filesystem test-file mode is the only enabled storage mode in `0.5.0`.
 - The selected directory is resolved before execution.
 - Free space must cover the test file plus the larger of 1 GiB or 5% volume
   reserve.
@@ -51,6 +51,22 @@ systems.
 - Public DDoS, spoofing, reflection, and amplification are outside project
   scope. Future resilience tests require authenticated, operator-owned targets
   with enforced rate and duration caps.
+
+## Remote execution
+
+- Remote tasks are authenticated per Agent and restricted to compute, memory,
+  storage, and the guarded network kinds; arbitrary shell commands are refused.
+- The Agent validates suite, installed profile, protocol version, explicit load
+  confirmation, and timeout before executing.
+- The Agent workspace is configured locally and cannot be supplied by a remote
+  task.
+- One saturation task is allowed per Agent, and peer-network work cannot overlap
+  with saturation work in the same session.
+- Task heartbeat and cancellation continue while the benchmark child process is
+  active. A 20-second control outage stops Agent load; a 45-second heartbeat gap
+  closes the task at the Controller.
+- Completed remote evidence must match the dispatched profile and methodology
+  versions. Failed or cancelled evidence remains partial.
 
 ## Bootstrap
 

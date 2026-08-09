@@ -106,7 +106,7 @@ Required topology: Controller + Agent A + Agent B.
 There is no cloud-to-controller profile. Public-Internet results must not be
 combined with private or VPC network results.
 
-## M3 — Compute, memory, and GPU (partial in 0.4.0)
+## M3 — Compute, memory, and GPU (partial in 0.4.0; remote dispatch in 0.5.0)
 
 - CPU single/multi-thread integer scaling through sysbench — available;
 - sustained CPU runs with event-rate stability and steal-time telemetry — available;
@@ -114,7 +114,7 @@ combined with private or VPC network results.
 - floating-point, compression, crypto, and compilation workloads — planned;
 - memory latency, NUMA topology, and remote-node penalties — planned;
 - repeated-run and same-SKU variance analysis — planned;
-- authenticated remote dispatch and result ingestion for single-system suites — planned;
+- authenticated remote dispatch, progress, cancellation, and result attribution for single-system suites — available;
 - GPU inventory, H2D/D2H bandwidth, compute, VRAM, and thermal/power stability;
 - real media encode/decode through FFmpeg;
 - CUDA, ROCm, and oneAPI framework probes when available;

@@ -46,6 +46,11 @@ Floating-point, crypto, compilation, true memory latency, and NUMA penalty
 measurements remain missing; both domains therefore remain `Partial` and cannot
 independently unlock a suitability label.
 
+Version `0.5.0` can execute those single-system subsets and filesystem-safe
+storage profiles on an explicitly selected authenticated Agent. Remote execution
+improves topology accuracy and attribution; it does not change incomplete domain
+coverage into a complete suitability score.
+
 ## Mapping evidence to intended use
 
 Each workload combines multiple domains rather than relying on one benchmark:
@@ -68,6 +73,8 @@ Each workload combines multiple domains rather than relying on one benchmark:
 ## Topology rules
 
 - A single-system test concludes only about the measured system or instance.
+- Remote single-system results must identify the Agent, target inventory,
+  provider evidence, profile, methodology, protocol, and tool versions.
 - Client/server tests separate the target and generator to prevent resource self-contention.
 - The Controller coordinates tests but never joins the provider benchmark data path.
 - HA/DR tests require independent nodes. Nested VMs on one physical host prove

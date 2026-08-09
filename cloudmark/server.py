@@ -21,6 +21,7 @@ from .inventory import collect_inventory
 from .network import NetworkError, run_network, validate_network_run
 from .profiles import COMPUTE_PROFILES, MEMORY_PROFILES, NETWORK_PROFILES, STORAGE_PROFILES, all_profiles
 from .provider import detect_provider
+from .remote import RemoteError, remote_default_timeout, remote_total_steps, run_remote_benchmark, validate_remote_agent
 from .runner import RUNNER_VERSION, CancellationToken, JobContext, RunCancelled, RunTimedOut
 
 
@@ -80,44 +81,84 @@ class CloudMarkController:
         request = dict(request)
         suite = str(request.get("suite", ""))
         profile = str(request.get("profile", ""))
+        agent_id = str(request.get("agent_id", "")).strip()
         if suite not in {"inventory", "compute", "memory", "storage", "network"}:
             raise ValueError("Supported suites are inventory, compute, memory, storage, and network.")
+        if agent_id and suite not in {"compute", "memory", "storage"}:
+            raise ValueError("agent_id is supported only for compute, memory, and storage runs.")
+        remote_agent: dict[str, Any] | None = None
         if suite in {"compute", "memory", "storage"}:
+            if agent_id:
+                remote_agent = validate_remote_agent(self.database, agent_id, suite, profile)
             active_local = next(
                 (
                     run
                     for run in self.database.list_runs(200)
-                    if run["suite"] in {"compute", "memory", "storage"} and run["status"] in {"queued", "running"}
+                    if run["suite"] in {"compute", "memory", "storage"}
+                    and run["status"] in {"queued", "running"}
+                    and str(run.get("request", {}).get("agent_id", "")).strip() == agent_id
                 ),
                 None,
             )
             if active_local:
                 raise ValueError(
-                    f"Local benchmark {active_local['id']} is already {active_local['status']}. "
-                    "Wait for it to finish or cancel it before starting another local load."
+                    f"Benchmark {active_local['id']} is already {active_local['status']} on the selected target. "
+                    "Wait for it to finish or cancel it before starting another saturation load there."
                 )
+            if remote_agent:
+                conflicting_network = next(
+                    (
+                        run
+                        for run in self.database.list_runs(200)
+                        if run["suite"] == "network"
+                        and run["status"] in {"queued", "running"}
+                        and str(run.get("request", {}).get("session_id", "")) == str(remote_agent["session_id"])
+                    ),
+                    None,
+                )
+                if conflicting_network:
+                    raise ValueError("The selected Agent session already has an active network assessment.")
+            request["execution"] = "remote-agent" if remote_agent else "controller-host"
         if suite == "storage":
             if not request.get("confirm_write"):
                 raise ValueError("Storage test requires confirm_write=true because it writes a temporary test file.")
-            preflight = storage_preflight(profile, self.benchmark_dir)
-            total_steps = len(STORAGE_PROFILES[profile]["jobs"]) + 2
+            preflight = None if remote_agent else storage_preflight(profile, self.benchmark_dir)
+            total_steps = remote_total_steps(suite, profile) if remote_agent else len(STORAGE_PROFILES[profile]["jobs"]) + 2
             methodology_version = str(STORAGE_PROFILES[profile]["methodology_version"])
-            tool_version = str(preflight["fio_version"])
-            default_timeout = int(preflight["default_timeout_seconds"])
+            tool_version = "fio-agent" if remote_agent else str(preflight["fio_version"])
+            default_timeout = remote_default_timeout(suite, profile) if remote_agent else int(preflight["default_timeout_seconds"])
         elif suite in {"compute", "memory"}:
             if not request.get("confirm_load"):
                 raise ValueError(f"{suite.title()} test requires confirm_load=true because it intentionally saturates local resources.")
-            preflight = system_preflight(suite, profile, self.benchmark_dir)
+            preflight = None if remote_agent else system_preflight(suite, profile, self.benchmark_dir)
             profiles = COMPUTE_PROFILES if suite == "compute" else MEMORY_PROFILES
-            total_steps = len(profiles[profile]["jobs"])
+            total_steps = remote_total_steps(suite, profile) if remote_agent else len(profiles[profile]["jobs"])
             methodology_version = str(profiles[profile]["methodology_version"])
-            tool_version = str(preflight["tool_version"])
-            default_timeout = int(preflight["default_timeout_seconds"])
+            tool_version = f"{'sysbench' if suite == 'compute' else 'cloudmark-memory-bench'}-agent" if remote_agent else str(preflight["tool_version"])
+            default_timeout = remote_default_timeout(suite, profile) if remote_agent else int(preflight["default_timeout_seconds"])
         elif suite == "network":
             if not request.get("confirm_network_load"):
                 raise ValueError("Network test requires confirm_network_load=true because it generates sustained peer traffic.")
             session_id = str(request.get("session_id", ""))
-            validate_network_run(self.database, session_id, profile)
+            _, target, generator = validate_network_run(self.database, session_id, profile)
+            for network_agent in (target, generator):
+                if self.database.has_active_agent_task(str(network_agent["id"])):
+                    raise ValueError(f"Agent {network_agent['name']} already has an active task.")
+            conflicting_remote = next(
+                (
+                    run
+                    for run in self.database.list_runs(200)
+                    if run["suite"] in {"compute", "memory", "storage"}
+                    and run["status"] in {"queued", "running"}
+                    and (
+                        (agent := self.database.get_agent(str(run.get("request", {}).get("agent_id", ""))))
+                        and str(agent["session_id"]) == session_id
+                    )
+                ),
+                None,
+            )
+            if conflicting_remote:
+                raise ValueError("A selected Agent in this session already has an active single-system assessment.")
             profile_config = NETWORK_PROFILES[profile]
             total_steps = len(profile_config["tcp_streams"]) * 2
             methodology_version = str(profile_config["methodology_version"])
@@ -185,15 +226,43 @@ class CloudMarkController:
                 result = self.system(refresh=True)
                 context.complete_step("completed", None, partial_result=result)
             elif request["suite"] == "storage":
-                result = run_storage(str(request["profile"]), self.benchmark_dir, run_id, context=context)
+                if request.get("execution") == "remote-agent":
+                    agent = self.database.get_agent(str(request["agent_id"]))
+                    if not agent:
+                        raise RemoteError("Selected Agent disappeared before execution.")
+                    result = run_remote_benchmark(
+                        self.database,
+                        run_id,
+                        agent,
+                        "storage",
+                        str(request["profile"]),
+                        int(request["timeout_seconds"]),
+                        context=context,
+                    )
+                else:
+                    result = run_storage(str(request["profile"]), self.benchmark_dir, run_id, context=context)
             elif request["suite"] in {"compute", "memory"}:
-                result = run_system_benchmark(
-                    str(request["suite"]),
-                    str(request["profile"]),
-                    self.benchmark_dir,
-                    run_id,
-                    context=context,
-                )
+                if request.get("execution") == "remote-agent":
+                    agent = self.database.get_agent(str(request["agent_id"]))
+                    if not agent:
+                        raise RemoteError("Selected Agent disappeared before execution.")
+                    result = run_remote_benchmark(
+                        self.database,
+                        run_id,
+                        agent,
+                        str(request["suite"]),
+                        str(request["profile"]),
+                        int(request["timeout_seconds"]),
+                        context=context,
+                    )
+                else:
+                    result = run_system_benchmark(
+                        str(request["suite"]),
+                        str(request["profile"]),
+                        self.benchmark_dir,
+                        run_id,
+                        context=context,
+                    )
             else:
                 result = run_network(
                     self.database,
@@ -228,6 +297,14 @@ class CloudMarkController:
                 phase="timed-out",
             )
         except NetworkError as exc:
+            self.database.update_run(
+                run_id,
+                status="failed",
+                result=exc.partial_result,
+                error=str(exc),
+                phase="failed",
+            )
+        except RemoteError as exc:
             self.database.update_run(
                 run_id,
                 status="failed",
@@ -345,9 +422,53 @@ class CloudMarkController:
             raise LookupError("Running task not found for this agent.")
         return self.database.get_agent_task(task_id) or {"id": task_id, "status": status}
 
+    def progress_agent_task(self, agent_id: str, task_id: str, request: dict[str, Any]) -> dict[str, Any]:
+        task = self.database.get_agent_task(task_id)
+        if not task or str(task.get("agent_id")) != agent_id:
+            raise LookupError("Agent task not found.")
+        self.database.heartbeat_agent(agent_id)
+        if task["status"] != "running":
+            return {"accepted": False, "task_status": task["status"], "cancel_requested": True}
+        result = request.get("result")
+        if result is not None and not isinstance(result, dict):
+            raise ValueError("Agent task partial result must be a JSON object.")
+        try:
+            progress = float(request.get("progress", 0))
+            completed_steps = int(request.get("completed_steps", 0))
+            total_steps = int(request.get("total_steps", 1))
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Agent task progress fields are invalid.") from exc
+        phase = str(request.get("phase"))[:80] if request.get("phase") is not None else None
+        current_job = str(request.get("current_job"))[:160] if request.get("current_job") is not None else None
+        updated = self.database.update_agent_task_progress(
+            task_id,
+            agent_id,
+            progress=progress,
+            phase=phase,
+            current_job=current_job,
+            completed_steps=completed_steps,
+            total_steps=total_steps,
+            result=result,
+        )
+        if not updated:
+            return {"accepted": False, "task_status": "stopped", "cancel_requested": True}
+        run = self.database.get_run(str(updated["run_id"]))
+        cancel_requested = not run or bool(run.get("cancel_requested")) or run.get("status") not in {"queued", "running"}
+        if run and run.get("status") in {"queued", "running"}:
+            self.database.update_run_progress(
+                str(updated["run_id"]),
+                progress=progress,
+                phase=phase,
+                current_job=current_job,
+                completed_steps=completed_steps,
+                total_steps=total_steps,
+                result=result,
+            )
+        return {"accepted": True, "task_status": "running", "cancel_requested": cancel_requested}
+
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "CloudMark/0.4"
+    server_version = "CloudMark/0.5"
 
     @property
     def controller(self) -> CloudMarkController:
@@ -384,7 +505,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def _body(self) -> dict[str, Any]:
         length = int(self.headers.get("Content-Length", "0"))
-        if length > 1024 * 1024:
+        if length > 16 * 1024 * 1024:
             raise ValueError("Request body is too large.")
         if not length:
             return {}
@@ -455,6 +576,9 @@ class Handler(BaseHTTPRequestHandler):
                     self._send(200, self.controller.heartbeat_agent(agent_id, body))
                 elif path.endswith("/tasks/next"):
                     self._send(200, self.controller.next_agent_task(agent_id))
+                elif "/tasks/" in path and path.endswith("/progress"):
+                    task_id = parts[-2]
+                    self._send(200, self.controller.progress_agent_task(agent_id, task_id, body))
                 elif "/tasks/" in path and path.endswith("/result"):
                     task_id = parts[-2]
                     self._send(200, self.controller.finish_agent_task(agent_id, task_id, body))

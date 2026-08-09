@@ -148,6 +148,105 @@ class CloudMarkTests(unittest.TestCase):
             self.assertEqual(database.cancel_queued_run_tasks("run_network"), 1)
             self.assertIsNone(database.claim_agent_task("agent_a"))
 
+    def test_agent_task_progress_is_persisted(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            database = Database(Path(directory) / "test.sqlite3")
+            database.create_session("session_test", "remote", "hash", "2099-01-01T00:00:00+00:00")
+            database.add_agent("agent_a", "session_test", "a", "target", {}, "agent-hash")
+            database.create_run("run_remote", "compute", "compute-quick", {"suite": "compute"}, total_steps=3)
+            database.create_agent_task(
+                "task_remote",
+                "run_remote",
+                "session_test",
+                "agent_a",
+                "benchmark-compute",
+                {"profile": "compute-quick"},
+            )
+            self.assertIsNotNone(database.claim_agent_task("agent_a"))
+            updated = database.update_agent_task_progress(
+                "task_remote",
+                "agent_a",
+                progress=1 / 3,
+                phase="benchmarking",
+                current_job="integer-all-cores",
+                completed_steps=1,
+                total_steps=3,
+                result={"compute_jobs": [{"name": "integer-single"}]},
+            )
+            self.assertIsNotNone(updated)
+            task = database.get_agent_task("task_remote")
+            self.assertAlmostEqual(task["progress"], 1 / 3)
+            self.assertEqual(task["current_job"], "integer-all-cores")
+            self.assertEqual(task["result"]["compute_jobs"][0]["name"], "integer-single")
+
+    def test_remote_agent_progress_receives_controller_cancellation(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            controller = CloudMarkController(Path(directory))
+            controller.database.create_session("session_test", "remote", "hash", "2099-01-01T00:00:00+00:00")
+            controller.database.add_agent("agent_a", "session_test", "a", "target", {}, "agent-hash")
+            controller.database.create_run("run_remote", "compute", "compute-quick", {"suite": "compute"}, total_steps=3)
+            controller.database.update_run("run_remote", status="running", phase="starting")
+            controller.database.create_agent_task(
+                "task_remote", "run_remote", "session_test", "agent_a", "benchmark-compute", {}
+            )
+            controller.database.claim_agent_task("agent_a")
+            controller.database.request_cancel("run_remote")
+            response = controller.progress_agent_task(
+                "agent_a",
+                "task_remote",
+                {
+                    "progress": 0.2,
+                    "phase": "benchmarking",
+                    "current_job": "integer-single",
+                    "completed_steps": 0,
+                    "total_steps": 3,
+                },
+            )
+            self.assertTrue(response["cancel_requested"])
+
+    def test_agent_executes_only_versioned_remote_benchmark_payloads(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            worker = AgentWorker(
+                "http://127.0.0.1:8787",
+                "agent_a",
+                "token",
+                workspace=Path(directory),
+            )
+            progress: list[dict[str, object]] = []
+
+            def controller_reply(suffix: str, data: dict[str, object], **_: object) -> dict[str, object]:
+                progress.append({"suffix": suffix, **data})
+                return {"task_status": "running", "cancel_requested": False}
+
+            def fake_compute(*_: object, context: JobContext, **__: object) -> dict[str, object]:
+                context.report("benchmarking", "integer-single", partial_result={"compute_jobs": []})
+                return {"suite": "compute", "tool": {"name": "sysbench", "version": "sysbench 1.0.20"}}
+
+            task = {
+                "id": "task_remote",
+                "run_id": "run_remote",
+                "kind": "benchmark-compute",
+                "payload": {
+                    "suite": "compute",
+                    "profile": "compute-quick",
+                    "timeout_seconds": 300,
+                    "load_confirmed": True,
+                    "protocol_version": "remote-agent-v1",
+                },
+            }
+            with patch.object(worker, "_api", side_effect=controller_reply), patch.object(
+                worker,
+                "_benchmark_evidence",
+                return_value={"inventory": {"hostname": "remote-a"}, "provider": {"provider": "Test"}},
+            ), patch("cloudmark.agent.run_system_benchmark", side_effect=fake_compute):
+                result = worker._execute(task)
+            self.assertEqual(result["benchmark"]["suite"], "compute")
+            self.assertEqual(result["evidence"]["inventory"]["hostname"], "remote-a")
+            self.assertTrue(any(str(item["suffix"]).endswith("/progress") for item in progress))
+            task["payload"] = {**task["payload"], "load_confirmed": False}
+            with self.assertRaisesRegex(ValueError, "load confirmation"):
+                worker._execute(task)
+
     def test_network_run_requires_roles_capability_and_peer_addresses(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             database = Database(Path(directory) / "test.sqlite3")
@@ -447,7 +546,85 @@ max: 1.50
                     {"suite": "compute", "profile": "compute-quick", "confirm_load": True}
                 )
 
-    def test_http_api_exposes_v040_dashboard_and_cancel_endpoint(self) -> None:
+    def test_controller_dispatches_and_attributes_remote_compute_run(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            controller = CloudMarkController(Path(directory))
+            controller.database.create_session("session_remote", "provider", "hash", "2099-01-01T00:00:00+00:00")
+            system = {
+                "inventory": {
+                    "hostname": "provider-vm-a",
+                    "os": {"system": "Linux"},
+                    "capabilities": {"sysbench": True, "gcc": True, "fio": True},
+                },
+                "provider": {"provider": "Regional Cloud", "source": "declared-manifest"},
+            }
+            controller.database.add_agent(
+                "agent_remote",
+                "session_remote",
+                "provider-vm-a",
+                "target",
+                system,
+                "agent-hash",
+            )
+            submitted = controller.submit_run(
+                {
+                    "suite": "compute",
+                    "profile": "compute-quick",
+                    "agent_id": "agent_remote",
+                    "confirm_load": True,
+                }
+            )
+            task = None
+            deadline = time.time() + 3
+            while time.time() < deadline and task is None:
+                task = controller.database.claim_agent_task("agent_remote")
+                if task is None:
+                    time.sleep(0.01)
+            self.assertIsNotNone(task)
+            controller.progress_agent_task(
+                "agent_remote",
+                task["id"],
+                {
+                    "progress": 1 / 3,
+                    "phase": "benchmarking",
+                    "current_job": "integer-all-cores",
+                    "completed_steps": 1,
+                    "total_steps": 3,
+                    "result": {"suite": "compute", "compute_jobs": [{"name": "integer-single"}]},
+                },
+            )
+            controller.finish_agent_task(
+                "agent_remote",
+                task["id"],
+                {
+                    "status": "completed",
+                    "result": {
+                        "benchmark": {
+                            "suite": "compute",
+                            "profile": "compute-quick",
+                            "profile_version": "1.0",
+                            "methodology_version": "compute-v1",
+                            "tool": {"name": "sysbench", "version": "sysbench 1.0.20"},
+                            "compute_jobs": [{"name": "integer-single"}],
+                        },
+                        "evidence": system,
+                        "protocol_version": "remote-agent-v1",
+                        "agent_version": "0.5.0",
+                    },
+                },
+            )
+            deadline = time.time() + 3
+            run = controller.database.get_run(submitted["id"])
+            while time.time() < deadline and run["status"] not in {"completed", "failed", "cancelled"}:
+                time.sleep(0.01)
+                run = controller.database.get_run(submitted["id"])
+            self.assertEqual(run["status"], "completed")
+            self.assertEqual(run["request"]["execution"], "remote-agent")
+            self.assertEqual(run["result"]["execution"]["agent"]["id"], "agent_remote")
+            self.assertEqual(run["result"]["target_evidence"]["inventory"]["hostname"], "provider-vm-a")
+            self.assertEqual(run["tool_version"], "sysbench 1.0.20")
+
+    def test_http_api_exposes_v050_dashboard_and_cancel_endpoint(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             controller = CloudMarkController(Path(directory))
             controller._inventory = {"hostname": "api-test"}
@@ -460,7 +637,7 @@ max: 1.50
             try:
                 with urllib.request.urlopen(f"{base}/dashboard", timeout=5) as response:
                     dashboard = json.load(response)
-                self.assertEqual(dashboard["version"], "0.4.0")
+                self.assertEqual(dashboard["version"], "0.5.0")
                 self.assertIn("compute-quick", dashboard["profiles"]["compute"])
                 self.assertIn("memory-quick", dashboard["profiles"]["memory"])
                 self.assertIn("disk-sustained", dashboard["profiles"]["storage"])
@@ -529,6 +706,24 @@ max: 1.50
                 with urllib.request.urlopen(accepted, timeout=5) as response:
                     payload = json.load(response)
                 self.assertEqual(payload["task"]["id"], "task_agent_api")
+                progress_request = urllib.request.Request(
+                    f"http://127.0.0.1:{server.server_port}/api/v1/agents/{joined['agent_id']}/tasks/task_agent_api/progress",
+                    data=json.dumps(
+                        {
+                            "progress": 0.5,
+                            "phase": "measuring-network",
+                            "current_job": "peer-tcp",
+                            "completed_steps": 1,
+                            "total_steps": 2,
+                        }
+                    ).encode(),
+                    method="POST",
+                    headers={"Content-Type": "application/json", "X-CloudMark-Agent-Token": joined["agent_token"]},
+                )
+                with urllib.request.urlopen(progress_request, timeout=5) as response:
+                    progress_payload = json.load(response)
+                self.assertTrue(progress_payload["accepted"])
+                self.assertFalse(progress_payload["cancel_requested"])
             finally:
                 server.shutdown()
                 server.server_close()

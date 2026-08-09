@@ -26,7 +26,8 @@ X-CloudMark-Token: <token printed by cloudmark serve>
 | POST | `/sessions/{id}/join` | Join with the short-lived session token |
 | POST | `/agents/{id}/heartbeat` | Refresh authenticated agent presence |
 | POST | `/agents/{id}/tasks/next` | Atomically claim the next allow-listed task |
-| POST | `/agents/{id}/tasks/{taskId}/result` | Complete or fail a claimed task |
+| POST | `/agents/{id}/tasks/{taskId}/progress` | Publish progress and poll cancellation |
+| POST | `/agents/{id}/tasks/{taskId}/result` | Complete, fail, or cancel a claimed task |
 
 ## Create an inventory run
 
@@ -63,6 +64,18 @@ is mandatory because the executor intentionally saturates selected CPU cores.
 The result contains `compute_jobs`, per-second sysbench samples, latency,
 stability, host telemetry, and all-core scaling evidence.
 
+Add an authenticated Agent target to run the same profile on a provider VM:
+
+```json
+{
+  "suite": "compute",
+  "profile": "compute-quick",
+  "agent_id": "agent_123",
+  "confirm_load": true,
+  "timeout_seconds": 600
+}
+```
+
 ## Create a memory run
 
 ```json
@@ -79,10 +92,10 @@ compiles the packaged C/OpenMP tool with GCC after enforcing its fixed allocatio
 and 512 MiB memory reserve. The result contains `memory_jobs`, bandwidth,
 processed bytes, checksums, tool/compiler identity, and host telemetry.
 
-Compute, memory, and storage are mutually exclusive local saturation suites.
-The API returns `400` if another one is queued or running.
-They execute on the Controller host in version `0.4.0`; this endpoint does not
-silently redirect a local suite to a registered remote Agent.
+Compute, memory, and storage are mutually exclusive per execution target. The
+API returns `400` if another one is queued or running on the same host. Omit
+`agent_id` to execute on the Controller host; supply one explicit online Agent
+ID for remote execution. CloudMark never silently chooses or redirects a target.
 
 ## Create a storage run
 
@@ -116,7 +129,7 @@ Supported storage profiles are `disk-quick`, `disk-standard`, `disk-database`,
 The session must contain an online `target` and `generator`. Both must advertise
 a peer-reachable IP and report `iperf3`. `confirm_network_load` is mandatory.
 Supported profiles are `network-peer-quick` and `network-peer-standard`.
-Version 0.4 executes TCP A→B and B→A only; it does not execute UDP or send data
+Version 0.5 executes TCP A→B and B→A only; it does not execute UDP or send data
 to the Controller.
 
 ## Cancel a run
@@ -139,13 +152,19 @@ results, and changes the run state to `cancelled`.
 2. Copy the returned session ID and short-lived join token to each agent.
 3. Each persistent agent calls `/sessions/{id}/join`. The response includes a
    unique `agent_id` and an agent credential that is never returned again.
-4. The agent uses `X-CloudMark-Agent-Token` for heartbeat, polling, and result
-   submission. The Controller stores only its SHA-256 hash.
+4. The agent uses `X-CloudMark-Agent-Token` for heartbeat, polling, progress,
+   cancellation checks, and result submission. The Controller stores only its
+   SHA-256 hash.
 5. Read `/sessions/{id}` to verify the target and generator are online.
 
 Agent endpoints are internal protocol endpoints for `cloudmark agent`. They do
 not accept the Controller token. A task is scoped to one agent and can contain
 only an executor kind implemented by the agent allow-list.
+
+For remote single-system tasks, `/progress` updates the parent run and returns
+`cancel_requested`. Completed result envelopes must match the dispatched suite,
+profile, profile version, methodology version, and `remote-agent-v1` protocol.
+The API request-body limit is 16 MiB for bounded raw time-series evidence.
 
 The complete machine-readable contract is in
 [`openapi/cloudmark-v1.yaml`](../openapi/cloudmark-v1.yaml).

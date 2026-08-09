@@ -76,7 +76,8 @@ page size behavior, memory-error correction, or swap pressure.
 6. Preserve every raw result; summarize median, P10/P90, worst observation, and
    sample count only after repeated measurements exist.
 7. Do not run CPU, memory, or storage profiles concurrently unless the explicit
-   objective is contention testing. Version `0.4.0` enforces this locally.
+   objective is contention testing. Version `0.5.0` enforces this separately on
+   the Controller host and on every selected Agent.
 
 ## Safety and platform support
 

@@ -1,11 +1,11 @@
 # CloudMark user guide
 
-This guide applies to version `0.4.0`. The current release provides system
+This guide applies to version `0.5.0`. The current release provides system
 inventory, AWS/Azure/Google Cloud metadata detection, tool bootstrap planning,
 versioned CPU and memory-bandwidth assessment, filesystem-safe storage
 assessment through `fio`, SQLite history, multi-system topology registration,
-authenticated persistent agents, guarded two-direction TCP testing, and a local
-dashboard. The dashboard distinguishes
+authenticated persistent agents, remote CPU/memory/storage dispatch, guarded
+two-direction TCP testing, and a local dashboard. The dashboard distinguishes
 `Available`, `Partial`, and `Roadmap`; unavailable executors are never scored or
 presented as ready.
 
@@ -38,10 +38,10 @@ Optional:       VM C (replica/failover)
 The Controller never receives cloud benchmark traffic. Network benchmark data
 flows directly between VM A and VM B.
 
-In version `0.4.0`, dashboard-triggered CPU, memory, and storage suites execute
-on the Controller host. If the Controller stays on the operator system, run
-those CLI commands directly on each provider VM. Central Agent dispatch for
-single-system suites is not yet claimed as available.
+In version `0.5.0`, dashboard-triggered CPU, memory, and storage suites execute
+on the explicitly selected target: either the Controller host or one
+authenticated Agent. The selection, Agent identity, target inventory, provider
+evidence, and Agent version are retained with the result.
 
 ## 2. Requirements
 
@@ -139,7 +139,8 @@ In the dashboard:
 - **Assessment Catalog** lists all 17 technical domains and their `Available`,
   `Partial`, or `Roadmap` state.
 - **Compute & Memory** runs CPU integer scaling/sustained profiles and native
-  cache-resistant memory-bandwidth profiles with live progress and cancellation.
+  cache-resistant memory-bandwidth profiles with an explicit local/Agent target,
+  live progress, and cancellation.
 - **Storage Assessment** provides Quick, Standard, Database, Throughput, and
   Sustained profiles with live progress and cancellation.
 - **Distributed Testing** creates an authenticated multi-agent topology and
@@ -265,9 +266,10 @@ python -m cloudmark run memory --profile memory-quick --yes
 ```
 
 The same controls are available under **Compute & Memory** in the dashboard.
-Only one local saturation suite (compute, memory, or storage) can be queued or
-running at a time. Cancellation stops the active child process and preserves
-completed jobs as partial evidence.
+Select **Controller host** for local execution or an online Agent for provider
+execution. Only one saturation suite (compute, memory, or storage) can be queued
+or running on the same target at a time. Cancellation stops the active child
+process and preserves completed jobs as partial evidence.
 
 The CPU profile records single-core and all-core event rate, scaling efficiency,
 P95 latency, one-second stability, and Linux host telemetry. The memory profile
@@ -282,7 +284,7 @@ and background-load policy. See
 validity contract and current limitations.
 
 The native memory executor currently targets Linux with GCC/OpenMP. Windows is
-supported for the Controller and inventory, but version `0.4.0` does not claim
+supported for the Controller and inventory, but version `0.5.0` does not claim
 complete Windows CPU/memory qualification.
 
 ## 9. Run the storage assessment
@@ -400,6 +402,20 @@ has an independent watchdog deadline. UDP, loaded latency, and simultaneous
 bidirectional mode are still excluded, so overall network coverage remains
 `Partial`.
 
+### Dispatch a single-system profile to an Agent
+
+After an Agent is online, open **Compute & Memory** or **Storage Assessment**
+and choose it under **Execution target**. The capability indicators use that
+Agent's inventory rather than the Controller inventory. The Agent workspace is
+configured locally with `cloudmark agent --workspace`; the Controller cannot
+choose an arbitrary remote path.
+
+The Agent reports progress every second and polls cancellation while a child
+process runs. It cancels load after more than 20 seconds without Controller
+contact. The Controller fails a task after a 45-second task-heartbeat gap. See
+[`REMOTE_EXECUTION.md`](REMOTE_EXECUTION.md) for the complete protocol and
+safety contract.
+
 ## 11. Workload suitability
 
 The 12 use cases use three coverage states:
@@ -453,7 +469,7 @@ The complete directory is excluded by `.gitignore`.
 2. Use anti-affinity when possible so the VMs do not share a physical host.
 3. Bootstrap the same CloudMark and tool versions.
 4. Collect inventory on both systems.
-5. Run compute, memory, and storage profiles on each VM separately.
+5. Select each Agent and run compute, memory, and storage profiles separately.
 6. Run saturation profiles concurrently only when intentionally measuring contention.
 7. Pair A and B for network, web, and database client/server tests.
 8. Create fresh instances and repeat in different time windows.
@@ -494,8 +510,17 @@ The Controller binds to loopback by default, so remote VMs cannot reach it.
 For remote agents, use a VPN or an operator-controlled HTTPS reverse proxy to
 the Controller. Confirm that each VM can reach the other VM's advertised IP on
 TCP 5201–5210. Never use `--allow-http` over the public Internet. mTLS and relay
-enrollment are roadmap security layers; version 0.4 uses per-agent bearer
+enrollment are roadmap security layers; version 0.5 uses per-agent bearer
 credentials and requires HTTPS for remote control connections by default.
+
+### A remote benchmark stops or never starts
+
+- verify the selected Agent remains `online` and the same worker process is running;
+- install the required pack on that Agent and restart it to refresh inventory;
+- confirm Controller HTTPS/VPN reachability in both directions during the run;
+- do not run a peer-network assessment and a saturation profile in the same
+  Agent session at the same time;
+- inspect the run error and retained partial result in **History**.
 
 ### A network run remains queued or times out
 

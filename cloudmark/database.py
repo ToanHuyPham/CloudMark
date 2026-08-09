@@ -88,6 +88,12 @@ class Database:
                 created_at TEXT NOT NULL,
                 claimed_at TEXT,
                 finished_at TEXT,
+                progress REAL NOT NULL DEFAULT 0,
+                phase TEXT,
+                current_job TEXT,
+                completed_steps INTEGER NOT NULL DEFAULT 0,
+                total_steps INTEGER NOT NULL DEFAULT 0,
+                heartbeat_at TEXT,
                 FOREIGN KEY(run_id) REFERENCES runs(id) ON DELETE CASCADE,
                 FOREIGN KEY(session_id) REFERENCES sessions(id) ON DELETE CASCADE,
                 FOREIGN KEY(agent_id) REFERENCES agents(id) ON DELETE CASCADE
@@ -126,6 +132,18 @@ class Database:
             for column, definition in agent_migrations.items():
                 if column not in agent_columns:
                     connection.execute(f"ALTER TABLE agents ADD COLUMN {column} {definition}")
+            task_columns = {row[1] for row in connection.execute("PRAGMA table_info(agent_tasks)").fetchall()}
+            task_migrations = {
+                "progress": "REAL NOT NULL DEFAULT 0",
+                "phase": "TEXT",
+                "current_job": "TEXT",
+                "completed_steps": "INTEGER NOT NULL DEFAULT 0",
+                "total_steps": "INTEGER NOT NULL DEFAULT 0",
+                "heartbeat_at": "TEXT",
+            }
+            for column, definition in task_migrations.items():
+                if column not in task_columns:
+                    connection.execute(f"ALTER TABLE agent_tasks ADD COLUMN {column} {definition}")
             connection.execute("PRAGMA optimize")
 
     def create_run(
@@ -530,13 +548,13 @@ class Database:
         result: dict[str, Any] | None = None,
         error: str | None = None,
     ) -> bool:
-        if status not in {"completed", "failed"}:
-            raise ValueError("Agent task status must be completed or failed.")
+        if status not in {"completed", "failed", "cancelled"}:
+            raise ValueError("Agent task status must be completed, failed, or cancelled.")
         with self._lock, self._connection() as connection:
             cursor = connection.execute(
                 """
                 UPDATE agent_tasks
-                SET status = ?, result_json = ?, error = ?, finished_at = ?
+                SET status = ?, result_json = COALESCE(?, result_json), error = ?, finished_at = ?
                 WHERE id = ? AND agent_id = ? AND status = 'running'
                 """,
                 (
@@ -555,6 +573,68 @@ class Database:
                 (task_id, agent_id),
             ).fetchone()
         return bool(existing and existing[0] in {"completed", "failed", "cancelled"})
+
+    def update_agent_task_progress(
+        self,
+        task_id: str,
+        agent_id: str,
+        *,
+        progress: float,
+        phase: str | None,
+        current_job: str | None,
+        completed_steps: int,
+        total_steps: int,
+        result: dict[str, Any] | None,
+    ) -> dict[str, Any] | None:
+        now = utc_now()
+        with self._lock, self._connection() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE agent_tasks
+                SET progress = ?, phase = ?, current_job = ?, completed_steps = ?,
+                    total_steps = ?, heartbeat_at = ?, result_json = COALESCE(?, result_json)
+                WHERE id = ? AND agent_id = ? AND status = 'running'
+                """,
+                (
+                    min(1.0, max(0.0, progress)),
+                    phase,
+                    current_job,
+                    max(0, completed_steps),
+                    max(1, total_steps),
+                    now,
+                    json.dumps(result, ensure_ascii=False) if result is not None else None,
+                    task_id,
+                    agent_id,
+                ),
+            )
+            if cursor.rowcount != 1:
+                return None
+            row = connection.execute("SELECT * FROM agent_tasks WHERE id = ?", (task_id,)).fetchone()
+        return self._task_row(row) if row else None
+
+    def abort_agent_task(self, task_id: str, error: str) -> bool:
+        with self._lock, self._connection() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE agent_tasks
+                SET status = 'cancelled', error = ?, finished_at = ?, heartbeat_at = ?
+                WHERE id = ? AND status IN ('queued', 'running')
+                """,
+                (error, utc_now(), utc_now(), task_id),
+            )
+        return cursor.rowcount == 1
+
+    def has_active_agent_task(self, agent_id: str) -> bool:
+        with self._connection() as connection:
+            row = connection.execute(
+                """
+                SELECT 1 FROM agent_tasks
+                WHERE agent_id = ? AND status IN ('queued', 'running')
+                LIMIT 1
+                """,
+                (agent_id,),
+            ).fetchone()
+        return row is not None
 
     def get_agent_task(self, task_id: str) -> dict[str, Any] | None:
         with self._connection() as connection:

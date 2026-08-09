@@ -63,6 +63,7 @@ def parser() -> argparse.ArgumentParser:
     agent.add_argument("--role", choices=["target", "generator"], required=True)
     agent.add_argument("--name")
     agent.add_argument("--advertise-address", help="Peer-reachable IP address used by the other provider agent")
+    agent.add_argument("--workspace", type=Path, default=Path(".cloudmark/agent-workspace"), help="Filesystem workspace for safe Agent benchmark files")
     agent.add_argument("--allow-http", action="store_true", help="Allow HTTP only on a trusted private network")
 
     return root
@@ -136,6 +137,7 @@ def main() -> None:
             args.name,
             advertise_address=args.advertise_address,
             allow_http=args.allow_http,
+            workspace=args.workspace,
         )
 
 

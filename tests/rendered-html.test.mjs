@@ -37,7 +37,7 @@ test("keeps production metadata and project policy explicit", async () => {
   assert.doesNotMatch(page, /_sites-preview|SkeletonPreview/);
   assert.doesNotMatch(packageJson, /react-loading-skeleton/);
   assert.match(layout, /CloudMark — Infrastructure Assessment Platform/);
-  assert.match(layout, /og-v040\.png/);
+  assert.match(layout, /og-v050\.png/);
   assert.match(page, /cloud_to_controller_network_test/);
   assert.match(page, /FULL-STACK INFRASTRUCTURE COVERAGE/);
   assert.match(page, /domainCounts\.total \|\| 17/);
@@ -46,11 +46,12 @@ test("keeps production metadata and project policy explicit", async () => {
   assert.match(page, /ONE-SECOND TELEMETRY/);
   assert.match(page, /LOCAL SATURATION EXECUTORS/);
   assert.match(page, /EXCLUSIVE LOAD POLICY/);
-  assert.equal(JSON.parse(packageJson).version, "0.4.0");
+  assert.match(page, /EXECUTION TARGET/);
+  assert.equal(JSON.parse(packageJson).version, "0.5.0");
   assert.doesNotMatch(`${page}\n${layout}\n${readme}`, /\bqualification lab\b|\b0\.1\.0-alpha\b|\bMVP\b/i);
   assert.match(readme, /cloud-to-controller performance measurement\s+is disabled by policy/i);
-  assert.match(readme, /Version `0\.4\.0`/);
-  await access(new URL("../public/og-v040.png", import.meta.url));
+  assert.match(readme, /Version `0\.5\.0`/);
+  await access(new URL("../public/og-v050.png", import.meta.url));
   await assert.rejects(access(new URL("../app/_sites-preview/SkeletonPreview.tsx", import.meta.url)));
 });
 
@@ -61,6 +62,7 @@ test("keeps public product copy English-only", async () => {
     "../cloudmark/profiles.py",
     "../docs/ASSESSMENT_CATALOG.md",
     "../docs/COMPUTE_MEMORY_METHODOLOGY.md",
+    "../docs/REMOTE_EXECUTION.md",
     "../docs/ROADMAP.md",
     "../docs/USER_GUIDE.md",
   ].map((path) => readFile(new URL(path, import.meta.url), "utf8")));

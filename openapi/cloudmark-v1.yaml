@@ -1,8 +1,8 @@
 openapi: 3.1.0
 info:
   title: CloudMark Controller API
-  version: 0.4.0
-  description: Local-first API for machine evidence, benchmark jobs, authenticated agents, and multi-node sessions.
+  version: 0.5.0
+  description: Local-first API for machine evidence, local and remote benchmark jobs, authenticated agents, and multi-node sessions.
 servers:
   - url: http://127.0.0.1:8787/api/v1
 components:
@@ -27,6 +27,9 @@ components:
       properties:
         suite: { type: string, enum: [inventory, compute, memory, storage, network] }
         profile: { type: string }
+        agent_id:
+          type: string
+          description: Optional authenticated Agent target for compute, memory, or storage. Omit to execute on the Controller host.
         confirm_load:
           type: boolean
           default: false
@@ -245,10 +248,42 @@ paths:
               type: object
               required: [status]
               properties:
-                status: { type: string, enum: [completed, failed] }
+                status: { type: string, enum: [completed, failed, cancelled] }
                 result: { type: object, additionalProperties: true }
                 error: { type: string }
       responses:
         "200": { description: Terminal task }
         "401": { description: Missing or invalid agent credential }
         "404": { description: Running task not found for this agent }
+  /agents/{agentId}/tasks/{taskId}/progress:
+    post:
+      summary: Publish progress and poll cancellation for a running Agent task
+      security: [{ agentToken: [] }]
+      parameters:
+        - in: path
+          name: agentId
+          required: true
+          schema: { type: string }
+        - in: path
+          name: taskId
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [progress, completed_steps, total_steps]
+              properties:
+                progress: { type: number, minimum: 0, maximum: 1 }
+                phase: { type: [string, "null"] }
+                current_job: { type: [string, "null"] }
+                completed_steps: { type: integer, minimum: 0 }
+                total_steps: { type: integer, minimum: 1 }
+                result: { type: [object, "null"], additionalProperties: true }
+      responses:
+        "200":
+          description: Progress acceptance and current cancellation decision
+        "401": { description: Missing or invalid agent credential }
+        "404": { description: Task not found for this agent }

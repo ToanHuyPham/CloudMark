@@ -8,8 +8,9 @@ model never destroys or rewrites the original benchmark result.
 1. **Controller API** runs on the operator machine, binds to loopback by
    default, stores runs in SQLite, and issues short-lived pairing sessions.
 2. **Agent CLI** runs on clean Linux or Windows machines, collects inventory,
-   installs approved tools, heartbeats, polls its authenticated queue, and
-   executes versioned allow-listed tasks.
+   heartbeats, polls its authenticated queue, and executes versioned allow-listed
+   network or single-system benchmark tasks. Tool bootstrap remains an explicit
+   operator action.
 3. **Dashboard** is a local React/vinext application. Read endpoints are public
    on loopback; writes require the controller token.
 4. **Benchmark runners** invoke allow-listed binaries with exact argument lists.
@@ -71,10 +72,26 @@ Its compiler identity is part of the evidence. No profile accepts an arbitrary
 binary, shell fragment, kernel name, thread count, or duration from an API
 caller.
 
-These saturation executors run on the Controller/CLI host in version `0.4.0`.
-Persistent remote agents currently execute only guarded peer-network tasks;
-remote dispatch and ingestion of single-system executor results are a separate
-milestone so local results cannot be accidentally attributed to a remote VM.
+These saturation executors can run on the Controller/CLI host or an explicitly
+selected Agent in version `0.5.0`. The request persists its execution mode and
+Agent ID. Remote results add the Agent version, identity, session, target
+inventory, and provider evidence. The Controller rejects suite/profile,
+profile-version, methodology-version, or protocol-version mismatches before a
+remote result becomes completed evidence.
+
+## Remote task control
+
+Each remote saturation run creates one durable Agent task. The Agent sends
+progress and partial evidence every second while also polling cancellation.
+Controller contact loss beyond 20 seconds makes the Agent cancel its child
+process; a task heartbeat gap beyond 45 seconds makes the Controller fail and
+close the remote task. Controller restart cancels all unfinished task records,
+which causes a surviving Agent to stop on its next control poll.
+
+Only one saturation task can target an Agent at a time. Network assessment and
+single-system saturation are mutually exclusive within the same Agent session.
+Different Agents may be assessed independently without introducing a global
+Controller lock.
 
 ## Network direction policy
 
@@ -112,7 +129,7 @@ by session.
   hash is persisted, and it can claim or finish tasks assigned to that agent.
 - Remote joins require HTTPS unless the operator explicitly enables HTTP inside
   a trusted private network.
-- Version 0.4 does not yet provide mTLS enrollment. HTTPS/VPN termination and
+- Version 0.5 does not yet provide mTLS enrollment. HTTPS/VPN termination and
   access control remain operator responsibilities for remote deployments.
 - Provider metadata probes use fixed link-local endpoints, ignore proxies, have
   short timeouts, and never retrieve user-data or credentials.

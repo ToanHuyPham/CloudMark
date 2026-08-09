@@ -88,6 +88,7 @@ type Run = {
   runner_version?: string;
   methodology_version?: string;
   tool_version?: string;
+  request?: { agent_id?: string; execution?: "controller-host" | "remote-agent" };
   result?: {
     jobs?: StorageMetric[];
     compute_jobs?: ComputeMetric[];
@@ -97,6 +98,12 @@ type Run = {
       all_core_events_per_second: number;
       all_core_threads: number;
       efficiency_percent?: number;
+    };
+    execution?: {
+      mode: "remote-agent";
+      protocol_version: string;
+      agent_version: string;
+      agent: { id: string; name: string; role: string; session_id: string };
     };
     measurements?: {
       direction: string;
@@ -116,7 +123,7 @@ type Agent = {
   status: string;
   last_seen_at?: string;
   endpoint: { address?: string };
-  system: { inventory?: { capabilities?: Record<string, boolean> }; provider?: Provider };
+  system: { inventory?: Inventory; provider?: Provider };
 };
 
 type Session = {
@@ -200,6 +207,7 @@ export default function Home() {
   const [selectedMemoryProfile, setSelectedMemoryProfile] = useState("memory-quick");
   const [selectedStorageProfile, setSelectedStorageProfile] = useState("disk-quick");
   const [selectedNetworkProfile, setSelectedNetworkProfile] = useState("network-peer-quick");
+  const [selectedExecutionTarget, setSelectedExecutionTarget] = useState("local");
   const [selectedSessionId, setSelectedSessionId] = useState("");
   const [pairing, setPairing] = useState<{ id: string; join_token: string; expires_at: string } | null>(null);
 
@@ -225,22 +233,32 @@ export default function Home() {
 
   const inventory = dashboard?.system.inventory;
   const provider = dashboard?.system.provider;
-  const memoryReady = inventory?.os.system === "Linux" && Boolean(inventory.capabilities.gcc);
+  const allAgents = dashboard?.sessions.flatMap((session) => session.agents) || [];
+  const selectedExecutionAgent = allAgents.find((agent) => agent.id === selectedExecutionTarget);
+  const executionInventory = selectedExecutionAgent?.system.inventory || (selectedExecutionTarget === "local" ? inventory : undefined);
+  const executionTargetLabel = selectedExecutionAgent?.name || "Controller host";
+  const executionTargetOnline = selectedExecutionTarget === "local" || selectedExecutionAgent?.status === "online";
+  const memoryReady = executionInventory?.os?.system === "Linux" && Boolean(executionInventory.capabilities?.gcc);
   const primaryDisk = inventory?.disks?.[0];
   const activeStorage = dashboard?.runs.find(
-    (run) => run.suite === "storage" && ["queued", "running"].includes(run.status),
+    (run) => run.suite === "storage" && ["queued", "running"].includes(run.status)
+      && (run.request?.agent_id || "local") === selectedExecutionTarget,
   );
   const activeSystem = dashboard?.runs.find(
-    (run) => ["compute", "memory"].includes(run.suite) && ["queued", "running"].includes(run.status),
+    (run) => ["compute", "memory"].includes(run.suite) && ["queued", "running"].includes(run.status)
+      && (run.request?.agent_id || "local") === selectedExecutionTarget,
   );
   const activeLocal = dashboard?.runs.find(
-    (run) => ["compute", "memory", "storage"].includes(run.suite) && ["queued", "running"].includes(run.status),
+    (run) => ["compute", "memory", "storage"].includes(run.suite) && ["queued", "running"].includes(run.status)
+      && (run.request?.agent_id || "local") === selectedExecutionTarget,
   );
   const latestCompute = dashboard?.runs.find(
-    (run) => run.suite === "compute" && run.status === "completed" && run.result?.compute_jobs?.length,
+    (run) => run.suite === "compute" && run.status === "completed" && run.result?.compute_jobs?.length
+      && (run.request?.agent_id || "local") === selectedExecutionTarget,
   );
   const latestMemory = dashboard?.runs.find(
-    (run) => run.suite === "memory" && run.status === "completed" && run.result?.memory_jobs?.length,
+    (run) => run.suite === "memory" && run.status === "completed" && run.result?.memory_jobs?.length
+      && (run.request?.agent_id || "local") === selectedExecutionTarget,
   );
   const computeJobs = latestCompute?.result?.compute_jobs || [];
   const memoryJobs = latestMemory?.result?.memory_jobs || [];
@@ -259,7 +277,8 @@ export default function Home() {
   const networkMeasurements = latestNetwork?.result?.measurements || [];
   const maxNetworkRate = Math.max(1, ...networkMeasurements.map((item) => item.metrics.received_bits_per_second || 0));
   const latestStorage = dashboard?.runs.find(
-    (run) => run.suite === "storage" && run.status === "completed" && run.result?.jobs?.length,
+    (run) => run.suite === "storage" && run.status === "completed" && run.result?.jobs?.length
+      && (run.request?.agent_id || "local") === selectedExecutionTarget,
   );
   const selectedProfile = dashboard?.profiles.storage[selectedStorageProfile];
   const storageJobs = useMemo(() => latestStorage?.result?.jobs || [], [latestStorage]);
@@ -303,6 +322,12 @@ export default function Home() {
     };
   }, [dashboard?.profiles.domains]);
 
+  function runTargetName(run: Run) {
+    const remoteId = run.request?.agent_id;
+    if (!remoteId) return "Controller host";
+    return allAgents.find((agent) => agent.id === remoteId)?.name || remoteId;
+  }
+
   async function refreshSystem() {
     setBusy(true);
     setNotice(null);
@@ -328,8 +353,12 @@ export default function Home() {
 
   async function startStorage() {
     if (!requireToken()) return;
-    if (!inventory?.capabilities.fio) {
-      setNotice("fio is not installed. Run CloudMark bootstrap --packs storage first.");
+    if (!executionTargetOnline) {
+      setNotice("The selected Agent is offline. Start its persistent worker before dispatching a benchmark.");
+      return;
+    }
+    if (!executionInventory?.capabilities?.fio) {
+      setNotice(`fio is not installed on ${executionTargetLabel}. Run CloudMark bootstrap --packs storage there first.`);
       return;
     }
     setBusy(true);
@@ -338,11 +367,16 @@ export default function Home() {
       const response = await fetch(`${API}/runs`, {
         method: "POST",
         headers: { "Content-Type": "application/json", "X-CloudMark-Token": token },
-        body: JSON.stringify({ suite: "storage", profile: selectedStorageProfile, confirm_write: true }),
+        body: JSON.stringify({
+          suite: "storage",
+          profile: selectedStorageProfile,
+          confirm_write: true,
+          ...(selectedExecutionAgent ? { agent_id: selectedExecutionAgent.id } : {}),
+        }),
       });
       const payload = await response.json();
       if (!response.ok) throw new Error(payload.error || "Unable to start the benchmark");
-      setNotice(`Created ${payload.id} with the ${selectedProfile?.label || selectedStorageProfile} profile. The temporary file will be removed after the run.`);
+      setNotice(`Created ${payload.id} on ${executionTargetLabel} with the ${selectedProfile?.label || selectedStorageProfile} profile. The temporary file will be removed after the run.`);
       await loadDashboard();
     } catch (error) {
       setNotice(error instanceof Error ? error.message : "Benchmark failed");
@@ -395,13 +429,17 @@ export default function Home() {
 
   async function startSystemBenchmark(suite: "compute" | "memory") {
     if (!requireToken()) return;
-    if (suite === "memory" && inventory?.os.system !== "Linux") {
-      setNotice("The native memory executor currently requires Linux with GCC and OpenMP.");
+    if (!executionTargetOnline) {
+      setNotice("The selected Agent is offline. Start its persistent worker before dispatching a benchmark.");
+      return;
+    }
+    if (suite === "memory" && executionInventory?.os?.system !== "Linux") {
+      setNotice(`The native memory executor currently requires Linux with GCC and OpenMP; ${executionTargetLabel} is not eligible.`);
       return;
     }
     const capability = suite === "compute" ? "sysbench" : "gcc";
-    if (!inventory?.capabilities[capability]) {
-      setNotice(`${capability} is not installed. Run CloudMark bootstrap --packs ${suite} first.`);
+    if (!executionInventory?.capabilities?.[capability]) {
+      setNotice(`${capability} is not installed on ${executionTargetLabel}. Run CloudMark bootstrap --packs ${suite} there first.`);
       return;
     }
     const profile = suite === "compute" ? selectedComputeProfile : selectedMemoryProfile;
@@ -411,11 +449,16 @@ export default function Home() {
       const response = await fetch(`${API}/runs`, {
         method: "POST",
         headers: { "Content-Type": "application/json", "X-CloudMark-Token": token },
-        body: JSON.stringify({ suite, profile, confirm_load: true }),
+        body: JSON.stringify({
+          suite,
+          profile,
+          confirm_load: true,
+          ...(selectedExecutionAgent ? { agent_id: selectedExecutionAgent.id } : {}),
+        }),
       });
       const payload = await response.json();
       if (!response.ok) throw new Error(payload.error || `Unable to start the ${suite} assessment`);
-      setNotice(`Created ${payload.id}. Avoid other workloads until the intentional saturation run completes.`);
+      setNotice(`Created ${payload.id} on ${executionTargetLabel}. Avoid other workloads until the intentional saturation run completes.`);
       await loadDashboard();
     } catch (error) {
       setNotice(error instanceof Error ? error.message : `${suite} assessment failed`);
@@ -511,6 +554,29 @@ export default function Home() {
     ["history", "History", "07"],
   ];
 
+  const executionTargetPanel = (
+    <section className="panel execution-target-panel">
+      <div>
+        <span className="section-kicker">EXECUTION TARGET</span>
+        <h3>{executionTargetLabel}</h3>
+        <p>{selectedExecutionAgent ? `${selectedExecutionAgent.system.provider?.provider || "Unverified provider"} · ${selectedExecutionAgent.system.inventory?.os?.distribution || selectedExecutionAgent.system.inventory?.os?.system || "Unknown OS"}` : "Benchmarks execute on the same host as the local Controller."}</p>
+      </div>
+      <label>
+        <span>HOST</span>
+        <select value={selectedExecutionTarget} onChange={(event) => setSelectedExecutionTarget(event.target.value)}>
+          <option value="local">Controller host · local</option>
+          {allAgents.map((agent) => <option key={agent.id} value={agent.id}>{agent.name} · {agent.role} · {agent.status}</option>)}
+        </select>
+      </label>
+      <div className="target-capabilities">
+        <span className={executionTargetOnline ? "ready" : "missing"}>{executionTargetOnline ? "ONLINE" : "OFFLINE"}</span>
+        <span className={executionInventory?.capabilities?.sysbench ? "ready" : "missing"}>CPU</span>
+        <span className={memoryReady ? "ready" : "missing"}>MEMORY</span>
+        <span className={executionInventory?.capabilities?.fio ? "ready" : "missing"}>STORAGE</span>
+      </div>
+    </section>
+  );
+
   return (
     <main className="app-shell">
       <aside className="sidebar">
@@ -529,7 +595,7 @@ export default function Home() {
           <span className="policy-dot" />
           <div><strong>Private by default</strong><small>No automatic result uploads</small></div>
         </div>
-        <div className="version">CORE / {dashboard?.version || "0.4.0"}</div>
+        <div className="version">CORE / {dashboard?.version || "0.5.0"}</div>
       </aside>
 
       <section className="workspace">
@@ -646,18 +712,19 @@ export default function Home() {
           <div className="view compute-view">
             <section className="section-intro">
               <div><span className="section-kicker">LOCAL SATURATION EXECUTORS</span><h2>Separate single-core speed, scaling, sustained compute, and memory bandwidth.</h2><p>CPU profiles use a versioned sysbench workload with warm-up and one-second stability evidence. Memory profiles compile CloudMark&apos;s cache-resistant OpenMP kernels and retain the compiler version, working set, host utilization, and steal time.</p></div>
-              <div className="load-policy"><span>EXCLUSIVE LOAD POLICY</span><strong>{activeLocal ? `${activeLocal.suite} run active` : "Local runner available"}</strong><small>Compute, memory, and storage never run concurrently.</small></div>
+              <div className="load-policy"><span>EXCLUSIVE LOAD POLICY</span><strong>{activeLocal ? `${activeLocal.suite} run active` : "Selected target available"}</strong><small>Compute, memory, and storage never overlap on the same target.</small></div>
             </section>
+            {executionTargetPanel}
             <section className="system-runner-grid">
               <article className="panel system-runner-card compute-card">
-                <div className="panel-head"><div><span className="section-kicker">CPU / INTEGER SCALING</span><h3>Compute assessment</h3></div><span className={inventory?.capabilities.sysbench ? "tool-ready" : "tool-missing"}>{inventory?.capabilities.sysbench ? "SYSBENCH READY" : "INSTALL SYSBENCH"}</span></div>
+                <div className="panel-head"><div><span className="section-kicker">CPU / INTEGER SCALING</span><h3>Compute assessment</h3></div><span className={executionInventory?.capabilities?.sysbench ? "tool-ready" : "tool-missing"}>{executionInventory?.capabilities?.sysbench ? "SYSBENCH READY" : "INSTALL SYSBENCH"}</span></div>
                 <p>{dashboard?.profiles.compute[selectedComputeProfile]?.description}</p>
                 <label><span>PROFILE</span><select value={selectedComputeProfile} onChange={(event) => setSelectedComputeProfile(event.target.value)} disabled={Boolean(activeLocal)}>{Object.entries(dashboard?.profiles.compute || {}).map(([id, profile]) => <option key={id} value={id}>{profile.label} · ≈ {profile.estimated_minutes} min</option>)}</select></label>
                 <div className="runner-matrix">{dashboard?.profiles.compute[selectedComputeProfile]?.jobs.map((job) => <span key={job.name}>{job.name}</span>)}</div>
                 <button className="button primary" onClick={() => startSystemBenchmark("compute")} disabled={busy || Boolean(activeLocal)}>Run compute profile</button>
               </article>
               <article className="panel system-runner-card memory-card">
-                <div className="panel-head"><div><span className="section-kicker">RAM / BANDWIDTH</span><h3>Memory assessment</h3></div><span className={memoryReady ? "tool-ready" : "tool-missing"}>{memoryReady ? "LINUX + GCC READY" : inventory?.os.system === "Linux" ? "INSTALL GCC" : "LINUX REQUIRED"}</span></div>
+                <div className="panel-head"><div><span className="section-kicker">RAM / BANDWIDTH</span><h3>Memory assessment</h3></div><span className={memoryReady ? "tool-ready" : "tool-missing"}>{memoryReady ? "LINUX + GCC READY" : executionInventory?.os?.system === "Linux" ? "INSTALL GCC" : "LINUX REQUIRED"}</span></div>
                 <p>{dashboard?.profiles.memory[selectedMemoryProfile]?.description}</p>
                 <label><span>PROFILE</span><select value={selectedMemoryProfile} onChange={(event) => setSelectedMemoryProfile(event.target.value)} disabled={Boolean(activeLocal)}>{Object.entries(dashboard?.profiles.memory || {}).map(([id, profile]) => <option key={id} value={id}>{profile.label} · ≈ {profile.estimated_minutes} min</option>)}</select></label>
                 <div className="runner-matrix">{dashboard?.profiles.memory[selectedMemoryProfile]?.jobs.map((job) => <span key={job.name}>{job.name}</span>)}</div>
@@ -689,6 +756,7 @@ export default function Home() {
                 <button className="button primary" onClick={startStorage} disabled={busy || Boolean(activeLocal)}>Run assessment</button>
               </div>
             </section>
+            {executionTargetPanel}
             {activeStorage && (
               <section className="panel run-progress" aria-live="polite">
                 <div><span className="section-kicker">ACTIVE RUN / {activeStorage.id}</span><strong>{activeStorage.current_job || activeStorage.phase || "Starting"}</strong><small>{activeStorage.completed_steps || 0} of {activeStorage.total_steps || 1} steps · {Math.round((activeStorage.progress || 0) * 100)}%</small></div>
@@ -783,7 +851,7 @@ export default function Home() {
             <section className="panel history-table">
               <div className="table-head"><span>RUN</span><span>SUITE / PROFILE</span><span>STATUS</span><span>STARTED</span></div>
               {dashboard?.runs.length ? dashboard.runs.map((run) => (
-                <div className="table-row" key={run.id}><code>{run.id}</code><span>{run.suite} / {run.profile}</span><span className={`run-status ${run.status}`}>{statusLabel(run.status)}{run.status === "running" ? ` · ${Math.round((run.progress || 0) * 100)}%` : ""}</span><span>{run.started_at ? new Date(run.started_at).toLocaleString("en-US") : "—"}</span></div>
+                <div className="table-row" key={run.id}><code>{run.id}</code><span>{run.suite} / {run.profile}<small>{runTargetName(run)}</small></span><span className={`run-status ${run.status}`}>{statusLabel(run.status)}{run.status === "running" ? ` · ${Math.round((run.progress || 0) * 100)}%` : ""}</span><span>{run.started_at ? new Date(run.started_at).toLocaleString("en-US") : "—"}</span></div>
               )) : <div className="empty-row">No benchmark runs yet. Current inventory is still read directly from the API.</div>}
             </section>
           </div>
