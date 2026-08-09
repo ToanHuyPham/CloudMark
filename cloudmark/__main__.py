@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from pathlib import Path
 
 from . import __version__
@@ -9,7 +10,9 @@ from .agent import join_session
 from .benchmarks import run_storage, storage_preflight
 from .bootstrap import create_plan, execute_plan
 from .inventory import collect_inventory
+from .profiles import STORAGE_PROFILES
 from .provider import detect_provider
+from .runner import JobContext
 from .server import serve
 
 
@@ -40,6 +43,7 @@ def parser() -> argparse.ArgumentParser:
     run.add_argument("suite", choices=["storage"])
     run.add_argument("--profile", default="disk-quick")
     run.add_argument("--workspace", type=Path, default=Path(".cloudmark/benchmark-workspace"))
+    run.add_argument("--timeout-seconds", type=int, help="Stop the run after this many seconds")
     run.add_argument("--yes", action="store_true", help="Confirm writing a temporary benchmark file")
 
     join = sub.add_parser("join", help="Join a distributed assessment session")
@@ -70,7 +74,22 @@ def main() -> None:
         _print({"preflight": preflight})
         if not args.yes:
             raise SystemExit("Add --yes to confirm safe temporary-file writes.")
-        _print(run_storage(args.profile, args.workspace, "cli"))
+        timeout_seconds = args.timeout_seconds or preflight["default_timeout_seconds"]
+        if not 30 <= timeout_seconds <= 43_200:
+            raise SystemExit("--timeout-seconds must be between 30 and 43200.")
+
+        def show_progress(update: dict[str, object]) -> None:
+            percent = round(float(update["progress"]) * 100)
+            current = update.get("current_job") or update["phase"]
+            print(f"[cloudmark] {percent:3d}% {current}", file=sys.stderr, flush=True)
+
+        context = JobContext(
+            "cli",
+            total_steps=len(STORAGE_PROFILES[args.profile]["jobs"]) + 2,
+            timeout_seconds=timeout_seconds,
+            on_progress=show_progress,
+        )
+        _print(run_storage(args.profile, args.workspace, "cli", context=context))
     elif args.command == "join":
         _print(
             join_session(

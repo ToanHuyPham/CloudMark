@@ -37,6 +37,12 @@ type StorageMetric = {
   name: string;
   read: { iops: number; bandwidth_bytes_per_second: number; p50_ms?: number; p90_ms?: number; p99_ms?: number };
   write: { iops: number; bandwidth_bytes_per_second: number; p50_ms?: number; p90_ms?: number; p99_ms?: number };
+  time_series?: {
+    interval_ms: number;
+    bandwidth: { elapsed_ms: number; value: number; direction: string }[];
+    iops: { elapsed_ms: number; value: number; direction: string }[];
+    latency: { elapsed_ms: number; value: number; direction: string }[];
+  };
 };
 
 type Run = {
@@ -47,6 +53,15 @@ type Run = {
   started_at?: string;
   finished_at?: string;
   error?: string;
+  progress?: number;
+  phase?: string;
+  current_job?: string;
+  completed_steps?: number;
+  total_steps?: number;
+  cancel_requested?: boolean;
+  runner_version?: string;
+  methodology_version?: string;
+  tool_version?: string;
   result?: { jobs?: StorageMetric[] };
 };
 
@@ -58,7 +73,7 @@ type Dashboard = {
   system: { inventory: Inventory; provider: Provider };
   runs: Run[];
   profiles: {
-    storage: Record<string, { label: string; description: string; estimated_minutes: number; jobs: { name: string }[] }>;
+    storage: Record<string, { label: string; description: string; estimated_minutes: number; profile_version: string; methodology_version: string; jobs: { name: string }[] }>;
     network: Record<string, { label: string; description: string; requires_agents: number }>;
     domains: AssessmentDomain[];
     scenarios: Scenario[];
@@ -93,6 +108,7 @@ function statusLabel(status: string) {
     running: "Running",
     completed: "Completed",
     failed: "Failed",
+    cancelled: "Cancelled",
   }[status] || status;
 }
 
@@ -114,6 +130,7 @@ export default function Home() {
     typeof window === "undefined" ? "" : sessionStorage.getItem("cloudmark-controller-token") || "",
   );
   const [tokenOpen, setTokenOpen] = useState(false);
+  const [selectedStorageProfile, setSelectedStorageProfile] = useState("disk-quick");
   const [pairing, setPairing] = useState<{ id: string; join_token: string; expires_at: string } | null>(null);
 
   const loadDashboard = useCallback(async () => {
@@ -139,13 +156,27 @@ export default function Home() {
   const inventory = dashboard?.system.inventory;
   const provider = dashboard?.system.provider;
   const primaryDisk = inventory?.disks?.[0];
+  const activeStorage = dashboard?.runs.find(
+    (run) => run.suite === "storage" && ["queued", "running"].includes(run.status),
+  );
   const latestStorage = dashboard?.runs.find(
     (run) => run.suite === "storage" && run.status === "completed" && run.result?.jobs?.length,
   );
+  const selectedProfile = dashboard?.profiles.storage[selectedStorageProfile];
   const storageJobs = useMemo(() => latestStorage?.result?.jobs || [], [latestStorage]);
   const maxStorage = useMemo(
     () => Math.max(1, ...storageJobs.map((job) => Math.max(job.read.iops || 0, job.write.iops || 0))),
     [storageJobs],
+  );
+  const bandwidthTimeline = useMemo(() => {
+    const job = storageJobs[storageJobs.length - 1];
+    const points = job?.time_series?.bandwidth || [];
+    const stride = Math.max(1, Math.ceil(points.length / 90));
+    return points.filter((_, index) => index % stride === 0);
+  }, [storageJobs]);
+  const maxTimelineBandwidth = useMemo(
+    () => Math.max(1, ...bandwidthTimeline.map((point) => point.value)),
+    [bandwidthTimeline],
   );
   const evidenceReadiness = useMemo(() => {
     if (!inventory) return 0;
@@ -196,7 +227,7 @@ export default function Home() {
     return true;
   }
 
-  async function startDiskQuick() {
+  async function startStorage() {
     if (!requireToken()) return;
     if (!inventory?.capabilities.fio) {
       setNotice("fio is not installed. Run CloudMark bootstrap --packs storage first.");
@@ -208,14 +239,34 @@ export default function Home() {
       const response = await fetch(`${API}/runs`, {
         method: "POST",
         headers: { "Content-Type": "application/json", "X-CloudMark-Token": token },
-        body: JSON.stringify({ suite: "storage", profile: "disk-quick", confirm_write: true }),
+        body: JSON.stringify({ suite: "storage", profile: selectedStorageProfile, confirm_write: true }),
       });
       const payload = await response.json();
       if (!response.ok) throw new Error(payload.error || "Unable to start the benchmark");
-      setNotice(`Created ${payload.id}. The temporary file will be removed after the run.`);
+      setNotice(`Created ${payload.id} with the ${selectedProfile?.label || selectedStorageProfile} profile. The temporary file will be removed after the run.`);
       await loadDashboard();
     } catch (error) {
       setNotice(error instanceof Error ? error.message : "Benchmark failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function cancelStorage() {
+    if (!activeStorage || !requireToken()) return;
+    setBusy(true);
+    try {
+      const response = await fetch(`${API}/runs/${activeStorage.id}/cancel`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-CloudMark-Token": token },
+        body: "{}",
+      });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || "Unable to cancel the benchmark");
+      setNotice(`Cancellation requested for ${activeStorage.id}. Cleanup is in progress.`);
+      await loadDashboard();
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Unable to cancel the benchmark");
     } finally {
       setBusy(false);
     }
@@ -275,7 +326,7 @@ export default function Home() {
           <span className="policy-dot" />
           <div><strong>Private by default</strong><small>No automatic result uploads</small></div>
         </div>
-        <div className="version">CORE / {dashboard?.version || "0.1.0"}</div>
+        <div className="version">CORE / {dashboard?.version || "0.2.0"}</div>
       </aside>
 
       <section className="workspace">
@@ -391,12 +442,22 @@ export default function Home() {
         {activeView === "storage" && (
           <div className="view storage-view">
             <section className="section-intro">
-              <div><span className="section-kicker">CURRENT AVAILABLE EXECUTOR</span><h2>Measure storage by workload, not by a single MB/s number.</h2><p>Storage is one domain in the full-stack catalog. Quick uses 512 MiB and Standard uses 4 GiB. Both preserve a free-space reserve and remove temporary files after completion.</p></div>
-              <button className="button primary" onClick={startDiskQuick} disabled={busy}>Run Disk Quick</button>
+              <div><span className="section-kicker">CURRENT AVAILABLE EXECUTOR</span><h2>Measure storage by workload, not by a single MB/s number.</h2><p>Five profiles cover short validation, general-purpose, database, large-block throughput, and sustained behavior using safe 512 MiB–8 GiB temporary files.</p></div>
+              <div className="runner-actions">
+                <label><span>PROFILE</span><select value={selectedStorageProfile} onChange={(event) => setSelectedStorageProfile(event.target.value)} disabled={Boolean(activeStorage)}>{Object.entries(dashboard?.profiles.storage || {}).map(([id, profile]) => <option key={id} value={id}>{profile.label} · ≈ {profile.estimated_minutes} min</option>)}</select></label>
+                <button className="button primary" onClick={startStorage} disabled={busy || Boolean(activeStorage)}>Run assessment</button>
+              </div>
             </section>
+            {activeStorage && (
+              <section className="panel run-progress" aria-live="polite">
+                <div><span className="section-kicker">ACTIVE RUN / {activeStorage.id}</span><strong>{activeStorage.current_job || activeStorage.phase || "Starting"}</strong><small>{activeStorage.completed_steps || 0} of {activeStorage.total_steps || 1} steps · {Math.round((activeStorage.progress || 0) * 100)}%</small></div>
+                <div className="progress-track"><i style={{ width: `${Math.max(2, (activeStorage.progress || 0) * 100)}%` }} /></div>
+                <button className="button danger" onClick={cancelStorage} disabled={busy || activeStorage.cancel_requested}>{activeStorage.cancel_requested ? "Cancelling" : "Cancel run"}</button>
+              </section>
+            )}
             <section className="storage-layout">
               <article className="panel chart-panel">
-                <div className="panel-head"><div><span className="section-kicker">LATEST MEASUREMENT</span><h3>IOPS theo workload</h3></div><span className="run-id">{latestStorage?.id || "NO RUN YET"}</span></div>
+                <div className="panel-head"><div><span className="section-kicker">LATEST MEASUREMENT</span><h3>IOPS by workload</h3></div><span className="run-id">{latestStorage?.id || "NO RUN YET"}</span></div>
                 {storageJobs.length ? (
                   <div className="bar-chart">
                     {storageJobs.map((job) => {
@@ -409,12 +470,24 @@ export default function Home() {
                 )}
               </article>
               <article className="panel profile-panel">
-                <div className="panel-head"><div><span className="section-kicker">DISK QUICK</span><h3>Test matrix</h3></div><span className="duration">≈ 4 min</span></div>
+                <div className="panel-head"><div><span className="section-kicker">{selectedStorageProfile.toUpperCase()}</span><h3>Test matrix</h3></div><span className="duration">≈ {selectedProfile?.estimated_minutes || "—"} min</span></div>
+                <p className="profile-description">{selectedProfile?.description}</p>
                 <div className="profile-jobs">
-                  {dashboard?.profiles.storage["disk-quick"]?.jobs.map((job, index) => <div key={job.name}><span>{String(index + 1).padStart(2, "0")}</span><strong>{job.name}</strong><small>filesystem-safe</small></div>)}
+                  {selectedProfile?.jobs.map((job, index) => <div key={job.name}><span>{String(index + 1).padStart(2, "0")}</span><strong>{job.name}</strong><small>filesystem-safe</small></div>)}
                 </div>
                 <div className="safety-note"><strong>Safety gate</strong><p>Raw-device access, TRIM, and destructive preconditioning are disabled in the default configuration.</p></div>
               </article>
+            </section>
+            <section className="panel timeline-panel">
+              <div className="panel-head"><div><span className="section-kicker">ONE-SECOND TELEMETRY</span><h3>Bandwidth stability</h3></div><span className="run-id">{storageJobs[storageJobs.length - 1]?.name || "NO TIME SERIES"}</span></div>
+              {bandwidthTimeline.length ? (
+                <div className="timeline-content">
+                  <div className="timeline-chart" aria-label="One-second storage bandwidth samples">
+                    {bandwidthTimeline.map((point, index) => <i key={`${point.elapsed_ms}-${point.direction}-${index}`} className={point.direction} style={{ height: `${Math.max(3, (point.value / maxTimelineBandwidth) * 100)}%` }} title={`${Math.round(point.elapsed_ms / 1000)}s · ${point.direction} · ${formatBytes(point.value)}/s`} />)}
+                  </div>
+                  <div className="timeline-legend"><span><i className="read" />READ</span><span><i className="write" />WRITE</span><strong>Peak {formatBytes(maxTimelineBandwidth)}/s</strong></div>
+                </div>
+              ) : <div className="timeline-empty">Run any 0.2.0 storage profile to capture one-second bandwidth, IOPS, and latency evidence.</div>}
             </section>
           </div>
         )}
@@ -461,7 +534,7 @@ export default function Home() {
             <section className="panel history-table">
               <div className="table-head"><span>RUN</span><span>SUITE / PROFILE</span><span>STATUS</span><span>STARTED</span></div>
               {dashboard?.runs.length ? dashboard.runs.map((run) => (
-                <div className="table-row" key={run.id}><code>{run.id}</code><span>{run.suite} / {run.profile}</span><span className={`run-status ${run.status}`}>{statusLabel(run.status)}</span><span>{run.started_at ? new Date(run.started_at).toLocaleString("en-US") : "—"}</span></div>
+                <div className="table-row" key={run.id}><code>{run.id}</code><span>{run.suite} / {run.profile}</span><span className={`run-status ${run.status}`}>{statusLabel(run.status)}{run.status === "running" ? ` · ${Math.round((run.progress || 0) * 100)}%` : ""}</span><span>{run.started_at ? new Date(run.started_at).toLocaleString("en-US") : "—"}</span></div>
               )) : <div className="empty-row">No benchmark runs yet. Current inventory is still read directly from the API.</div>}
             </section>
           </div>

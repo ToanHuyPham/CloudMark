@@ -12,7 +12,8 @@ model never destroys or rewrites the original benchmark result.
 3. **Dashboard** is a local React/vinext application. Read endpoints are public
    on loopback; writes require the controller token.
 4. **Benchmark runners** invoke allow-listed binaries with exact argument lists.
-   They never accept arbitrary shell fragments.
+   They never accept arbitrary shell fragments. The shared runner owns process
+   timeout, cancellation, heartbeat, progress, and child-process termination.
 5. **Profiles** define workload size, duration, safety limits, and required
    agent topology.
 6. **Assessment catalog** describes all technical domains independently of
@@ -20,6 +21,24 @@ model never destroys or rewrites the original benchmark result.
    partial, or roadmap.
 7. **Suitability engine** consumes only valid catalog evidence and maps it to
    workload-specific gates. Missing evidence remains unknown rather than zero.
+
+## Run lifecycle
+
+```text
+queued → running → completed
+                 ↘ failed
+                 ↘ cancelled
+```
+
+SQLite stores phase, current job, completed/total steps, normalized progress,
+heartbeat, cancellation request, and runner/methodology/tool versions. Storage
+persists completed jobs as partial results during execution. A Controller
+restart marks unfinished runs as interrupted instead of leaving them running
+forever.
+
+Cancellation is cooperative at the runner boundary and forcefully terminates
+the current allow-listed child process when necessary. Benchmark cleanup still
+runs before the terminal state is stored.
 
 ## Evidence flow
 

@@ -41,8 +41,13 @@ test("keeps production metadata and project policy explicit", async () => {
   assert.match(page, /cloud_to_controller_network_test/);
   assert.match(page, /FULL-STACK INFRASTRUCTURE COVERAGE/);
   assert.match(page, /domainCounts\.total \|\| 17/);
+  assert.match(page, /Run assessment/);
+  assert.match(page, /Cancel run/);
+  assert.match(page, /ONE-SECOND TELEMETRY/);
+  assert.equal(JSON.parse(packageJson).version, "0.2.0");
   assert.doesNotMatch(`${page}\n${layout}\n${readme}`, /\bqualification lab\b|\b0\.1\.0-alpha\b|\bMVP\b/i);
   assert.match(readme, /cloud-to-controller performance measurement\s+is disabled by policy/i);
+  assert.match(readme, /Version `0\.2\.0`/);
   await access(new URL("../public/og.png", import.meta.url));
   await assert.rejects(access(new URL("../app/_sites-preview/SkeletonPreview.tsx", import.meta.url)));
 });
@@ -59,5 +64,6 @@ test("keeps public product copy English-only", async () => {
   const publicCopy = files.join("\n");
   const vietnameseCharacters = /[ăâđêôơưĂÂĐÊÔƠƯáàảãạấầẩẫậắằẳẵặéèẻẽẹếềểễệíìỉĩịóòỏõọốồổỗộớờởỡợúùủũụứừửữựýỳỷỹỵ]/u;
   assert.doesNotMatch(publicCopy, vietnameseCharacters);
+  assert.doesNotMatch(publicCopy, /\b(theo|khong|trong|tren|voi|chay|phien|duoc)\b/i);
   assert.doesNotMatch(publicCopy, /\.vi\.md|vi-VN|lang=["']vi["']/i);
 });

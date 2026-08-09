@@ -1,6 +1,6 @@
 # CloudMark user guide
 
-This guide applies to version `0.1.0`. The current release provides system
+This guide applies to version `0.2.0`. The current release provides system
 inventory, AWS/Azure/Google Cloud metadata detection, tool bootstrap planning,
 filesystem-safe storage assessment through `fio`, SQLite history, multi-system
 topology registration, and a local dashboard. The dashboard distinguishes
@@ -130,7 +130,8 @@ In the dashboard:
   product scope.
 - **Assessment Catalog** lists all 17 technical domains and their `Available`,
   `Partial`, or `Roadmap` state.
-- **Storage Assessment** is the executable assessment in the current release.
+- **Storage Assessment** provides Quick, Standard, Database, Throughput, and
+  Sustained profiles with live progress and cancellation.
 - **Distributed Testing** creates a multi-agent topology. Network traffic
   execution remains `Partial` until all safety guards are complete.
 - **Workload Suitability** maps technical evidence to 12 use cases. Missing
@@ -250,7 +251,7 @@ Without `--yes`, CloudMark checks only:
 python -m cloudmark run storage --profile disk-quick --yes
 ```
 
-Or open **Storage Assessment** and select **Run Disk Quick**.
+Or open **Storage Assessment**, select a profile, and select **Run assessment**.
 
 The default profile uses:
 
@@ -270,6 +271,17 @@ python -m cloudmark run storage --profile disk-standard --yes
 The standard profile uses a 4 GiB temporary file and runs longer. Do not run it
 on a production system carrying active workloads when the result will be used
 for provider comparison.
+
+Additional profiles:
+
+- `disk-database`: 2 GiB, database-oriented 8 KiB latency and fsync workloads;
+- `disk-throughput`: 4 GiB, large-block scaling for backup, media, and analytics;
+- `disk-sustained`: 8 GiB, long mixed phases for burst-credit and throttling detection.
+
+The Storage page displays the current phase, job, completed steps, percentage,
+and a **Cancel run** control. Cancellation stops fio, removes temporary files,
+and retains already completed jobs as partial evidence. Cancelled results are
+never treated as a completed assessment.
 
 ### Operations CloudMark does not perform
 

@@ -1,6 +1,6 @@
 {
   "name": "cloudmark-dashboard",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Evidence-driven infrastructure assessment dashboard for CloudMark",
   "private": true,
   "engines": {

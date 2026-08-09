@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: CloudMark Controller API
-  version: 0.1.0
+  version: 0.2.0
   description: Local-first API for machine evidence, benchmark jobs, and multi-node sessions.
 servers:
   - url: http://127.0.0.1:8787/api/v1
@@ -24,6 +24,7 @@ components:
         suite: { type: string, enum: [inventory, storage] }
         profile: { type: string }
         confirm_write: { type: boolean, default: false }
+        timeout_seconds: { type: integer, minimum: 30, maximum: 43200 }
     Run:
       type: object
       required: [id, suite, profile, status, request]
@@ -32,6 +33,16 @@ components:
         suite: { type: string }
         profile: { type: string }
         status: { type: string, enum: [queued, running, completed, failed, cancelled] }
+        progress: { type: number, minimum: 0, maximum: 1 }
+        phase: { type: [string, "null"] }
+        current_job: { type: [string, "null"] }
+        completed_steps: { type: integer }
+        total_steps: { type: integer }
+        heartbeat_at: { type: [string, "null"], format: date-time }
+        cancel_requested: { type: boolean }
+        runner_version: { type: [string, "null"] }
+        methodology_version: { type: [string, "null"] }
+        tool_version: { type: [string, "null"] }
         started_at: { type: [string, "null"], format: date-time }
         finished_at: { type: [string, "null"], format: date-time }
         request: { type: object, additionalProperties: true }
@@ -103,6 +114,24 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Run" }
         "404": { description: Not found }
+  /runs/{runId}/cancel:
+    post:
+      summary: Request cancellation of a queued or running benchmark
+      security: [{ controllerToken: [] }]
+      parameters:
+        - in: path
+          name: runId
+          required: true
+          schema: { type: string }
+      responses:
+        "202":
+          description: Cancellation requested
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Run" }
+        "400": { description: Run is already terminal }
+        "401": { description: Missing controller token }
+        "404": { description: Run not found }
   /sessions:
     post:
       summary: Create a short-lived multi-node pairing session

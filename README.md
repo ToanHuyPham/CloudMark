@@ -19,6 +19,8 @@ timestamp, and raw result.
 | Available | AWS, Azure, and Google Cloud metadata detection |
 | Available | Declared provider manifests for regional and self-hosted clouds |
 | Available | Filesystem-safe `fio` storage profiles with latency percentiles |
+| Available | Versioned job runner with progress, heartbeat, timeout, cancellation, cleanup, and partial results |
+| Available | Quick, Standard, Database, Throughput, and Sustained storage profiles with one-second time series |
 | Available | Local Controller API, SQLite history, and responsive dashboard |
 | Partial | Distributed agent registration and two-node topology pairing |
 | Roadmap | Automated peer-to-peer network traffic executor |
@@ -93,10 +95,14 @@ python -m cloudmark inventory
 python -m cloudmark doctor --packs storage,network,database,web
 sudo python -m cloudmark bootstrap --packs storage,network,database,web --yes
 python -m cloudmark run storage --profile disk-quick --yes
+python -m cloudmark run storage --profile disk-database --yes
+python -m cloudmark run storage --profile disk-throughput --yes
+python -m cloudmark run storage --profile disk-sustained --yes
 ```
 
 Storage runs use a temporary file, preserve a free-space reserve, never target
-a raw device, and remove the test file after completion or failure.
+a raw device, and remove the test file after completion, failure, timeout, or
+operator cancellation.
 
 ## Documentation
 
@@ -111,11 +117,12 @@ a raw device, and remove the test file after completion or failure.
 
 ## Release status
 
-Version `0.1.0` is operational for inventory collection, provider evidence,
-safe storage assessment, result persistence, dashboard reporting, and agent
-topology registration. Automated network, application, and control-plane
-executors remain explicitly marked as unavailable until their safety and
-validity gates are implemented.
+Version `0.2.0` is operational for inventory collection, provider evidence,
+versioned and cancellable job execution, production-oriented safe storage
+profiles, one-second fio time series, partial-result persistence, dashboard
+reporting, and agent topology registration. Automated network, application,
+and control-plane executors remain explicitly marked as unavailable until their
+safety and validity gates are implemented.
 
 ## License
 

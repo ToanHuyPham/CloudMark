@@ -56,6 +56,11 @@ safe executor is more mature.
 
 ## M1 — Storage qualification (first executor priority)
 
+Version `0.2.0` delivers the shared cancellable runner, five filesystem-safe
+profiles, versioned results, one-second fio bandwidth/IOPS/latency logs, and
+partial-result persistence. The remaining M1 items below continue toward full
+storage-service qualification.
+
 ### Block and local storage
 
 - sequential 1 MiB reads/writes with single and multiple jobs;

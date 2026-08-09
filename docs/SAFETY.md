@@ -6,13 +6,23 @@ systems.
 
 ## Storage
 
-- Filesystem test-file mode is the only enabled mode in `0.1.0`.
+- Filesystem test-file mode is the only enabled mode in `0.2.0`.
 - The selected directory is resolved before execution.
 - Free space must cover the test file plus the larger of 1 GiB or 5% volume
   reserve.
 - `fio` receives an exact filename under CloudMark's benchmark directory.
-- The file is removed in a `finally` block even when a job fails.
+- The file and fio log files are removed in a `finally` block after completion,
+  failure, timeout, cancellation, or an interrupted CLI session.
 - Raw devices, TRIM, full-device preconditioning, and power-loss tests are off.
+
+## Runner controls
+
+- Every run has a bounded timeout between 30 seconds and 12 hours.
+- Cancellation terminates the active child process and then performs cleanup.
+- Commands are passed as argument arrays with `shell=False`.
+- Completed jobs are retained as partial evidence, but cancelled or failed runs
+  are never treated as complete assessment results.
+- A Controller restart marks stale queued/running jobs as failed and interrupted.
 
 ## Network
 

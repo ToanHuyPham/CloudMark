@@ -17,8 +17,9 @@ from . import __version__
 from .benchmarks import BenchmarkError, run_storage, storage_preflight
 from .database import Database
 from .inventory import collect_inventory
-from .profiles import all_profiles
+from .profiles import STORAGE_PROFILES, all_profiles
 from .provider import detect_provider
+from .runner import RUNNER_VERSION, CancellationToken, JobContext, RunCancelled, RunTimedOut
 
 
 def _json_bytes(value: Any) -> bytes:
@@ -30,6 +31,7 @@ class CloudMarkController:
         self.data_dir = data_dir.resolve()
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self.database = Database(self.data_dir / "cloudmark.sqlite3")
+        self.database.recover_incomplete_runs()
         self.benchmark_dir = self.data_dir / "benchmark-workspace"
         self.token_path = self.data_dir / "controller.token"
         if self.token_path.exists():
@@ -43,6 +45,8 @@ class CloudMarkController:
             pass
         self._inventory: dict[str, Any] | None = None
         self._provider: dict[str, Any] | None = None
+        self._active_runs: dict[str, CancellationToken] = {}
+        self._active_runs_lock = threading.RLock()
 
     def system(self, refresh: bool = False) -> dict[str, Any]:
         if refresh or self._inventory is None:
@@ -65,6 +69,7 @@ class CloudMarkController:
         }
 
     def submit_run(self, request: dict[str, Any]) -> dict[str, Any]:
+        request = dict(request)
         suite = str(request.get("suite", ""))
         profile = str(request.get("profile", ""))
         if suite not in {"inventory", "storage"}:
@@ -72,23 +77,116 @@ class CloudMarkController:
         if suite == "storage":
             if not request.get("confirm_write"):
                 raise ValueError("Storage test requires confirm_write=true because it writes a temporary test file.")
-            storage_preflight(profile, self.benchmark_dir)
+            preflight = storage_preflight(profile, self.benchmark_dir)
+            total_steps = len(STORAGE_PROFILES[profile]["jobs"]) + 2
+            methodology_version = str(STORAGE_PROFILES[profile]["methodology_version"])
+            tool_version = str(preflight["fio_version"])
+            default_timeout = int(preflight["default_timeout_seconds"])
+        else:
+            total_steps = 1
+            methodology_version = "inventory-v1"
+            tool_version = "native"
+            default_timeout = 120
+        try:
+            timeout_seconds = int(request.get("timeout_seconds", default_timeout))
+        except (TypeError, ValueError) as exc:
+            raise ValueError("timeout_seconds must be an integer.") from exc
+        if not 30 <= timeout_seconds <= 43_200:
+            raise ValueError("timeout_seconds must be between 30 and 43200.")
+        request["timeout_seconds"] = timeout_seconds
         run_id = f"run_{uuid.uuid4().hex[:16]}"
-        self.database.create_run(run_id, suite, profile or "default", request)
-        thread = threading.Thread(target=self._execute_run, args=(run_id, request), daemon=True)
+        self.database.create_run(
+            run_id,
+            suite,
+            profile or "default",
+            request,
+            total_steps=total_steps,
+            runner_version=RUNNER_VERSION,
+            methodology_version=methodology_version,
+            tool_version=tool_version,
+        )
+        token = CancellationToken()
+        with self._active_runs_lock:
+            self._active_runs[run_id] = token
+        thread = threading.Thread(
+            target=self._execute_run,
+            args=(run_id, request, token, total_steps),
+            daemon=True,
+            name=f"cloudmark-{run_id}",
+        )
         thread.start()
         return self.database.get_run(run_id) or {"id": run_id, "status": "queued"}
 
-    def _execute_run(self, run_id: str, request: dict[str, Any]) -> None:
-        self.database.update_run(run_id, status="running")
+    def _execute_run(
+        self,
+        run_id: str,
+        request: dict[str, Any],
+        token: CancellationToken,
+        total_steps: int,
+    ) -> None:
+        self.database.update_run(run_id, status="running", phase="starting", progress=0)
+
+        def update_progress(update: dict[str, Any]) -> None:
+            if self.database.is_cancel_requested(run_id):
+                token.cancel()
+            self.database.update_run_progress(run_id, **update)
+
+        context = JobContext(
+            run_id,
+            total_steps=total_steps,
+            timeout_seconds=float(request["timeout_seconds"]),
+            token=token,
+            on_progress=update_progress,
+        )
         try:
             if request["suite"] == "inventory":
+                context.report("collecting", "system-inventory")
                 result = self.system(refresh=True)
+                context.complete_step("completed", None, partial_result=result)
             else:
-                result = run_storage(str(request["profile"]), self.benchmark_dir, run_id)
-            self.database.update_run(run_id, status="completed", result=result)
+                result = run_storage(str(request["profile"]), self.benchmark_dir, run_id, context=context)
+            self.database.update_run(run_id, status="completed", result=result, phase="completed", progress=1)
+        except RunCancelled as exc:
+            self.database.update_run(
+                run_id,
+                status="cancelled",
+                result=exc.partial_result,
+                error=str(exc),
+                phase="cancelled",
+            )
+        except RunTimedOut as exc:
+            self.database.update_run(
+                run_id,
+                status="failed",
+                result=exc.partial_result,
+                error=str(exc),
+                phase="timed-out",
+            )
         except (BenchmarkError, OSError, ValueError, json.JSONDecodeError) as exc:
-            self.database.update_run(run_id, status="failed", error=str(exc))
+            self.database.update_run(run_id, status="failed", error=str(exc), phase="failed")
+        except Exception as exc:  # defensive runner boundary
+            self.database.update_run(
+                run_id,
+                status="failed",
+                error=f"Unexpected runner failure: {exc}",
+                phase="failed",
+            )
+        finally:
+            with self._active_runs_lock:
+                self._active_runs.pop(run_id, None)
+
+    def cancel_run(self, run_id: str) -> dict[str, Any]:
+        run = self.database.get_run(run_id)
+        if not run:
+            raise LookupError("Run not found.")
+        if run["status"] not in {"queued", "running"}:
+            raise ValueError(f"Run is already {run['status']} and cannot be cancelled.")
+        self.database.request_cancel(run_id)
+        with self._active_runs_lock:
+            token = self._active_runs.get(run_id)
+        if token:
+            token.cancel()
+        return self.database.get_run(run_id) or run
 
     def create_session(self, label: str) -> dict[str, Any]:
         session_id = f"session_{uuid.uuid4().hex[:12]}"
@@ -129,7 +227,7 @@ class CloudMarkController:
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "CloudMark/0.1"
+    server_version = "CloudMark/0.2"
 
     @property
     def controller(self) -> CloudMarkController:
@@ -228,12 +326,17 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if path == "/api/v1/runs":
                 self._send(202, self.controller.submit_run(body))
+            elif path.startswith("/api/v1/runs/") and path.endswith("/cancel"):
+                run_id = path.split("/")[-2]
+                self._send(202, self.controller.cancel_run(run_id))
             elif path == "/api/v1/sessions":
                 self._send(201, self.controller.create_session(str(body.get("label", ""))))
             else:
                 self._send(404, {"error": "Not found"})
         except PermissionError as exc:
             self._send(403, {"error": str(exc)})
+        except LookupError as exc:
+            self._send(404, {"error": str(exc)})
         except (ValueError, BenchmarkError, json.JSONDecodeError) as exc:
             self._send(400, {"error": str(exc)})
         except Exception as exc:  # defensive API boundary

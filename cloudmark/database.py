@@ -79,13 +79,56 @@ class Database:
         with self._lock, self._connection() as connection:
             for statement in statements:
                 connection.execute(statement)
+            run_columns = {row[1] for row in connection.execute("PRAGMA table_info(runs)").fetchall()}
+            migrations = {
+                "progress": "REAL NOT NULL DEFAULT 0",
+                "phase": "TEXT",
+                "current_job": "TEXT",
+                "completed_steps": "INTEGER NOT NULL DEFAULT 0",
+                "total_steps": "INTEGER NOT NULL DEFAULT 0",
+                "heartbeat_at": "TEXT",
+                "cancel_requested": "INTEGER NOT NULL DEFAULT 0",
+                "runner_version": "TEXT",
+                "methodology_version": "TEXT",
+                "tool_version": "TEXT",
+            }
+            for column, definition in migrations.items():
+                if column not in run_columns:
+                    connection.execute(f"ALTER TABLE runs ADD COLUMN {column} {definition}")
             connection.execute("PRAGMA optimize")
 
-    def create_run(self, run_id: str, suite: str, profile: str, request: dict[str, Any]) -> None:
+    def create_run(
+        self,
+        run_id: str,
+        suite: str,
+        profile: str,
+        request: dict[str, Any],
+        *,
+        total_steps: int = 1,
+        runner_version: str | None = None,
+        methodology_version: str | None = None,
+        tool_version: str | None = None,
+    ) -> None:
         with self._lock, self._connection() as connection:
             connection.execute(
-                "INSERT INTO runs(id, suite, profile, status, request_json) VALUES (?, ?, ?, 'queued', ?)",
-                (run_id, suite, profile, json.dumps(request, ensure_ascii=False)),
+                """
+                INSERT INTO runs(
+                    id, suite, profile, status, request_json, progress, phase,
+                    completed_steps, total_steps, runner_version,
+                    methodology_version, tool_version
+                )
+                VALUES (?, ?, ?, 'queued', ?, 0, 'queued', 0, ?, ?, ?, ?)
+                """,
+                (
+                    run_id,
+                    suite,
+                    profile,
+                    json.dumps(request, ensure_ascii=False),
+                    max(1, total_steps),
+                    runner_version,
+                    methodology_version,
+                    tool_version,
+                ),
             )
 
     def update_run(
@@ -95,9 +138,15 @@ class Database:
         status: str,
         result: dict[str, Any] | None = None,
         error: str | None = None,
+        progress: float | None = None,
+        phase: str | None = None,
+        current_job: str | None = None,
+        tool_version: str | None = None,
     ) -> None:
         started_at = utc_now() if status == "running" else None
         finished_at = utc_now() if status in {"completed", "failed", "cancelled"} else None
+        if status == "completed" and progress is None:
+            progress = 1.0
         with self._lock, self._connection() as connection:
             connection.execute(
                 """
@@ -106,7 +155,12 @@ class Database:
                     started_at = COALESCE(?, started_at),
                     finished_at = COALESCE(?, finished_at),
                     result_json = COALESCE(?, result_json),
-                    error = ?
+                    error = ?,
+                    progress = COALESCE(?, progress),
+                    phase = COALESCE(?, phase),
+                    current_job = ?,
+                    heartbeat_at = ?,
+                    tool_version = COALESCE(?, tool_version)
                 WHERE id = ?
                 """,
                 (
@@ -115,9 +169,78 @@ class Database:
                     finished_at,
                     json.dumps(result, ensure_ascii=False) if result is not None else None,
                     error,
+                    min(1.0, max(0.0, progress)) if progress is not None else None,
+                    phase,
+                    current_job,
+                    utc_now(),
+                    tool_version,
                     run_id,
                 ),
             )
+
+    def update_run_progress(
+        self,
+        run_id: str,
+        *,
+        progress: float,
+        phase: str,
+        current_job: str | None,
+        completed_steps: int,
+        total_steps: int,
+        result: dict[str, Any] | None = None,
+    ) -> None:
+        with self._lock, self._connection() as connection:
+            connection.execute(
+                """
+                UPDATE runs
+                SET progress = ?, phase = ?, current_job = ?,
+                    completed_steps = ?, total_steps = ?, heartbeat_at = ?,
+                    result_json = COALESCE(?, result_json)
+                WHERE id = ?
+                """,
+                (
+                    min(1.0, max(0.0, progress)),
+                    phase,
+                    current_job,
+                    max(0, completed_steps),
+                    max(1, total_steps),
+                    utc_now(),
+                    json.dumps(result, ensure_ascii=False) if result is not None else None,
+                    run_id,
+                ),
+            )
+
+    def request_cancel(self, run_id: str) -> bool:
+        with self._lock, self._connection() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE runs
+                SET cancel_requested = 1, heartbeat_at = ?
+                WHERE id = ? AND status IN ('queued', 'running')
+                """,
+                (utc_now(), run_id),
+            )
+        return cursor.rowcount > 0
+
+    def is_cancel_requested(self, run_id: str) -> bool:
+        with self._connection() as connection:
+            row = connection.execute("SELECT cancel_requested FROM runs WHERE id = ?", (run_id,)).fetchone()
+        return bool(row[0]) if row else False
+
+    def recover_incomplete_runs(self) -> int:
+        now = utc_now()
+        with self._lock, self._connection() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE runs
+                SET status = 'failed', finished_at = ?, heartbeat_at = ?,
+                    phase = 'interrupted', current_job = NULL,
+                    error = 'Controller restarted before the run reached a terminal state.'
+                WHERE status IN ('queued', 'running')
+                """,
+                (now, now),
+            )
+        return cursor.rowcount
 
     @staticmethod
     def _run_row(row: sqlite3.Row) -> dict[str, Any]:
@@ -125,6 +248,7 @@ class Database:
         item["request"] = json.loads(item.pop("request_json"))
         result_json = item.pop("result_json")
         item["result"] = json.loads(result_json) if result_json else None
+        item["cancel_requested"] = bool(item.get("cancel_requested", 0))
         return item
 
     def get_run(self, run_id: str) -> dict[str, Any] | None:

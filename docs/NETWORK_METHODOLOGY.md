@@ -30,6 +30,6 @@ tests, not for provider fabric claims. Provider-grade results should use
 anti-affinity or placement evidence and repeat across fresh instances and time
 windows.
 
-The automated peer executor is not enabled in `0.1.0`. Pairing, roles,
+The automated peer executor is not enabled in `0.2.0`. Pairing, roles,
 persistence, and direction policy are implemented; the dashboard marks network
 coverage as partial until guarded traffic execution is released.
