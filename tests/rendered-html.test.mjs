@@ -52,6 +52,9 @@ test("keeps production metadata and project policy explicit", async () => {
   assert.match(styles, /grid-template-columns: repeat\(7, minmax\(0, 1fr\)\)/);
   assert.match(styles, /overflow-x: hidden/);
   assert.doesNotMatch(styles, /\.nav-item:not\(\.active\)\s*\{\s*font-size:\s*0/);
+  assert.match(styles, /--type-micro:\s*10px/);
+  assert.match(styles, /--type-body:\s*14px/);
+  assert.doesNotMatch(styles, /font-size:\s*[789]px/);
   assert.equal(JSON.parse(packageJson).version, "0.5.0");
   assert.doesNotMatch(`${page}\n${layout}\n${readme}`, /\bqualification lab\b|\b0\.1\.0-alpha\b|\bMVP\b/i);
   assert.match(readme, /cloud-to-controller performance measurement\s+is disabled by policy/i);
