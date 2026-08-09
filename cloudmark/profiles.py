@@ -6,7 +6,7 @@ from typing import Any
 STORAGE_PROFILES: dict[str, dict[str, Any]] = {
     "disk-quick": {
         "label": "Disk Quick",
-        "description": "Kiểm tra an toàn, ngắn, dùng file tạm 512 MiB.",
+        "description": "A short, safe assessment using a 512 MiB temporary file.",
         "estimated_minutes": 4,
         "file_size_mib": 512,
         "jobs": [
@@ -18,7 +18,7 @@ STORAGE_PROFILES: dict[str, dict[str, Any]] = {
     },
     "disk-standard": {
         "label": "Disk Standard",
-        "description": "Đánh giá database, web và throughput với file tạm 4 GiB.",
+        "description": "Database, web, and throughput assessment using a 4 GiB temporary file.",
         "estimated_minutes": 25,
         "file_size_mib": 4096,
         "jobs": [
@@ -37,7 +37,7 @@ STORAGE_PROFILES: dict[str, dict[str, Any]] = {
 NETWORK_PROFILES: dict[str, dict[str, Any]] = {
     "network-peer-standard": {
         "label": "Provider Internal Network",
-        "description": "Đo trực tiếp agent cloud A ↔ agent cloud B; không đo cloud → controller.",
+        "description": "Measures cloud agent A ↔ cloud agent B directly; never cloud → controller.",
         "requires_agents": 2,
         "directions": ["agent-a-to-agent-b", "agent-b-to-agent-a", "bidirectional"],
         "tcp_streams": [1, 4, 8, 16],

@@ -21,8 +21,8 @@ test("server-renders the CloudMark dashboard shell", async () => {
   assert.match(html, /<title>CloudMark — Infrastructure Assessment Platform<\/title>/i);
   assert.match(html, /CloudMark/);
   assert.match(html, /Infrastructure assessment/);
-  assert.match(html, /Danh mục đánh giá/);
-  assert.match(html, /Đánh giá Storage/);
+  assert.match(html, /Assessment Catalog/);
+  assert.match(html, /Storage Assessment/);
   assert.match(html, /Cloud → controller test disabled/);
   assert.doesNotMatch(html, /codex-preview|Your site is taking shape|react-loading-skeleton|qualification lab/i);
 });
@@ -45,4 +45,19 @@ test("keeps production metadata and project policy explicit", async () => {
   assert.match(readme, /cloud-to-controller performance measurement\s+is disabled by policy/i);
   await access(new URL("../public/og.png", import.meta.url));
   await assert.rejects(access(new URL("../app/_sites-preview/SkeletonPreview.tsx", import.meta.url)));
+});
+
+test("keeps public product copy English-only", async () => {
+  const files = await Promise.all([
+    "../README.md",
+    "../app/page.tsx",
+    "../cloudmark/profiles.py",
+    "../docs/ASSESSMENT_CATALOG.md",
+    "../docs/ROADMAP.md",
+    "../docs/USER_GUIDE.md",
+  ].map((path) => readFile(new URL(path, import.meta.url), "utf8")));
+  const publicCopy = files.join("\n");
+  const vietnameseCharacters = /[ăâđêôơưĂÂĐÊÔƠƯáàảãạấầẩẫậắằẳẵặéèẻẽẹếềểễệíìỉĩịóòỏõọốồổỗộớờởỡợúùủũụứừửữựýỳỷỹỵ]/u;
+  assert.doesNotMatch(publicCopy, vietnameseCharacters);
+  assert.doesNotMatch(publicCopy, /\.vi\.md|vi-VN|lang=["']vi["']/i);
 });

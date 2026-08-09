@@ -44,7 +44,7 @@ full path from machine evidence to provider operations:
 
 These 17 technical domains feed 12 workload suitability targets. A domain can
 be `Available`, `Partial`, or `Roadmap`; only collected evidence may influence a
-recommendation. See the [assessment catalog](docs/ASSESSMENT_CATALOG.vi.md) for
+recommendation. See the [assessment catalog](docs/ASSESSMENT_CATALOG.md) for
 the planned measurements and minimum machine topology of every domain.
 
 ## Operating model
@@ -100,14 +100,14 @@ a raw device, and remove the test file after completion or failure.
 
 ## Documentation
 
-- [Hướng dẫn sử dụng tiếng Việt](docs/USER_GUIDE.vi.md)
-- [Danh mục đánh giá toàn diện](docs/ASSESSMENT_CATALOG.vi.md)
+- [User guide](docs/USER_GUIDE.md)
+- [Comprehensive assessment catalog](docs/ASSESSMENT_CATALOG.md)
 - [Architecture](docs/ARCHITECTURE.md)
 - [API](docs/API.md)
 - [Disk methodology](docs/DISK_METHODOLOGY.md)
 - [Network methodology](docs/NETWORK_METHODOLOGY.md)
 - [Safety model](docs/SAFETY.md)
-- [Product roadmap and machine topology matrix](docs/ROADMAP.vi.md)
+- [Product roadmap and machine topology matrix](docs/ROADMAP.md)
 
 ## Release status
 
