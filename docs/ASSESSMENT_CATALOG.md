@@ -69,6 +69,13 @@ web coverage therefore remains `Partial`.
 
 Each workload combines multiple domains rather than relying on one benchmark:
 
+The `suitability-v1` read-time evaluator now represents these mappings as
+versioned Essential, Standard, and Demanding hard gates. Available benchmark
+metrics retain source Run provenance; missing domain-specific executors remain
+explicit blockers. Passing a measured subset produces at most `Conditional
+fit`, never a provider-wide claim. See
+[`SUITABILITY_METHODOLOGY.md`](SUITABILITY_METHODOLOGY.md).
+
 | Use case | Representative hard gates | Additional evidence |
 |---|---|---|
 | Storage & Backup | storage integrity, throughput, restore path | network, cost, reliability |

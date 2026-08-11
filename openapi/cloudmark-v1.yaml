@@ -90,6 +90,12 @@ paths:
       summary: Aggregated dashboard payload
       responses:
         "200": { description: Dashboard state }
+  /suitability:
+    get:
+      summary: Evidence-gated workload suitability and provider-readiness evaluation
+      description: Returns target-scoped requirement checks with run provenance. Missing evidence is never converted to zero.
+      responses:
+        "200": { description: Versioned suitability evaluation }
   /profiles:
     get:
       summary: Benchmark and suitability profiles

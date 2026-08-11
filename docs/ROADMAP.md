@@ -157,6 +157,12 @@ functionality only; they cannot prove real provider-fabric availability.
 
 ## M6 — Suitability and provider scoring
 
+The first `suitability-v1` subset is available at development head. It
+partitions evidence by target, applies versioned Essential, Standard, and
+Demanding hard gates to all 12 use cases, preserves per-check run provenance,
+and reports missing/stale evidence, blockers, limitations, and next actions.
+It deliberately does not publish a provider rating.
+
 Each use case defines:
 
 1. hard gates — missing evidence makes the system ineligible;
@@ -166,9 +172,10 @@ Each use case defines:
 5. operational evidence — snapshot, failover, API, and security;
 6. cost input — stored separately with timestamp, currency, and source.
 
-Recommendations are `Excellent`, `Suitable`, `Conditional`, `Not recommended`,
-or `Insufficient evidence`. Every label includes reason codes; CloudMark never
-shows an unexplained single aggregate score.
+Current target verdicts are `Suitable`, `Conditional fit`, `Below requirement`,
+or `Insufficient evidence`. Future empirically calibrated provider reports may
+add comparative bands, but every label must retain reason codes; CloudMark
+never shows an unexplained single aggregate score.
 
 Provider scoring aggregates multiple systems, time windows, and zones. Reports
 show median, P10/P90, worst observed, sample count, and profile version. SLA,
@@ -191,5 +198,7 @@ matching control-plane drills.
 3. Complete M3 beyond the available integer CPU and memory-bandwidth subsets.
 4. Build M4 on the stable runner.
 5. Add provider adapters and M5 drills.
-6. Lock suitability/provider thresholds in M6 only after collecting real data
-   across regional clouds, global clouds, and self-operated bare-metal systems.
+6. Calibrate and version the available requirement thresholds across regional
+   clouds, global clouds, and self-operated bare-metal systems before treating
+   them as stable policy; then implement provider aggregation without weakening
+   the multi-target and multi-window gates.

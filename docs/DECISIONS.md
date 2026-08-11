@@ -110,3 +110,18 @@ removed after the run. Arbitrary URLs and DDoS load are refused.
 without routing traffic through the Controller. A fixed workload makes results
 auditable and limits accidental exposure, while explicit ApacheBench
 limitations prevent the Generator from being mistaken for Target capacity.
+
+## D-012: Gate-based target suitability before provider scoring
+
+**Decision:** `suitability-v1` evaluates one explicit target against versioned
+Essential, Standard, and Demanding hard gates. Each check retains run
+provenance. Missing, stale, failed, incompatible, or cleanup-unverified
+evidence cannot satisfy a gate and never becomes zero. Known unimplemented
+capabilities cap a passing measured subset at `Conditional fit`. Provider
+status remains `not-rated` until independent multi-target, multi-window,
+security, reliability, control-plane, and cost gates exist.
+
+**Reason:** Operators need actionable workload classification before every
+future executor exists, but a synthetic percentage would hide missing evidence
+and one VM cannot establish provider quality. Separate coverage, measured gate
+results, limitations, and provider readiness preserve honest claims.

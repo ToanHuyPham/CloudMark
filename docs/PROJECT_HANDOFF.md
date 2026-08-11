@@ -73,6 +73,13 @@ isolated Nginx HTTP/TLS service on Agent A and runs fixed ApacheBench workloads
 from Agent B. Both service lifecycles use Target-owned watchdogs and verified
 ephemeral cleanup; the Controller never carries benchmark traffic.
 
+The read-time `suitability-v1` engine partitions completed evidence by target,
+validates methodology and cleanup, and evaluates all 12 workload categories at
+Essential, Standard, and Demanding levels. Every check retains source Run
+provenance. It produces target observations only; provider status stays
+`not-rated` until multi-target, repeated-window, operational, and cost evidence
+is implemented.
+
 ## Repository map
 
 - `cloudmark/`: Python Controller, Agent, inventory, provider detection, and

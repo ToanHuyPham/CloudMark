@@ -50,6 +50,10 @@ test("keeps production metadata and project policy explicit", async () => {
   assert.match(page, /LOCAL SATURATION EXECUTORS/);
   assert.match(page, /EXCLUSIVE LOAD POLICY/);
   assert.match(page, /EXECUTION TARGET/);
+  assert.match(page, /EVIDENCE-GATED SUITABILITY/);
+  assert.match(page, /PROVIDER EVALUATION READINESS/);
+  assert.match(page, /missing_evidence_is_zero/);
+  assert.match(page, /Conditional fit/);
   assert.match(styles, /@media \(max-width: 900px\)/);
   assert.match(styles, /grid-template-columns: repeat\(9, minmax\(0, 1fr\)\)/);
   assert.match(styles, /overflow-x: hidden/);
@@ -74,6 +78,7 @@ test("keeps public product copy English-only", async () => {
     "../docs/COMPUTE_MEMORY_METHODOLOGY.md",
     "../docs/DATABASE_METHODOLOGY.md",
     "../docs/WEB_METHODOLOGY.md",
+    "../docs/SUITABILITY_METHODOLOGY.md",
     "../docs/REMOTE_EXECUTION.md",
     "../docs/ROADMAP.md",
     "../docs/USER_GUIDE.md",

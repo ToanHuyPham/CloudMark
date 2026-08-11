@@ -214,6 +214,18 @@ diagnosis, then remove only the named `task_*` directory below the configured
 Agent `web-services` workspace. Never delete the workspace root, an unknown
 Nginx directory, or a directory while its process is still active.
 
+### Workload Suitability reports insufficient evidence
+
+- verify that the exact Target is selected rather than the Controller host or
+  another Agent;
+- open the use-case detail and review every unavailable or stale hard gate;
+- use the displayed Run IDs to confirm profile, methodology, target, and
+  cleanup provenance;
+- run only the recommended missing profiles during an authorized test window;
+- do not copy a result from another Agent or manually edit SQLite to complete a
+  target;
+- remember that provider status remains `not-rated` after one target passes.
+
 ## 12. Optional Codex local environment
 
 In the ChatGPT desktop app, open the local-project environment settings and

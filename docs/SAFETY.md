@@ -118,6 +118,20 @@ systems.
   administrator/root privileges.
 - Installed package names and commands are visible in the preview.
 
+## Suitability and provider claims
+
+- Suitability evaluation is read-only and never starts a benchmark.
+- Failed, cancelled, stale, incompatible, or cleanup-unverified results cannot
+  satisfy a workload gate.
+- Missing evidence remains unavailable and is never represented as zero.
+- Evidence from different target IDs is never combined to make one target
+  appear complete.
+- A passing measured subset is capped at `Conditional fit` when the required
+  product capability is outside the current methodology.
+- Provider status remains `not-rated` until independent same-product targets,
+  repeated windows, security, reliability, control-plane, and cost evidence are
+  available.
+
 ## Secrets
 
 - The local controller token is stored in `.cloudmark/controller.token` and is

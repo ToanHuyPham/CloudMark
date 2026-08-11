@@ -61,6 +61,26 @@ Catalog breadth and executor availability are intentionally separate. Adding a
 domain to the product scope never permits it to influence a score before its
 measurement and safety gates are implemented.
 
+## Suitability evaluation
+
+`suitability-v1` is a read-time projection over immutable completed runs. It
+does not rewrite benchmark evidence or persist a synthetic aggregate. The
+engine first partitions evidence by explicit target identity, rejects unknown
+methodologies and cleanup-unverified results, selects the strongest fresh
+compatible observation for each metric, then evaluates versioned Essential,
+Standard, and Demanding hard gates.
+
+Each check returns its threshold, operator, source Run ID, profile,
+methodology, observation time, unit, quality, and freshness. Coverage and the
+pass ratio among measured checks are separate fields. Missing evidence blocks a
+classification rather than reducing a score. Known domain gaps cap otherwise
+passing targets at `Conditional fit`.
+
+Provider readiness is a separate projection. It counts same-product targets,
+measurement windows, observed suites, and missing operational domains, but
+does not produce a provider rating until the complete aggregation contract is
+implemented.
+
 ## Local saturation executors
 
 CPU, memory, and storage share one exclusive Controller admission group. A

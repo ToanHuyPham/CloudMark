@@ -501,14 +501,28 @@ bottleneck. See [`WEB_METHODOLOGY.md`](WEB_METHODOLOGY.md).
 
 ## 13. Workload suitability
 
-The 12 use cases use three coverage states:
+Open **Workload Suitability**, then select the exact observed Target and one
+requirement level:
 
-- `Available`: an executor and profile can run now;
-- `Partial`: only part of the required evidence or topology is available;
-- `Roadmap`: no executor exists yet, and no artificial zero is assigned.
+- **Essential:** entry production or light-duty baseline;
+- **Standard:** general production baseline;
+- **Demanding:** higher sustained throughput, concurrency, and tighter latency.
 
-A suitability conclusion appears only after all mandatory raw evidence is
-available. See the assessment catalog for each use case's hard gates.
+Each of the 12 use cases reports `Insufficient evidence`, `Below requirement`,
+`Conditional fit`, or `Suitable`. Select a use case to inspect every hard gate,
+observed value, threshold, evidence state, Run ID, profile, methodology,
+blocker, limitation, and recommended next assessment. Evidence older than 30
+days is shown as stale and cannot satisfy a current gate.
+
+Coverage and the pass ratio among measured checks are intentionally separate.
+For example, passing every available check with only 30% coverage remains
+`Insufficient evidence`. A target that passes all current metrics but still
+lacks a required product capability is at most `Conditional fit`.
+
+The provider panel remains **Not rated** for one VM or one time window. It shows
+the same-SKU target count, measurement-window count, observed suites, and the
+missing security, reliability, control-plane, and cost gates. See
+[`SUITABILITY_METHODOLOGY.md`](SUITABILITY_METHODOLOGY.md).
 
 ## 14. API quick reference
 
@@ -522,6 +536,12 @@ System evidence:
 
 ```bash
 curl http://127.0.0.1:8787/api/v1/system
+```
+
+Suitability evidence:
+
+```bash
+curl http://127.0.0.1:8787/api/v1/suitability
 ```
 
 Create an inventory run:

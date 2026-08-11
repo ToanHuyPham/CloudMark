@@ -29,9 +29,10 @@ timestamp, and raw result.
 | Partial | Guarded peer network executor: directional TCP scaling, idle latency, loaded TCP RTT, adaptive UDP loss/jitter sweeps, and simultaneous bidirectional TCP |
 | Partial | Guarded two-Agent PostgreSQL/pgbench profiles with durable settings and verified ephemeral cleanup |
 | Partial | Guarded two-Agent Nginx/ApacheBench HTTP, API, TLS, connection-churn, tail-latency, and static-transfer profiles |
+| Available | Target-scoped, versioned Essential/Standard/Demanding workload gates with per-check run provenance and explicit unknown evidence |
 | Roadmap | Route/MTU evidence, generator-saturation validation, repeated network windows, mTLS enrollment, and remaining network validity checks |
 | Roadmap | Remaining CPU, memory/NUMA, GPU, application, platform, operations, and provider executors |
-| Roadmap | Final workload suitability and provider scoring engine |
+| Roadmap | Multi-target/time-window provider aggregation, stability distributions, cost, operations, and final provider ratings |
 
 `Partial` and `Roadmap` capabilities never receive an artificial zero score.
 The dashboard reports insufficient evidence until the required executor and
@@ -155,6 +156,7 @@ Controller is never an iperf3 endpoint.
 - [Network methodology](docs/NETWORK_METHODOLOGY.md)
 - [PostgreSQL database methodology](docs/DATABASE_METHODOLOGY.md)
 - [Web, API, and TLS methodology](docs/WEB_METHODOLOGY.md)
+- [Workload suitability methodology](docs/SUITABILITY_METHODOLOGY.md)
 - [Safety model](docs/SAFETY.md)
 - [Product roadmap and machine topology matrix](docs/ROADMAP.md)
 
@@ -172,7 +174,9 @@ topology-aware windows, and mTLS enrollment are implemented. PostgreSQL remains
 partial until tail latency, replication, and recovery evidence are available.
 Web/API/TLS remains partial until generator-saturation validation, dynamic
 application, HTTP/2/3, CDN, WAF, and autoscaling evidence are available.
-Control-plane executors remain explicitly unavailable.
+The current development head also implements `suitability-v1` target-scoped
+hard gates with exact evidence provenance; provider-wide ratings and
+control-plane executors remain explicitly unavailable.
 
 ## License
 

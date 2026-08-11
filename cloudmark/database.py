@@ -317,7 +317,7 @@ class Database:
         with self._connection() as connection:
             rows = connection.execute(
                 "SELECT * FROM runs ORDER BY COALESCE(started_at, '') DESC, rowid DESC LIMIT ?",
-                (max(1, min(limit, 200)),),
+                (max(1, min(limit, 5000)),),
             ).fetchall()
         return [self._run_row(row) for row in rows]
 

@@ -16,6 +16,7 @@ X-CloudMark-Token: <token printed by cloudmark serve>
 | GET | `/system` | Inventory and provider evidence |
 | GET | `/system?refresh=true` | Refresh inventory and metadata |
 | GET | `/dashboard` | Aggregated local dashboard payload |
+| GET | `/suitability` | Versioned target-scoped workload gates and provider-readiness evidence |
 | GET | `/profiles` | Benchmark and scenario profiles |
 | GET | `/runs` | Run history |
 | GET | `/runs/{id}` | One run and raw result |
@@ -209,6 +210,20 @@ For remote single-system tasks, `/progress` updates the parent run and returns
 `cancel_requested`. Completed result envelopes must match the dispatched suite,
 profile, profile version, methodology version, and `remote-agent-v1` protocol.
 The API request-body limit is 16 MiB for bounded raw time-series evidence.
+
+## Read workload suitability
+
+```http
+GET /api/v1/suitability
+```
+
+The response contains `suitability-v1` evaluations for each observed target at
+the Essential, Standard, and Demanding requirement levels. Every metric check
+includes its threshold, operator, status, source Run ID, profile, methodology,
+time, unit, quality, and staleness. Missing evidence remains `unavailable` or
+`stale`; it is never converted to zero. Provider status remains `not-rated`
+until the documented multi-target, multi-window, operational, and cost gates
+are satisfied.
 
 The complete machine-readable contract is in
 [`openapi/cloudmark-v1.yaml`](../openapi/cloudmark-v1.yaml).

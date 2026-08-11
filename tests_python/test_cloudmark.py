@@ -9,6 +9,7 @@ import time
 import unittest
 import urllib.error
 import urllib.request
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -50,6 +51,7 @@ from cloudmark.profiles import (
 from cloudmark.provider import _declared_manifest
 from cloudmark.runner import CancellationToken, JobContext, ProcessResult, RunCancelled, RunTimedOut
 from cloudmark.server import CloudMarkController, Server
+from cloudmark.suitability import SCENARIO_REQUIREMENTS, evaluate_suitability
 from cloudmark.web_benchmark import (
     WebBenchmarkError,
     parse_ab_output,
@@ -60,6 +62,217 @@ from cloudmark.web_benchmark import (
 
 
 class CloudMarkTests(unittest.TestCase):
+    @staticmethod
+    def _suitability_system(hostname: str = "target") -> dict[str, object]:
+        return {
+            "inventory": {
+                "hostname": hostname,
+                "os": {"system": "Linux", "distribution": "Ubuntu"},
+                "cpu": {"model": "Test CPU", "logical_cores": 4},
+                "memory": {"total_bytes": 8 * 1024**3},
+                "capabilities": {"docker": False, "podman": False},
+            },
+            "provider": {
+                "provider": "Test Provider",
+                "confidence": 0.9,
+                "source": "test",
+                "instance_type": "standard-4",
+            },
+        }
+
+    def test_suitability_keeps_missing_evidence_unknown_and_provider_unrated(self) -> None:
+        report = evaluate_suitability([], self._suitability_system(), lambda _agent_id: None)
+        self.assertFalse(report["policy"]["missing_evidence_is_zero"])
+        self.assertFalse(report["policy"]["composite_provider_score"])
+        target = report["targets"][0]
+        self.assertEqual(target["id"], "controller")
+        self.assertEqual(target["provider_assessment"]["status"], "not-rated")
+        essential = {item["id"]: item for item in target["levels"]["essential"]}
+        self.assertEqual(essential["dev-test"]["verdict"], "insufficient")
+        self.assertTrue(any(check["status"] == "unavailable" for check in essential["dev-test"]["checks"]))
+
+    def test_suitability_applies_versioned_hard_gates_with_run_provenance(self) -> None:
+        completed_at = datetime.now(timezone.utc).isoformat()
+        runs = [
+            {
+                "id": "run_compute_suitability",
+                "suite": "compute",
+                "profile": "compute-standard",
+                "status": "completed",
+                "finished_at": completed_at,
+                "methodology_version": "compute-v1",
+                "request": {},
+                "result": {
+                    "methodology_version": "compute-v1",
+                    "compute_jobs": [
+                        {"name": "integer-single", "metrics": {"events_per_second": 1400}},
+                        {"name": "integer-sustained", "metrics": {"events_per_second": 3000}},
+                    ],
+                    "scaling": {"efficiency_percent": 55},
+                },
+            },
+            {
+                "id": "run_storage_suitability",
+                "suite": "storage",
+                "profile": "disk-standard",
+                "status": "completed",
+                "finished_at": completed_at,
+                "methodology_version": "storage-v1",
+                "request": {},
+                "result": {
+                    "methodology_version": "storage-v1",
+                    "safety": {"test_file_removed": True},
+                    "jobs": [
+                        {
+                            "name": "sequential-read",
+                            "read": {"bandwidth_bytes_per_second": 250 * 1024**2, "iops": 250},
+                            "write": {},
+                        },
+                        {
+                            "name": "sequential-write",
+                            "read": {},
+                            "write": {"bandwidth_bytes_per_second": 180 * 1024**2, "iops": 180},
+                        },
+                        {
+                            "name": "random-read-qd1",
+                            "read": {"iops": 2500, "bandwidth_bytes_per_second": 10_240_000},
+                            "write": {},
+                        },
+                    ],
+                },
+            },
+        ]
+        report = evaluate_suitability(runs, self._suitability_system(), lambda _agent_id: None)
+        target = report["targets"][0]
+        essential = {item["id"]: item for item in target["levels"]["essential"]}
+        demanding = {item["id"]: item for item in target["levels"]["demanding"]}
+        self.assertEqual(essential["dev-test"]["verdict"], "conditional-fit")
+        self.assertEqual(demanding["dev-test"]["verdict"], "below-requirement")
+        self.assertEqual(essential["dev-test"]["coverage_percent"], 100.0)
+        self.assertEqual(
+            set(essential["dev-test"]["run_ids"]),
+            {"run_compute_suitability", "run_storage_suitability"},
+        )
+
+    def test_suitability_never_mixes_evidence_between_remote_targets(self) -> None:
+        completed_at = datetime.now(timezone.utc).isoformat()
+        runs = [
+            {
+                "id": "run_agent_a_compute",
+                "suite": "compute",
+                "profile": "compute-standard",
+                "status": "completed",
+                "finished_at": completed_at,
+                "methodology_version": "compute-v1",
+                "request": {"agent_id": "agent_a"},
+                "result": {
+                    "methodology_version": "compute-v1",
+                    "compute_jobs": [{"name": "integer-sustained", "metrics": {"events_per_second": 3000}}],
+                },
+            },
+            {
+                "id": "run_agent_b_storage",
+                "suite": "storage",
+                "profile": "disk-standard",
+                "status": "completed",
+                "finished_at": completed_at,
+                "methodology_version": "storage-v1",
+                "request": {"agent_id": "agent_b"},
+                "result": {
+                    "methodology_version": "storage-v1",
+                    "safety": {"test_file_removed": True},
+                    "jobs": [{
+                        "name": "sequential-write",
+                        "read": {},
+                        "write": {"bandwidth_bytes_per_second": 180 * 1024**2},
+                    }],
+                },
+            },
+        ]
+        agents = {
+            "agent_a": {"last_seen_at": completed_at, "system": self._suitability_system("agent-a")},
+            "agent_b": {"last_seen_at": completed_at, "system": self._suitability_system("agent-b")},
+        }
+        report = evaluate_suitability(runs, self._suitability_system("controller"), agents.get)
+        targets = {item["id"]: item for item in report["targets"]}
+        self.assertIn("compute.sustained_eps", targets["agent_a"]["evidence"])
+        self.assertNotIn("storage.sequential_write_bps", targets["agent_a"]["evidence"])
+        self.assertIn("storage.sequential_write_bps", targets["agent_b"]["evidence"])
+        self.assertNotIn("compute.sustained_eps", targets["agent_b"]["evidence"])
+
+    def test_suitability_catalog_covers_every_usage_scenario(self) -> None:
+        self.assertEqual(
+            set(SCENARIO_REQUIREMENTS),
+            {scenario["id"] for scenario in SCENARIOS},
+        )
+
+    def test_suitability_marks_old_evidence_stale_and_excludes_old_provider_windows(self) -> None:
+        stale_at = (datetime.now(timezone.utc) - timedelta(days=31)).isoformat()
+        run = {
+            "id": "run_stale_compute",
+            "suite": "compute",
+            "profile": "compute-standard",
+            "status": "completed",
+            "finished_at": stale_at,
+            "methodology_version": "compute-v1",
+            "request": {},
+            "result": {
+                "methodology_version": "compute-v1",
+                "compute_jobs": [
+                    {"name": "integer-sustained", "metrics": {"events_per_second": 9000}},
+                ],
+            },
+        }
+        report = evaluate_suitability([run], self._suitability_system(), lambda _agent_id: None)
+        target = report["targets"][0]
+        evidence = target["evidence"]["compute.sustained_eps"]
+        self.assertTrue(evidence["stale"])
+        dev_test = next(item for item in target["levels"]["essential"] if item["id"] == "dev-test")
+        sustained_check = next(item for item in dev_test["checks"] if item["key"] == "compute.sustained_eps")
+        self.assertEqual(sustained_check["status"], "stale")
+        self.assertEqual(dev_test["verdict"], "insufficient")
+        self.assertEqual(target["provider_assessment"]["measurement_windows"], 0)
+        self.assertNotIn("compute", target["provider_assessment"]["observed_suites"])
+
+    def test_suitability_rejects_unverified_cleanup_and_declared_provider_identity(self) -> None:
+        completed_at = datetime.now(timezone.utc).isoformat()
+        system = self._suitability_system()
+        system["provider"] = {
+            "provider": "Operator Claimed Cloud",
+            "confidence": 0.9,
+            "source": "declared-manifest-unverified",
+            "instance_type": "standard-4",
+        }
+        run = {
+            "id": "run_storage_unclean",
+            "suite": "storage",
+            "profile": "disk-standard",
+            "status": "completed",
+            "finished_at": completed_at,
+            "methodology_version": "storage-v1",
+            "request": {},
+            "result": {
+                "methodology_version": "storage-v1",
+                "safety": {"test_file_removed": False},
+                "jobs": [{
+                    "name": "sequential-write",
+                    "read": {},
+                    "write": {"bandwidth_bytes_per_second": 180 * 1024**2},
+                }],
+            },
+        }
+        report = evaluate_suitability([run], system, lambda _agent_id: None)
+        target = report["targets"][0]
+        self.assertNotIn("storage.sequential_write_bps", target["evidence"])
+        self.assertEqual(target["evidence_summary"]["accepted_runs"], 0)
+        self.assertIn("cleanup", target["evidence_summary"]["rejected_runs"][0]["reason"].lower())
+        identity = next(
+            item
+            for item in target["provider_assessment"]["criteria"]
+            if item["label"] == "Verified provider identity"
+        )
+        self.assertFalse(identity["satisfied"])
+
     def test_storage_metrics_keep_tail_latency_percentiles(self) -> None:
         section = {
             "iops": 123,
@@ -1559,6 +1772,11 @@ max: 1.50
                 self.assertIn("postgres-peer-quick", dashboard["profiles"]["database"])
                 self.assertIn("web-peer-quick", dashboard["profiles"]["web"])
                 self.assertIn("sessions", dashboard)
+                self.assertEqual(dashboard["suitability"]["engine_version"], "suitability-v1")
+                self.assertFalse(dashboard["suitability"]["policy"]["missing_evidence_is_zero"])
+                with urllib.request.urlopen(f"{base}/suitability", timeout=5) as response:
+                    suitability = json.load(response)
+                self.assertEqual(suitability["requirements_version"], "workload-requirements-1.0")
                 request = urllib.request.Request(
                     f"{base}/runs/run_http/cancel",
                     data=b"{}",

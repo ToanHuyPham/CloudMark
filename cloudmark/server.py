@@ -45,6 +45,7 @@ from .profiles import (
 from .provider import detect_provider
 from .remote import RemoteError, remote_default_timeout, remote_total_steps, run_remote_benchmark, validate_remote_agent
 from .runner import RUNNER_VERSION, CancellationToken, JobContext, RunCancelled, RunTimedOut
+from .suitability import evaluate_suitability
 from .web_benchmark import (
     WebBenchmarkError,
     run_web,
@@ -89,12 +90,18 @@ class CloudMarkController:
         return {"inventory": self._inventory, "provider": self._provider}
 
     def dashboard(self) -> dict[str, Any]:
+        system = self.system()
         return {
             "version": __version__,
-            "system": self.system(),
+            "system": system,
             "runs": self.database.list_runs(10),
             "sessions": self.database.list_sessions(10),
             "profiles": all_profiles(),
+            "suitability": evaluate_suitability(
+                self.database.list_runs(2000),
+                system,
+                self.database.get_agent,
+            ),
             "policy": {
                 "cloud_to_controller_network_test": False,
                 "provider_internal_peer_test": True,
@@ -665,6 +672,15 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(200, self.controller.system(refresh=refresh))
             elif path == "/api/v1/dashboard":
                 self._send(200, self.controller.dashboard())
+            elif path == "/api/v1/suitability":
+                self._send(
+                    200,
+                    evaluate_suitability(
+                        self.controller.database.list_runs(2000),
+                        self.controller.system(),
+                        self.controller.database.get_agent,
+                    ),
+                )
             elif path == "/api/v1/profiles":
                 self._send(200, all_profiles())
             elif path == "/api/v1/runs":

@@ -250,11 +250,77 @@ type Session = {
 type Scenario = { id: string; label: string; status: "available" | "partial" | "roadmap"; primary: string; coverage: string };
 type AssessmentDomain = { id: string; label: string; status: "available" | "partial" | "roadmap"; summary: string };
 
+type SuitabilityEvidence = {
+  value: number;
+  unit: string;
+  source: string;
+  run_id?: string;
+  profile?: string;
+  methodology_version?: string;
+  observed_at?: string;
+  quality: string;
+  stale: boolean;
+};
+
+type SuitabilityCheck = {
+  key: string;
+  label: string;
+  status: "pass" | "fail" | "unavailable" | "stale";
+  operator: string;
+  threshold: number;
+  unit: string;
+  evidence?: SuitabilityEvidence | null;
+};
+
+type SuitabilityScenario = {
+  id: string;
+  label: string;
+  level: string;
+  verdict: "insufficient" | "below-requirement" | "conditional-fit" | "suitable";
+  coverage_percent: number;
+  measured_pass_percent?: number;
+  checks: SuitabilityCheck[];
+  blockers: string[];
+  limitations: string[];
+  next_actions: string[];
+  recommendation: string;
+  run_ids: string[];
+};
+
+type SuitabilityTarget = {
+  id: string;
+  label: string;
+  scope: string;
+  provider: { name: string; confidence: number; source: string; region?: string; zone?: string; instance_type?: string };
+  system: { os?: string; cpu?: string; logical_cores?: number; memory_bytes?: number };
+  evidence_summary: { accepted_runs: number; rejected_runs: { run_id: string; reason: string }[]; suites: string[]; freshness_days: number };
+  levels: Record<string, SuitabilityScenario[]>;
+  provider_assessment: {
+    status: "not-rated";
+    claim: string;
+    same_product_targets: number;
+    measurement_windows: number;
+    observed_suites: string[];
+    criteria: { label: string; satisfied: boolean }[];
+    gaps: string[];
+  };
+};
+
+type SuitabilityReport = {
+  engine_version: string;
+  requirements_version: string;
+  generated_at: string;
+  policy: { missing_evidence_is_zero: boolean; composite_provider_score: boolean; target_scoped: boolean; max_evidence_age_days: number };
+  levels: Record<string, { label: string; description: string }>;
+  targets: SuitabilityTarget[];
+};
+
 type Dashboard = {
   version: string;
   system: { inventory: Inventory; provider: Provider };
   runs: Run[];
   sessions: Session[];
+  suitability: SuitabilityReport;
   profiles: {
     compute: Record<string, { label: string; description: string; estimated_minutes: number; profile_version: string; methodology_version: string; jobs: { name: string }[] }>;
     memory: Record<string, { label: string; description: string; estimated_minutes: number; profile_version: string; methodology_version: string; jobs: { name: string }[] }>;
@@ -355,6 +421,25 @@ function coverageLabel(status: Scenario["status"]) {
   }[status];
 }
 
+function suitabilityVerdictLabel(verdict: SuitabilityScenario["verdict"]) {
+  return {
+    insufficient: "Insufficient evidence",
+    "below-requirement": "Below requirement",
+    "conditional-fit": "Conditional fit",
+    suitable: "Suitable",
+  }[verdict];
+}
+
+function formatRequirementValue(value: number, unit: string) {
+  if (unit === "B") return formatBytes(value);
+  if (unit === "B/s") return `${formatBytes(value)}/s`;
+  if (unit === "bit/s") return `${(value / 1_000_000).toFixed(value >= 1_000_000_000 ? 0 : 1)} Mb/s`;
+  if (unit === "boolean") return value === 1 ? "Verified" : "Not detected";
+  if (["ms", "%"].includes(unit)) return `${value.toFixed(2)} ${unit}`;
+  if (["IOPS", "TPS", "req/s", "events/s"].includes(unit)) return `${Math.round(value).toLocaleString()} ${unit}`;
+  return `${value.toLocaleString()} ${unit}`;
+}
+
 export default function Home() {
   const [dashboard, setDashboard] = useState<Dashboard | null>(null);
   const [apiState, setApiState] = useState<"loading" | "online" | "offline">("loading");
@@ -371,6 +456,9 @@ export default function Home() {
   const [selectedNetworkProfile, setSelectedNetworkProfile] = useState("network-peer-quick");
   const [selectedDatabaseProfile, setSelectedDatabaseProfile] = useState("postgres-peer-quick");
   const [selectedWebProfile, setSelectedWebProfile] = useState("web-peer-quick");
+  const [selectedSuitabilityTarget, setSelectedSuitabilityTarget] = useState("controller");
+  const [selectedRequirementLevel, setSelectedRequirementLevel] = useState("essential");
+  const [selectedSuitabilityScenario, setSelectedSuitabilityScenario] = useState("web-app");
   const [selectedExecutionTarget, setSelectedExecutionTarget] = useState("local");
   const [selectedSessionId, setSelectedSessionId] = useState("");
   const [pairing, setPairing] = useState<{ id: string; join_token: string; expires_at: string } | null>(null);
@@ -497,13 +585,6 @@ export default function Home() {
     const benchmarkEvidence = dashboard?.runs.some((run) => run.status === "completed") ? 18 : 0;
     return Math.min(100, inventoryEvidence + toolEvidence + providerEvidence + benchmarkEvidence);
   }, [dashboard?.runs, inventory, provider?.confidence]);
-  const scenarioCounts = useMemo(() => {
-    const scenarios = dashboard?.profiles.scenarios || [];
-    return {
-      available: scenarios.filter((scenario) => scenario.status === "available").length,
-      partial: scenarios.filter((scenario) => scenario.status === "partial").length,
-    };
-  }, [dashboard?.profiles.scenarios]);
   const domainCounts = useMemo(() => {
     const domains = dashboard?.profiles.domains || [];
     return {
@@ -513,6 +594,17 @@ export default function Home() {
       roadmap: domains.filter((domain) => domain.status === "roadmap").length,
     };
   }, [dashboard?.profiles.domains]);
+  const suitabilityTarget = dashboard?.suitability.targets.find((target) => target.id === selectedSuitabilityTarget)
+    || dashboard?.suitability.targets[0];
+  const suitabilityScenarios = suitabilityTarget?.levels[selectedRequirementLevel] || [];
+  const suitabilityScenario = suitabilityScenarios.find((scenario) => scenario.id === selectedSuitabilityScenario)
+    || suitabilityScenarios[0];
+  const suitabilityCounts = {
+    suitable: suitabilityScenarios.filter((scenario) => scenario.verdict === "suitable").length,
+    conditional: suitabilityScenarios.filter((scenario) => scenario.verdict === "conditional-fit").length,
+    below: suitabilityScenarios.filter((scenario) => scenario.verdict === "below-requirement").length,
+    insufficient: suitabilityScenarios.filter((scenario) => scenario.verdict === "insufficient").length,
+  };
 
   function runTargetName(run: Run) {
     const remoteId = run.request?.agent_id;
@@ -1244,15 +1336,51 @@ export default function Home() {
 
         {activeView === "scenarios" && (
           <div className="view scenarios-view">
-            <section className="section-intro"><div><span className="section-kicker">SUITABILITY COVERAGE</span><h2>Turn full-stack evidence into fit-for-purpose recommendations.</h2><p>Twelve use cases aggregate evidence from {domainCounts.total || 17} technical domains. CloudMark does not score a workload without an executor or the required evidence; {scenarioCounts.available} use case is currently available and {scenarioCounts.partial} have partial evidence.</p></div></section>
-            <section className="scenario-grid">
-              {dashboard?.profiles.scenarios.map((scenario, index) => (
-                <article key={scenario.id} className={`scenario-card ${scenario.status}`}>
-                  <div><span>{String(index + 1).padStart(2, "0")}</span><i className={scenario.status} /></div>
-                  <h3>{scenario.label}</h3><p>{scenario.coverage}</p>
-                  <footer><span>{coverageLabel(scenario.status)}</span><strong>{scenario.primary}</strong></footer>
-                </article>
+            <section className="section-intro">
+              <div><span className="section-kicker">EVIDENCE-GATED SUITABILITY</span><h2>Classify one observed target against explicit workload requirements.</h2><p>CloudMark evaluates {domainCounts.total || 17} technical domains without converting missing evidence into zero. Every check retains its Run ID, profile, methodology, observation time, and evidence status.</p></div>
+              <div className="runner-actions suitability-selectors">
+                <label><span>TARGET</span><select value={suitabilityTarget?.id || "controller"} onChange={(event) => setSelectedSuitabilityTarget(event.target.value)}>{dashboard?.suitability.targets.map((target) => <option key={target.id} value={target.id}>{target.label} · {target.provider.name}</option>)}</select></label>
+                <label><span>REQUIREMENT LEVEL</span><select value={selectedRequirementLevel} onChange={(event) => setSelectedRequirementLevel(event.target.value)}>{Object.entries(dashboard?.suitability.levels || {}).map(([id, level]) => <option key={id} value={id}>{level.label}</option>)}</select></label>
+              </div>
+            </section>
+            <section className="suitability-summary-grid">
+              <article className="panel"><span>TARGET SCOPE</span><strong>{suitabilityTarget?.scope === "single-target-observation" ? "Single target" : "Unavailable"}</strong><small>{suitabilityTarget?.provider.name || "Unknown provider"} · {suitabilityTarget?.provider.instance_type || "SKU unavailable"}</small></article>
+              <article className="panel"><span>ACCEPTED EVIDENCE</span><strong>{suitabilityTarget?.evidence_summary.accepted_runs || 0} runs</strong><small>{suitabilityTarget?.evidence_summary.suites.join(" · ") || "No completed suite"}</small></article>
+              <article className="panel conditional"><span>CONDITIONAL FITS</span><strong>{suitabilityCounts.conditional}</strong><small>{dashboard?.suitability.levels[selectedRequirementLevel]?.label || "Selected"} requirement contract</small></article>
+              <article className="panel"><span>PROVIDER CLAIM</span><strong>Not rated</strong><small>{suitabilityTarget?.provider_assessment.claim || "Provider-wide evidence is unavailable."}</small></article>
+            </section>
+            <section className="scenario-evaluation-grid" aria-label="Workload suitability classifications">
+              {suitabilityScenarios.map((scenario, index) => (
+                <button key={scenario.id} className={`scenario-evaluation-card ${scenario.verdict} ${suitabilityScenario?.id === scenario.id ? "selected" : ""}`} onClick={() => setSelectedSuitabilityScenario(scenario.id)}>
+                  <div><span>{String(index + 1).padStart(2, "0")}</span><i /></div>
+                  <h3>{scenario.label}</h3>
+                  <p>{suitabilityVerdictLabel(scenario.verdict)}</p>
+                  <footer><span>{scenario.coverage_percent.toFixed(0)}% evidence coverage</span><strong>{scenario.measured_pass_percent == null ? "UNMEASURED" : `${scenario.measured_pass_percent.toFixed(0)}% measured gates`}</strong></footer>
+                </button>
               ))}
+            </section>
+            {suitabilityScenario && <section className={`panel suitability-detail ${suitabilityScenario.verdict}`}>
+              <div className="panel-head"><div><span className="section-kicker">{dashboard?.suitability.requirements_version} / {selectedRequirementLevel.toUpperCase()}</span><h3>{suitabilityScenario.label}</h3></div><span className={`suitability-verdict ${suitabilityScenario.verdict}`}>{suitabilityVerdictLabel(suitabilityScenario.verdict)}</span></div>
+              <p className="suitability-recommendation">{suitabilityScenario.recommendation}</p>
+              <div className="suitability-checks">
+                <div className="suitability-check-head"><span>REQUIREMENT</span><span>OBSERVED</span><span>GATE</span><span>STATUS / SOURCE</span></div>
+                {suitabilityScenario.checks.map((check) => <div className={`suitability-check ${check.status}`} key={check.key}>
+                  <strong>{check.label}</strong>
+                  <span>{check.evidence ? formatRequirementValue(check.evidence.value, check.unit) : check.status === "stale" ? "Stale evidence" : "Unavailable"}</span>
+                  <span>{check.operator} {formatRequirementValue(check.threshold, check.unit)}</span>
+                  <span><i>{check.status}</i><small>{check.evidence?.run_id ? `${check.evidence.run_id} · ${check.evidence.profile}` : check.evidence?.source || "Required executor has not produced evidence"}</small></span>
+                </div>)}
+              </div>
+              <div className="suitability-guidance-grid">
+                <article><span>BLOCKING EVIDENCE</span>{suitabilityScenario.blockers.length ? <ul>{suitabilityScenario.blockers.map((item) => <li key={item}>{item}</li>)}</ul> : <p>No unimplemented hard blocker; all listed metric gates still require valid evidence.</p>}</article>
+                <article><span>INTERPRETATION LIMITS</span>{suitabilityScenario.limitations.length ? <ul>{suitabilityScenario.limitations.map((item) => <li key={item}>{item}</li>)}</ul> : <p>No additional limitation is registered for this methodology.</p>}</article>
+                <article><span>NEXT EVIDENCE</span><ul>{suitabilityScenario.next_actions.map((item) => <li key={item}>{item}</li>)}</ul></article>
+              </div>
+            </section>}
+            <section className="panel provider-readiness-panel">
+              <div className="panel-head"><div><span className="section-kicker">PROVIDER EVALUATION READINESS</span><h3>{suitabilityTarget?.provider.name || "Unknown provider"}</h3></div><span className="run-id">INSTANCE OBSERVATION ONLY</span></div>
+              <div className="provider-readiness-body"><div><strong>{suitabilityTarget?.provider_assessment.same_product_targets || 0}</strong><small>same-product targets</small></div><div><strong>{suitabilityTarget?.provider_assessment.measurement_windows || 0}</strong><small>measurement windows</small></div><div className="provider-criteria">{suitabilityTarget?.provider_assessment.criteria.map((criterion) => <p key={criterion.label} className={criterion.satisfied ? "met" : "missing"}><i>{criterion.satisfied ? "✓" : "—"}</i><span>{criterion.label}</span></p>)}</div></div>
+              <p className="method-note">CloudMark will not publish a provider-wide score from one machine or one time window. Security, reliability, control-plane, cost, repeated-window, and same-SKU evidence remain independent gates.</p>
             </section>
           </div>
         )}
