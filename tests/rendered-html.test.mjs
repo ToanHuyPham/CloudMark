@@ -56,6 +56,9 @@ test("keeps production metadata and project policy explicit", async () => {
   assert.match(page, /COMPARISON CONTRACT/);
   assert.match(page, /Provider Comparison/);
   assert.match(page, /CloudMark does not rank providers/);
+  assert.match(page, /profiles\.database\?\.\[selectedDatabaseProfile\]/);
+  assert.match(page, /profiles\.web\?\.\[selectedWebProfile\]/);
+  assert.match(page, /suitability\?\.targets/);
   assert.match(page, /missing_evidence_is_zero/);
   assert.match(page, /Conditional fit/);
   assert.match(styles, /@media \(max-width: 900px\)/);

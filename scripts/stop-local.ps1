@@ -18,9 +18,10 @@ if ($record.repository_root -ne $repoRoot) {
 }
 
 foreach ($entry in @($record.dashboard, $record.api)) {
-    $process = Get-Process -Id $entry.pid -ErrorAction SilentlyContinue
+    $processId = [int]$entry.pid
+    $process = Get-Process -Id $processId -ErrorAction SilentlyContinue
     if (-not $process) {
-        Write-Output "PID $($entry.pid) is no longer running."
+        Write-Output "PID $processId is no longer running."
         continue
     }
 
@@ -31,11 +32,18 @@ foreach ($entry in @($record.dashboard, $record.api)) {
         ""
     }
     if ($actualExecutable -ne $expectedExecutable) {
-        throw "PID $($entry.pid) does not match the recorded executable. Nothing further was stopped."
+        throw "PID $processId does not match the recorded executable. Nothing further was stopped."
     }
 
-    Stop-Process -Id $entry.pid
-    Write-Output "Stopped PID $($entry.pid)."
+    try {
+        $process.Kill()
+        if (-not $process.WaitForExit(10000)) {
+            throw "PID $processId did not exit within 10 seconds."
+        }
+    } catch [System.InvalidOperationException] {
+        # The verified process exited between inspection and termination.
+    }
+    Write-Output "Stopped PID $processId."
 }
 
 Remove-Item -LiteralPath $processRecord

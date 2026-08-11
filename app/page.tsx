@@ -386,7 +386,7 @@ type Dashboard = {
   system: { inventory: Inventory; provider: Provider };
   runs: Run[];
   sessions: Session[];
-  suitability: SuitabilityReport;
+  suitability?: SuitabilityReport;
   profiles: {
     compute: Record<string, { label: string; description: string; estimated_minutes: number; profile_version: string; methodology_version: string; jobs: { name: string }[] }>;
     memory: Record<string, { label: string; description: string; estimated_minutes: number; profile_version: string; methodology_version: string; jobs: { name: string }[] }>;
@@ -402,7 +402,7 @@ type Dashboard = {
       udp_rate_fractions?: number[];
       bidirectional_streams?: number;
     }>;
-    database: Record<string, {
+    database?: Record<string, {
       label: string;
       description: string;
       estimated_minutes: number;
@@ -422,7 +422,7 @@ type Dashboard = {
         connect_per_transaction?: boolean;
       }[];
     }>;
-    web: Record<string, {
+    web?: Record<string, {
       label: string;
       description: string;
       estimated_minutes: number;
@@ -606,7 +606,7 @@ export default function Home() {
     (run) => run.suite === "database" && run.status === "completed" && run.result?.database_measurements?.length,
   );
   const databaseMeasurements = latestDatabase?.result?.database_measurements || [];
-  const databaseProfile = dashboard?.profiles.database[selectedDatabaseProfile];
+  const databaseProfile = dashboard?.profiles.database?.[selectedDatabaseProfile];
   const maxDatabaseTps = Math.max(
     1,
     ...databaseMeasurements.map((item) => item.metrics.transactions_per_second || 0),
@@ -618,7 +618,7 @@ export default function Home() {
     (run) => run.suite === "web" && run.status === "completed" && run.result?.web_measurements?.length,
   );
   const webMeasurements = latestWeb?.result?.web_measurements || [];
-  const webProfile = dashboard?.profiles.web[selectedWebProfile];
+  const webProfile = dashboard?.profiles.web?.[selectedWebProfile];
   const maxWebRps = Math.max(
     1,
     ...webMeasurements.map((item) => item.metrics.requests_per_second || 0),
@@ -661,8 +661,8 @@ export default function Home() {
       roadmap: domains.filter((domain) => domain.status === "roadmap").length,
     };
   }, [dashboard?.profiles.domains]);
-  const suitabilityTarget = dashboard?.suitability.targets.find((target) => target.id === selectedSuitabilityTarget)
-    || dashboard?.suitability.targets[0];
+  const suitabilityTarget = dashboard?.suitability?.targets.find((target) => target.id === selectedSuitabilityTarget)
+    || dashboard?.suitability?.targets[0];
   const suitabilityScenarios = suitabilityTarget?.levels[selectedRequirementLevel] || [];
   const suitabilityScenario = suitabilityScenarios.find((scenario) => scenario.id === selectedSuitabilityScenario)
     || suitabilityScenarios[0];
@@ -672,7 +672,7 @@ export default function Home() {
     below: suitabilityScenarios.filter((scenario) => scenario.verdict === "below-requirement").length,
     insufficient: suitabilityScenarios.filter((scenario) => scenario.verdict === "insufficient").length,
   };
-  const providerObservations = dashboard?.suitability.provider_observations;
+  const providerObservations = dashboard?.suitability?.provider_observations;
   const providerGroups = providerObservations?.groups || [];
   const providerContracts = Array.from(new Map(
     providerGroups.flatMap((group) => group.metric_cohorts).map((metric) => [metric.contract_id, metric]),
@@ -1418,14 +1418,14 @@ export default function Home() {
             <section className="section-intro">
               <div><span className="section-kicker">EVIDENCE-GATED SUITABILITY</span><h2>Classify one observed target against explicit workload requirements.</h2><p>CloudMark evaluates {domainCounts.total || 17} technical domains without converting missing evidence into zero. Every check retains its Run ID, profile, methodology, observation time, and evidence status.</p></div>
               <div className="runner-actions suitability-selectors">
-                <label><span>TARGET</span><select value={suitabilityTarget?.id || "controller"} onChange={(event) => setSelectedSuitabilityTarget(event.target.value)}>{dashboard?.suitability.targets.map((target) => <option key={target.id} value={target.id}>{target.label} · {target.provider.name}</option>)}</select></label>
-                <label><span>REQUIREMENT LEVEL</span><select value={selectedRequirementLevel} onChange={(event) => setSelectedRequirementLevel(event.target.value)}>{Object.entries(dashboard?.suitability.levels || {}).map(([id, level]) => <option key={id} value={id}>{level.label}</option>)}</select></label>
+                <label><span>TARGET</span><select value={suitabilityTarget?.id || "controller"} onChange={(event) => setSelectedSuitabilityTarget(event.target.value)}>{dashboard?.suitability?.targets.map((target) => <option key={target.id} value={target.id}>{target.label} · {target.provider.name}</option>)}</select></label>
+                <label><span>REQUIREMENT LEVEL</span><select value={selectedRequirementLevel} onChange={(event) => setSelectedRequirementLevel(event.target.value)}>{Object.entries(dashboard?.suitability?.levels || {}).map(([id, level]) => <option key={id} value={id}>{level.label}</option>)}</select></label>
               </div>
             </section>
             <section className="suitability-summary-grid">
               <article className="panel"><span>TARGET SCOPE</span><strong>{suitabilityTarget?.scope === "single-target-observation" ? "Single target" : "Unavailable"}</strong><small>{suitabilityTarget?.provider.name || "Unknown provider"} · {suitabilityTarget?.provider.instance_type || "SKU unavailable"}</small></article>
               <article className="panel"><span>ACCEPTED EVIDENCE</span><strong>{suitabilityTarget?.evidence_summary.accepted_runs || 0} runs</strong><small>{suitabilityTarget?.evidence_summary.suites.join(" · ") || "No completed suite"}</small></article>
-              <article className="panel conditional"><span>CONDITIONAL FITS</span><strong>{suitabilityCounts.conditional}</strong><small>{dashboard?.suitability.levels[selectedRequirementLevel]?.label || "Selected"} requirement contract</small></article>
+              <article className="panel conditional"><span>CONDITIONAL FITS</span><strong>{suitabilityCounts.conditional}</strong><small>{dashboard?.suitability?.levels[selectedRequirementLevel]?.label || "Selected"} requirement contract</small></article>
               <article className="panel"><span>PROVIDER CLAIM</span><strong>Not rated</strong><small>{suitabilityTarget?.provider_assessment.claim || "Provider-wide evidence is unavailable."}</small></article>
             </section>
             <section className="scenario-evaluation-grid" aria-label="Workload suitability classifications">
@@ -1439,7 +1439,7 @@ export default function Home() {
               ))}
             </section>
             {suitabilityScenario && <section className={`panel suitability-detail ${suitabilityScenario.verdict}`}>
-              <div className="panel-head"><div><span className="section-kicker">{dashboard?.suitability.requirements_version} / {selectedRequirementLevel.toUpperCase()}</span><h3>{suitabilityScenario.label}</h3></div><span className={`suitability-verdict ${suitabilityScenario.verdict}`}>{suitabilityVerdictLabel(suitabilityScenario.verdict)}</span></div>
+              <div className="panel-head"><div><span className="section-kicker">{dashboard?.suitability?.requirements_version} / {selectedRequirementLevel.toUpperCase()}</span><h3>{suitabilityScenario.label}</h3></div><span className={`suitability-verdict ${suitabilityScenario.verdict}`}>{suitabilityVerdictLabel(suitabilityScenario.verdict)}</span></div>
               <p className="suitability-recommendation">{suitabilityScenario.recommendation}</p>
               <div className="suitability-checks">
                 <div className="suitability-check-head"><span>REQUIREMENT</span><span>OBSERVED</span><span>GATE</span><span>STATUS / SOURCE</span></div>
