@@ -1,6 +1,6 @@
 # CloudMark current state
 
-Last updated: 2026-08-11
+Last updated: 2026-08-12
 
 ## Repository baseline
 
@@ -53,11 +53,11 @@ baseline is still the repository head.
   converted to zero and provider status remains `not-rated`; the milestone
   passes 70 Python tests, 3 rendered-dashboard tests, dashboard lint, and the
   production build without starting provider load;
-- `provider-observations-v1` exact provider/SKU/region/OS cohorts with strict
-  profile/methodology compatibility, UTC-day windows, network Run
+- `provider-observations-v2` exact provider/SKU/region/OS/operator-declared
+  topology cohorts with strict profile/methodology/topology compatibility, UTC-day windows, network Run
   de-duplication, median/P10/P90/best/worst/spread statistics, and a guarded
   nine-sample/three-target/three-window comparable state; the milestone passes
-  72 Python tests, 3 rendered-dashboard tests, dashboard lint, and the
+  80 Python tests, 3 rendered-dashboard tests, dashboard lint, and the
   production build without starting provider load;
 - repository-level Codex guidance, durable handoff documentation, consistent
   SQLite runtime snapshots, guarded secret backup, recoverable restore, and

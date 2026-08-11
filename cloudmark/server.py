@@ -55,6 +55,16 @@ from .web_benchmark import (
 )
 
 
+PAIRING_TOPOLOGY_SCOPES = {
+    "undeclared",
+    "same-host",
+    "same-zone",
+    "cross-zone",
+    "cross-region",
+    "public-internet",
+}
+
+
 def _json_bytes(value: Any) -> bytes:
     return json.dumps(value, ensure_ascii=False, indent=2).encode("utf-8")
 
@@ -469,17 +479,39 @@ class CloudMarkController:
             token.cancel()
         return self.database.get_run(run_id) or run
 
-    def create_session(self, label: str) -> dict[str, Any]:
+    @staticmethod
+    def _pairing_topology(value: Any) -> dict[str, str]:
+        topology = value if isinstance(value, dict) else {}
+        scope = str(topology.get("scope") or "undeclared")
+        if scope not in PAIRING_TOPOLOGY_SCOPES:
+            raise ValueError("Unsupported pairing topology scope.")
+        source = str(topology.get("source") or ("unavailable" if scope == "undeclared" else "operator-declared"))
+        if source not in {"unavailable", "operator-declared"}:
+            raise ValueError("Unsupported pairing topology evidence source.")
+        if scope == "undeclared" and source != "unavailable":
+            raise ValueError("Undeclared topology must use the unavailable evidence source.")
+        if scope != "undeclared" and source != "operator-declared":
+            raise ValueError("A declared topology scope must identify operator-declared evidence.")
+        return {"scope": scope, "source": source}
+
+    def create_session(self, label: str, topology: Any = None) -> dict[str, Any]:
         session_id = f"session_{uuid.uuid4().hex[:12]}"
         join_token = secrets.token_urlsafe(24)
         expires = datetime.now(timezone.utc) + timedelta(minutes=30)
+        topology_evidence = self._pairing_topology(topology)
         self.database.create_session(
             session_id,
             label or "Provider internal test",
             hashlib.sha256(join_token.encode()).hexdigest(),
             expires.isoformat(),
+            topology_evidence,
         )
-        return {"id": session_id, "join_token": join_token, "expires_at": expires.isoformat()}
+        return {
+            "id": session_id,
+            "join_token": join_token,
+            "expires_at": expires.isoformat(),
+            "topology": topology_evidence,
+        }
 
     def join_session(self, session_id: str, request: dict[str, Any]) -> dict[str, Any]:
         session = self.database.get_session(session_id)
@@ -739,7 +771,13 @@ class Handler(BaseHTTPRequestHandler):
                 run_id = path.split("/")[-2]
                 self._send(202, self.controller.cancel_run(run_id))
             elif path == "/api/v1/sessions":
-                self._send(201, self.controller.create_session(str(body.get("label", ""))))
+                self._send(
+                    201,
+                    self.controller.create_session(
+                        str(body.get("label", "")),
+                        body.get("topology"),
+                    ),
+                )
             else:
                 self._send(404, {"error": "Not found"})
         except PermissionError as exc:

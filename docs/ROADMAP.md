@@ -101,7 +101,8 @@ Required topology: Controller + Agent A + Agent B.
 - Generator CPU and stream-scaling validity gate — available in `network-v3`;
 - topology-aware practical ceiling and bufferbloat classification — planned;
 - congestion control and NIC-offload evidence — planned;
-- separate same-zone, cross-zone, and cross-region labels;
+- operator-declared same-host, same-zone, cross-zone, cross-region, and
+  public-Internet labels — available; independent topology verification remains planned;
 - short-burst and sustained runs;
 - mTLS enrollment and policy-configurable rate limits — planned.
 
@@ -164,8 +165,8 @@ Demanding hard gates to all 12 use cases, preserves per-check run provenance,
 and reports missing/stale evidence, blockers, limitations, and next actions.
 It deliberately does not publish a provider rating.
 
-`provider-observations-v1` is also available at development head. It reports
-exact provider/SKU/region/OS and profile/methodology cohorts with descriptive
+`provider-observations-v2` is also available at development head. It reports
+exact provider/SKU/region/OS/topology and profile/methodology cohorts with descriptive
 median, P10/P90, actual best/worst, and spread. Nine samples across three
 targets and three UTC-day windows are required before a metric is marked
 comparable; this remains distinct from a provider rating.

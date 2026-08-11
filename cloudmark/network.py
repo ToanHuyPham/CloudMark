@@ -604,7 +604,11 @@ def run_network(
         "profile": profile_name,
         "profile_version": profile["profile_version"],
         "methodology_version": profile["methodology_version"],
-        "session": {"id": session["id"], "label": session["label"]},
+        "session": {
+            "id": session["id"],
+            "label": session["label"],
+            "topology": session.get("topology") or {"scope": "undeclared", "source": "unavailable"},
+        },
         "policy": {
             "controller_in_data_path": False,
             "arbitrary_destination_allowed": False,

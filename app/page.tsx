@@ -4,6 +4,18 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 
 const API = "http://127.0.0.1:8787/api/v1";
 
+type TopologyScope = "undeclared" | "same-host" | "same-zone" | "cross-zone" | "cross-region" | "public-internet";
+type PairTopology = { scope: TopologyScope; source: "unavailable" | "operator-declared" };
+
+const TOPOLOGY_OPTIONS: { value: TopologyScope; label: string }[] = [
+  { value: "undeclared", label: "Not declared" },
+  { value: "same-host", label: "Same physical host" },
+  { value: "same-zone", label: "Same zone" },
+  { value: "cross-zone", label: "Cross-zone" },
+  { value: "cross-region", label: "Cross-region" },
+  { value: "public-internet", label: "Public Internet" },
+];
+
 type Disk = {
   name: string;
   filesystem?: string;
@@ -272,6 +284,7 @@ type Session = {
   status: string;
   created_at: string;
   expires_at: string;
+  topology: PairTopology;
   agents: Agent[];
 };
 
@@ -343,6 +356,7 @@ type ProviderMetricCohort = {
   unit: string;
   profile: string;
   methodology_version: string;
+  topology_scope: TopologyScope | "single-target";
   status: "comparable" | "observational";
   reasons: string[];
   sample_count: number;
@@ -390,6 +404,7 @@ type ProviderObservations = {
   minimum_comparable_sampling: { samples: number; targets: number; windows: number };
   policy: {
     exact_profile_and_methodology: boolean;
+    exact_pair_topology: boolean;
     cross_sku_aggregation: boolean;
     cross_region_aggregation: boolean;
     cross_os_aggregation: boolean;
@@ -556,7 +571,13 @@ export default function Home() {
   const [selectedProviderContract, setSelectedProviderContract] = useState("");
   const [selectedExecutionTarget, setSelectedExecutionTarget] = useState("local");
   const [selectedSessionId, setSelectedSessionId] = useState("");
-  const [pairing, setPairing] = useState<{ id: string; join_token: string; expires_at: string } | null>(null);
+  const [selectedTopologyScope, setSelectedTopologyScope] = useState<TopologyScope>("undeclared");
+  const [pairing, setPairing] = useState<{
+    id: string;
+    join_token: string;
+    expires_at: string;
+    topology: PairTopology;
+  } | null>(null);
 
   const loadDashboard = useCallback(async () => {
     try {
@@ -804,13 +825,23 @@ export default function Home() {
       const response = await fetch(`${API}/sessions`, {
         method: "POST",
         headers: { "Content-Type": "application/json", "X-CloudMark-Token": token },
-        body: JSON.stringify({ label: "Provider paired assessment" }),
+        body: JSON.stringify({
+          label: "Provider paired assessment",
+          topology: {
+            scope: selectedTopologyScope,
+            source: selectedTopologyScope === "undeclared" ? "unavailable" : "operator-declared",
+          },
+        }),
       });
       const payload = await response.json();
       if (!response.ok) throw new Error(payload.error || "Unable to create a pairing session");
       setPairing(payload);
       setSelectedSessionId(payload.id);
-      setNotice("A 30-minute pairing session is ready for two provider Agents.");
+      setNotice(
+        selectedTopologyScope === "undeclared"
+          ? "A 30-minute pairing session is ready. Its results remain observational until topology is declared."
+          : `A 30-minute ${selectedTopologyScope} pairing session is ready for two provider Agents.`,
+      );
       await loadDashboard();
     } catch (error) {
       setNotice(error instanceof Error ? error.message : "Unable to create the pairing session");
@@ -1320,7 +1351,7 @@ export default function Home() {
 
         {activeView === "network" && (
           <div className="view network-view">
-            <section className="section-intro"><div><span className="section-kicker">DISTRIBUTED ASSESSMENT</span><h2>Keep the control path separate from benchmark data traffic.</h2><p>The Controller schedules guarded tasks and stores evidence. TCP, adaptive-rate UDP, and ICMP measurements flow directly between the two provider Agents.</p></div><div className="runner-actions"><label><span>PROFILE</span><select value={selectedNetworkProfile} onChange={(event) => setSelectedNetworkProfile(event.target.value)} disabled={Boolean(activeNetwork)}>{Object.entries(dashboard?.profiles.network || {}).map(([id, profile]) => <option key={id} value={id}>{profile.label}</option>)}</select></label><button className="button primary" onClick={createPairing} disabled={busy}>New session</button></div></section>
+            <section className="section-intro"><div><span className="section-kicker">DISTRIBUTED ASSESSMENT</span><h2>Keep the control path separate from benchmark data traffic.</h2><p>The Controller schedules guarded tasks and stores evidence. TCP, adaptive-rate UDP, and ICMP measurements flow directly between the two provider Agents.</p></div><div className="runner-actions"><label><span>PROFILE</span><select value={selectedNetworkProfile} onChange={(event) => setSelectedNetworkProfile(event.target.value)} disabled={Boolean(activeNetwork)}>{Object.entries(dashboard?.profiles.network || {}).map(([id, profile]) => <option key={id} value={id}>{profile.label}</option>)}</select></label><label><span>PAIR TOPOLOGY</span><select value={selectedTopologyScope} onChange={(event) => setSelectedTopologyScope(event.target.value as TopologyScope)}>{TOPOLOGY_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label><button className="button primary" onClick={createPairing} disabled={busy}>New session</button></div></section>
             <section className="topology-panel panel">
               <div className="topology-node controller"><span>LOCAL</span><strong>Controller</strong><small>Dashboard + API</small></div>
               <div className="control-line"><span>HTTPS / VPN control</span></div>
@@ -1332,10 +1363,10 @@ export default function Home() {
               </div>
               <div className="blocked-line"><span>×</span><p><strong>Cloud → controller measurement</strong><small>Disabled by project policy</small></p></div>
             </section>
-            {pairing && <section className="pairing-card"><div><span>SHORT-LIVED JOIN CREDENTIAL</span><strong>{pairing.id}</strong><small>Expires {new Date(pairing.expires_at).toLocaleTimeString("en-US")}</small></div><code>{pairing.join_token}</code></section>}
+            {pairing && <section className="pairing-card"><div><span>SHORT-LIVED JOIN CREDENTIAL</span><strong>{pairing.id}</strong><small>{pairing.topology.scope} · {pairing.topology.source} · expires {new Date(pairing.expires_at).toLocaleTimeString("en-US")}</small></div><code>{pairing.join_token}</code></section>}
             {pairing && <section className="panel agent-commands"><div><span className="section-kicker">RUN ON PROVIDER VMS</span><h3>Start one persistent worker on each clean machine</h3></div><code>cloudmark agent --controller https://CONTROLLER --session {pairing.id} --token {pairing.join_token} --role target --advertise-address VM_A_IP</code><code>cloudmark agent --controller https://CONTROLLER --session {pairing.id} --token {pairing.join_token} --role generator --advertise-address VM_B_IP</code><p>Use <strong>--allow-http</strong> only when Controller access is restricted to a trusted private management network.</p></section>}
             <section className="panel session-panel">
-              <div className="panel-head"><div><span className="section-kicker">AGENT CONTROL PLANE</span><h3>Pairing readiness</h3></div><label className="compact-select"><span>SESSION</span><select value={selectedSession?.id || ""} onChange={(event) => setSelectedSessionId(event.target.value)}>{dashboard?.sessions.map((session) => <option key={session.id} value={session.id}>{session.label} · {session.status}</option>)}</select></label></div>
+              <div className="panel-head"><div><span className="section-kicker">AGENT CONTROL PLANE</span><h3>Pairing readiness</h3></div><label className="compact-select"><span>SESSION</span><select value={selectedSession?.id || ""} onChange={(event) => setSelectedSessionId(event.target.value)}>{dashboard?.sessions.map((session) => <option key={session.id} value={session.id}>{session.label} · {session.topology.scope} · {session.status}</option>)}</select></label></div>
               {selectedSession ? <div className="agent-roster">{["target", "generator"].map((role) => { const agent = selectedSession.agents.find((item) => item.role === role); return <article key={role} className={agent ? "connected" : "waiting"}><span>{role.toUpperCase()}</span><strong>{agent?.name || `Waiting for ${role}`}</strong><small>{agent ? `${agent.endpoint.address || "No advertised IP"} · ${agent.system.inventory?.capabilities?.iperf3 ? "iperf3 ready" : "iperf3 missing"}` : "Join command has not connected"}</small></article>; })}</div> : <div className="empty-row">Create a session, then connect both provider agents.</div>}
               <div className="session-actions"><p><strong>{selectedSession?.status === "ready" ? "Ready to measure" : "Two agents required"}</strong><small>Only allow-listed iperf3 ports, capped UDP rates, and bounded peer ping tasks can be dispatched.</small></p><button className="button primary" onClick={startNetwork} disabled={busy || Boolean(activeNetwork) || selectedSession?.status !== "ready"}>Run network assessment</button></div>
             </section>
@@ -1380,7 +1411,7 @@ export default function Home() {
           <div className="view database-view">
             <section className="section-intro">
               <div><span className="section-kicker">TWO-AGENT DATABASE ASSESSMENT</span><h2>Measure the database service, storage path, CPU, and provider network together.</h2><p>CloudMark creates an isolated PostgreSQL cluster on the Target and dispatches exact pgbench workloads from the Generator. The Controller stores evidence but never carries transaction traffic.</p></div>
-              <div className="runner-actions"><label><span>PROFILE</span><select value={selectedDatabaseProfile} onChange={(event) => setSelectedDatabaseProfile(event.target.value)} disabled={Boolean(activeDatabase)}>{Object.entries(dashboard?.profiles.database || {}).map(([id, profile]) => <option key={id} value={id}>{profile.label} · ≈ {profile.estimated_minutes} min</option>)}</select></label><button className="button primary" onClick={createPairing} disabled={busy}>New session</button></div>
+              <div className="runner-actions"><label><span>PROFILE</span><select value={selectedDatabaseProfile} onChange={(event) => setSelectedDatabaseProfile(event.target.value)} disabled={Boolean(activeDatabase)}>{Object.entries(dashboard?.profiles.database || {}).map(([id, profile]) => <option key={id} value={id}>{profile.label} · ≈ {profile.estimated_minutes} min</option>)}</select></label><label><span>PAIR TOPOLOGY</span><select value={selectedTopologyScope} onChange={(event) => setSelectedTopologyScope(event.target.value as TopologyScope)}>{TOPOLOGY_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label><button className="button primary" onClick={createPairing} disabled={busy}>New session</button></div>
             </section>
             <section className="database-contract-grid">
               <article className="panel database-profile-card">
@@ -1394,10 +1425,10 @@ export default function Home() {
                 <p>Transaction tail percentiles are not claimed in PostgreSQL v1; average latency, failures, TPS, and one-second progress are retained.</p>
               </article>
             </section>
-            {pairing && <section className="pairing-card"><div><span>SHORT-LIVED JOIN CREDENTIAL</span><strong>{pairing.id}</strong><small>Expires {new Date(pairing.expires_at).toLocaleTimeString("en-US")}</small></div><code>{pairing.join_token}</code></section>}
+            {pairing && <section className="pairing-card"><div><span>SHORT-LIVED JOIN CREDENTIAL</span><strong>{pairing.id}</strong><small>{pairing.topology.scope} · {pairing.topology.source} · expires {new Date(pairing.expires_at).toLocaleTimeString("en-US")}</small></div><code>{pairing.join_token}</code></section>}
             {pairing && <section className="panel agent-commands"><div><span className="section-kicker">RUN ON PROVIDER VMS</span><h3>Target hosts PostgreSQL; Generator runs pgbench</h3></div><code>cloudmark agent --controller https://CONTROLLER --session {pairing.id} --token {pairing.join_token} --role target --advertise-address VM_A_IP</code><code>cloudmark agent --controller https://CONTROLLER --session {pairing.id} --token {pairing.join_token} --role generator --advertise-address VM_B_IP</code><p>Install the <strong>database</strong> pack on both machines before starting their Agents.</p></section>}
             <section className="panel session-panel">
-              <div className="panel-head"><div><span className="section-kicker">PAIRED EXECUTION</span><h3>Database readiness</h3></div><label className="compact-select"><span>SESSION</span><select value={selectedSession?.id || ""} onChange={(event) => setSelectedSessionId(event.target.value)}>{dashboard?.sessions.map((session) => <option key={session.id} value={session.id}>{session.label} · {session.status}</option>)}</select></label></div>
+              <div className="panel-head"><div><span className="section-kicker">PAIRED EXECUTION</span><h3>Database readiness</h3></div><label className="compact-select"><span>SESSION</span><select value={selectedSession?.id || ""} onChange={(event) => setSelectedSessionId(event.target.value)}>{dashboard?.sessions.map((session) => <option key={session.id} value={session.id}>{session.label} · {session.topology.scope} · {session.status}</option>)}</select></label></div>
               {selectedSession ? <div className="agent-roster">{["target", "generator"].map((role) => { const agent = selectedSession.agents.find((item) => item.role === role); const ready = role === "target" ? Boolean(agent?.system.inventory?.capabilities?.postgres && agent?.system.inventory?.capabilities?.initdb && agent?.system.inventory?.capabilities?.pgbench && agent?.system.inventory?.capabilities?.pg_isready) : Boolean(agent?.system.inventory?.capabilities?.pgbench); return <article key={role} className={agent && ready ? "connected" : "waiting"}><span>{role.toUpperCase()}</span><strong>{agent?.name || `Waiting for ${role}`}</strong><small>{agent ? `${agent.endpoint.address || "No advertised IP"} · ${ready ? "database tools ready" : "database pack required"}` : "Join command has not connected"}</small></article>; })}</div> : <div className="empty-row">Create a session, then connect both provider Agents.</div>}
               <div className="session-actions"><p><strong>{selectedSession?.status === "ready" ? "Pair connected" : "Two Agents required"}</strong><small>The Controller validates PostgreSQL capabilities again before accepting the run.</small></p><button className="button primary" onClick={startDatabase} disabled={busy || Boolean(activeDatabase) || selectedSession?.status !== "ready"}>Run database assessment</button></div>
             </section>
@@ -1417,7 +1448,7 @@ export default function Home() {
           <div className="view web-view">
             <section className="section-intro">
               <div><span className="section-kicker">TWO-AGENT WEB, API & TLS ASSESSMENT</span><h2>Measure serving capacity, tail latency, TLS cost, and static transfer without using the Controller as a traffic endpoint.</h2><p>CloudMark starts an isolated Nginx service on the Target and runs bounded ApacheBench jobs from the Generator. Only fixed CloudMark endpoints, ports, and concurrency levels are accepted.</p></div>
-              <div className="runner-actions"><label><span>PROFILE</span><select value={selectedWebProfile} onChange={(event) => setSelectedWebProfile(event.target.value)} disabled={Boolean(activeWeb)}>{Object.entries(dashboard?.profiles.web || {}).map(([id, profile]) => <option key={id} value={id}>{profile.label} · ≈ {profile.estimated_minutes} min</option>)}</select></label><button className="button primary" onClick={createPairing} disabled={busy}>New session</button></div>
+              <div className="runner-actions"><label><span>PROFILE</span><select value={selectedWebProfile} onChange={(event) => setSelectedWebProfile(event.target.value)} disabled={Boolean(activeWeb)}>{Object.entries(dashboard?.profiles.web || {}).map(([id, profile]) => <option key={id} value={id}>{profile.label} · ≈ {profile.estimated_minutes} min</option>)}</select></label><label><span>PAIR TOPOLOGY</span><select value={selectedTopologyScope} onChange={(event) => setSelectedTopologyScope(event.target.value as TopologyScope)}>{TOPOLOGY_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label><button className="button primary" onClick={createPairing} disabled={busy}>New session</button></div>
             </section>
             <section className="web-contract-grid">
               <article className="panel web-profile-card">
@@ -1431,10 +1462,10 @@ export default function Home() {
                 <p>This is controlled load testing, not DDoS testing. Arbitrary URLs, ports, payloads, and external targets are rejected.</p>
               </article>
             </section>
-            {pairing && <section className="pairing-card"><div><span>SHORT-LIVED JOIN CREDENTIAL</span><strong>{pairing.id}</strong><small>Expires {new Date(pairing.expires_at).toLocaleTimeString("en-US")}</small></div><code>{pairing.join_token}</code></section>}
+            {pairing && <section className="pairing-card"><div><span>SHORT-LIVED JOIN CREDENTIAL</span><strong>{pairing.id}</strong><small>{pairing.topology.scope} · {pairing.topology.source} · expires {new Date(pairing.expires_at).toLocaleTimeString("en-US")}</small></div><code>{pairing.join_token}</code></section>}
             {pairing && <section className="panel agent-commands"><div><span className="section-kicker">RUN ON PROVIDER VMS</span><h3>Target hosts Nginx; Generator runs ApacheBench</h3></div><code>cloudmark agent --controller https://CONTROLLER --session {pairing.id} --token {pairing.join_token} --role target --advertise-address VM_A_IP</code><code>cloudmark agent --controller https://CONTROLLER --session {pairing.id} --token {pairing.join_token} --role generator --advertise-address VM_B_IP</code><p>Install the <strong>web</strong> pack on both machines and open TCP 58080 and 58443 only between the paired machines.</p></section>}
             <section className="panel session-panel">
-              <div className="panel-head"><div><span className="section-kicker">PAIRED EXECUTION</span><h3>Web assessment readiness</h3></div><label className="compact-select"><span>SESSION</span><select value={selectedSession?.id || ""} onChange={(event) => setSelectedSessionId(event.target.value)}>{dashboard?.sessions.map((session) => <option key={session.id} value={session.id}>{session.label} · {session.status}</option>)}</select></label></div>
+              <div className="panel-head"><div><span className="section-kicker">PAIRED EXECUTION</span><h3>Web assessment readiness</h3></div><label className="compact-select"><span>SESSION</span><select value={selectedSession?.id || ""} onChange={(event) => setSelectedSessionId(event.target.value)}>{dashboard?.sessions.map((session) => <option key={session.id} value={session.id}>{session.label} · {session.topology.scope} · {session.status}</option>)}</select></label></div>
               {selectedSession ? <div className="agent-roster">{["target", "generator"].map((role) => { const agent = selectedSession.agents.find((item) => item.role === role); const ready = role === "target" ? Boolean(agent?.system.inventory?.capabilities?.nginx && agent?.system.inventory?.capabilities?.openssl) : Boolean(agent?.system.inventory?.capabilities?.ab); return <article key={role} className={agent && ready ? "connected" : "waiting"}><span>{role.toUpperCase()}</span><strong>{agent?.name || `Waiting for ${role}`}</strong><small>{agent ? `${agent.endpoint.address || "No advertised IP"} · ${ready ? "web tools ready" : "web pack required"}` : "Join command has not connected"}</small></article>; })}</div> : <div className="empty-row">Create a session, then connect both provider Agents.</div>}
               <div className="session-actions"><p><strong>{selectedSession?.status === "ready" ? "Pair connected" : "Two Agents required"}</strong><small>The Controller validates role-specific tools and the exact profile before accepting the run.</small></p><button className="button primary" onClick={startWeb} disabled={busy || Boolean(activeWeb) || selectedSession?.status !== "ready"}>Run Web/API/TLS assessment</button></div>
             </section>
@@ -1506,11 +1537,11 @@ export default function Home() {
         {activeView === "providers" && (
           <div className="view providers-view">
             <section className="section-intro">
-              <div><span className="section-kicker">REPEATED-WINDOW OBSERVATIONS</span><h2>Compare like with like without inventing a provider score.</h2><p>CloudMark separates cohorts by provider, SKU, region, operating system, profile, and methodology. Descriptive statistics become comparable only after the minimum target, window, and sample contract is met.</p></div>
+              <div><span className="section-kicker">REPEATED-WINDOW OBSERVATIONS</span><h2>Compare like with like without inventing a provider score.</h2><p>CloudMark separates cohorts by provider, SKU, region, operating system, profile, methodology, and paired topology. Descriptive statistics become comparable only after the minimum target, window, and sample contract is met.</p></div>
               <div className="runner-actions provider-contract-selector">
                 <label><span>METRIC CONTRACT</span><select value={activeProviderContract?.contract_id || ""} onChange={(event) => setSelectedProviderContract(event.target.value)} disabled={!providerContracts.length}>
                   {!providerContracts.length && <option value="">No repeated evidence</option>}
-                  {providerContracts.map((metric) => <option key={metric.contract_id} value={metric.contract_id}>{metric.label} · {metric.profile} · {metric.methodology_version}</option>)}
+                  {providerContracts.map((metric) => <option key={metric.contract_id} value={metric.contract_id}>{metric.label} · {metric.profile} · {metric.topology_scope}</option>)}
                 </select></label>
               </div>
             </section>
@@ -1521,14 +1552,15 @@ export default function Home() {
               <article className="panel caution"><span>PROVIDER RATING</span><strong>Not rated</strong><small>operational and cost gates remain unavailable</small></article>
             </section>
             <section className="panel comparison-contract-panel">
-              <div className="panel-head"><div><span className="section-kicker">COMPARISON CONTRACT</span><h3>{activeProviderContract?.label || "No compatible metric evidence yet"}</h3></div><span className="run-id">{providerObservations?.version || "provider-observations-v1"}</span></div>
+              <div className="panel-head"><div><span className="section-kicker">COMPARISON CONTRACT</span><h3>{activeProviderContract?.label || "No compatible metric evidence yet"}</h3></div><span className="run-id">{providerObservations?.version || "provider-observations-v2"}</span></div>
               <div className="comparison-contract-grid">
                 <div><span>PROFILE</span><strong>{activeProviderContract?.profile || "Unavailable"}</strong></div>
                 <div><span>METHODOLOGY</span><strong>{activeProviderContract?.methodology_version || "Unavailable"}</strong></div>
+                <div><span>PAIR TOPOLOGY</span><strong>{activeProviderContract?.topology_scope || "Unavailable"}</strong></div>
                 <div><span>DIRECTION</span><strong>{activeProviderContract ? `${activeProviderContract.direction} is better` : "Unavailable"}</strong></div>
                 <div><span>MINIMUM SAMPLE</span><strong>{providerObservations ? `${providerObservations.minimum_comparable_sampling.samples} runs / ${providerObservations.minimum_comparable_sampling.targets} targets / ${providerObservations.minimum_comparable_sampling.windows} days` : "Unavailable"}</strong></div>
               </div>
-              <p className="method-note">A measurement window is one UTC calendar day. P10, median, P90, actual best/worst, sample count, target count, and relative spread remain descriptive evidence; CloudMark does not rank providers.</p>
+              <p className="method-note">A measurement window is one UTC calendar day. Paired runs with different or undeclared topology are never merged. P10, median, P90, actual best/worst, sample count, target count, and relative spread remain descriptive evidence; CloudMark does not rank providers.</p>
             </section>
             {providerGroups.length ? <section className="provider-comparison-grid" aria-label="Provider cohort observations">
               {providerGroups.map((group) => {

@@ -154,3 +154,17 @@ remain readable but do not gain v3 validity claims retroactively.
 topologies, while a saturated load generator can understate provider capacity.
 Separating interface MTU from observed path MTU and failing closed on missing
 validity evidence prevents false precision.
+
+## D-015: Paired topology is a comparison contract
+
+**Decision:** Pairing sessions accept an explicit topology scope: same-host,
+same-zone, cross-zone, cross-region, public-internet, or undeclared. The scope
+is stored with the session and every paired network, database, and web result.
+Only `operator-declared` topology is accepted as comparison evidence; an
+undeclared run remains usable for target diagnosis but is observational in
+provider cohorts. Provider observation contracts include topology so runs from
+different fabrics cannot be merged.
+
+**Reason:** Provider SKU and region labels do not prove the path between two
+instances. Treating topology as an explicit evidence field prevents a fast
+same-zone result from being presented as cross-zone or public-path capacity.

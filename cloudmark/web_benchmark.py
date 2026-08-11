@@ -170,7 +170,11 @@ def run_web(
         "profile": profile_name,
         "profile_version": profile["profile_version"],
         "methodology_version": profile["methodology_version"],
-        "session": {"id": session["id"], "label": session["label"]},
+        "session": {
+            "id": session["id"],
+            "label": session["label"],
+            "topology": session.get("topology") or {"scope": "undeclared", "source": "unavailable"},
+        },
         "target": {"id": target["id"], "name": target["name"], "address": target_address},
         "generator": {"id": generator["id"], "name": generator["name"], "address": generator_address},
         "policy": {

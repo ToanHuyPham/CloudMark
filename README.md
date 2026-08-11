@@ -30,7 +30,7 @@ timestamp, and raw result.
 | Partial | Guarded two-Agent PostgreSQL/pgbench profiles with durable settings and verified ephemeral cleanup |
 | Partial | Guarded two-Agent Nginx/ApacheBench HTTP, API, TLS, connection-churn, tail-latency, and static-transfer profiles |
 | Available | Target-scoped, versioned Essential/Standard/Demanding workload gates with per-check run provenance and explicit unknown evidence |
-| Available | Exact-cohort repeated-window provider observations with median, P10/P90, best/worst, spread, and guarded comparison eligibility |
+| Available | Exact-cohort repeated-window provider observations with median, P10/P90, best/worst, spread, topology-aware contracts, and guarded comparison eligibility |
 | Roadmap | Repeated network windows, topology verification, NIC-offload evidence, public-path classification, and mTLS enrollment |
 | Roadmap | Remaining CPU, memory/NUMA, GPU, application, platform, operations, and provider executors |
 | Roadmap | Sampling campaigns, cross-zone analysis, timestamped cost, operations, and final provider ratings |
@@ -176,8 +176,8 @@ partial until tail latency, replication, and recovery evidence are available.
 Web/API/TLS remains partial until generator-saturation validation, dynamic
 application, HTTP/2/3, CDN, WAF, and autoscaling evidence are available.
 The current development head also implements `suitability-v1` target-scoped
-hard gates with exact evidence provenance and `provider-observations-v1`
-same-SKU repeated-window descriptive comparisons. Provider-wide ratings and
+hard gates with exact evidence provenance and `provider-observations-v2`
+topology-aware same-SKU repeated-window descriptive comparisons. Provider-wide ratings and
 control-plane executors remain explicitly unavailable.
 
 ## License

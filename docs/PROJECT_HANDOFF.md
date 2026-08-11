@@ -81,9 +81,9 @@ provenance. It produces target observations only; provider status stays
 `not-rated` until multi-target, repeated-window, operational, and cost evidence
 is implemented.
 
-`provider-observations-v1` now produces descriptive exact-cohort distributions
+`provider-observations-v2` now produces descriptive exact-cohort distributions
 for repeated evidence. It requires matching provider/SKU/region/OS and exact
-profile/methodology compatibility, exposes Run IDs and sampling counts, and
+profile/methodology/topology compatibility, exposes Run IDs and sampling counts, and
 does not enable provider ratings.
 
 ## Repository map

@@ -196,7 +196,19 @@ results, and changes the run state to `cancelled`.
 
 ## Pair two provider agents
 
-1. `POST /sessions` with the controller token.
+1. `POST /sessions` with the controller token. Include a topology declaration
+   when the pair is intended for provider comparison:
+
+   ```json
+   {
+     "label": "Provider same-zone assessment",
+     "topology": {"scope": "same-zone", "source": "operator-declared"}
+   }
+   ```
+
+   Accepted scopes are `same-host`, `same-zone`, `cross-zone`, `cross-region`,
+   `public-internet`, and `undeclared`. Undeclared sessions remain diagnostic
+   only for provider cohorts.
 2. Copy the returned session ID and short-lived join token to each agent.
 3. Each persistent agent calls `/sessions/{id}/join`. The response includes a
    unique `agent_id` and an agent credential that is never returned again.
@@ -234,9 +246,9 @@ are satisfied.
 GET /api/v1/provider-comparisons
 ```
 
-The `provider-observations-v1` response groups fresh valid evidence only when
+The `provider-observations-v2` response groups fresh valid evidence only when
 provider, product/SKU, region, operating system, profile, methodology, metric,
-and unit match. A UTC calendar day is one measurement window. Each metric
+unit, and paired topology match. A UTC calendar day is one measurement window. Each metric
 cohort exposes sample, target, window, and Run ID sets plus median, P10, P90,
 actual minimum/maximum, direction-aware best/worst, and P10-P90 relative
 spread.
@@ -244,7 +256,8 @@ spread.
 Statistics are `comparable` only with at least nine samples from three targets
 and three UTC-day windows and a verified provider identity. Smaller cohorts
 remain `observational`. The endpoint never merges incompatible profiles and
-never returns a provider ranking; `rating_status` remains `not-rated`.
+never returns a provider ranking; `rating_status` remains `not-rated`. Paired
+network, database, and web runs with undeclared topology remain observational.
 
 The complete machine-readable contract is in
 [`openapi/cloudmark-v1.yaml`](../openapi/cloudmark-v1.yaml).

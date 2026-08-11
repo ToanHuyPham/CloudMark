@@ -59,7 +59,8 @@ class Database:
                 join_token_hash TEXT NOT NULL,
                 status TEXT NOT NULL,
                 created_at TEXT NOT NULL,
-                expires_at TEXT NOT NULL
+                expires_at TEXT NOT NULL,
+                topology_json TEXT NOT NULL DEFAULT '{}'
             )
             """,
             """
@@ -132,6 +133,13 @@ class Database:
             for column, definition in agent_migrations.items():
                 if column not in agent_columns:
                     connection.execute(f"ALTER TABLE agents ADD COLUMN {column} {definition}")
+            session_columns = {row[1] for row in connection.execute("PRAGMA table_info(sessions)").fetchall()}
+            session_migrations = {
+                "topology_json": "TEXT NOT NULL DEFAULT '{}'",
+            }
+            for column, definition in session_migrations.items():
+                if column not in session_columns:
+                    connection.execute(f"ALTER TABLE sessions ADD COLUMN {column} {definition}")
             task_columns = {row[1] for row in connection.execute("PRAGMA table_info(agent_tasks)").fetchall()}
             task_migrations = {
                 "progress": "REAL NOT NULL DEFAULT 0",
@@ -327,20 +335,34 @@ class Database:
         label: str,
         join_token_hash: str,
         expires_at: str,
+        topology: dict[str, Any] | None = None,
     ) -> None:
         with self._lock, self._connection() as connection:
             connection.execute(
                 """
-                INSERT INTO sessions(id, label, join_token_hash, status, created_at, expires_at)
-                VALUES (?, ?, ?, 'waiting', ?, ?)
+                INSERT INTO sessions(
+                    id, label, join_token_hash, status, created_at, expires_at,
+                    topology_json
+                )
+                VALUES (?, ?, ?, 'waiting', ?, ?, ?)
                 """,
-                (session_id, label, join_token_hash, utc_now(), expires_at),
+                (
+                    session_id,
+                    label,
+                    join_token_hash,
+                    utc_now(),
+                    expires_at,
+                    json.dumps(topology or {}, ensure_ascii=False),
+                ),
             )
 
     def get_session(self, session_id: str) -> dict[str, Any] | None:
         with self._connection() as connection:
             session = connection.execute(
-                "SELECT id, label, status, created_at, expires_at FROM sessions WHERE id = ?",
+                """
+                SELECT id, label, status, created_at, expires_at, topology_json
+                FROM sessions WHERE id = ?
+                """,
                 (session_id,),
             ).fetchone()
             if not session:
@@ -354,6 +376,11 @@ class Database:
                 (session_id,),
             ).fetchall()
         result = dict(session)
+        topology = json.loads(result.pop("topology_json"))
+        result["topology"] = topology if isinstance(topology, dict) and topology else {
+            "scope": "undeclared",
+            "source": "unavailable",
+        }
         result["agents"] = []
         online_cutoff = datetime.now(timezone.utc) - timedelta(seconds=30)
         for row in agents:

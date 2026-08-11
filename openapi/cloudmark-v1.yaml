@@ -176,6 +176,11 @@ paths:
               type: object
               properties:
                 label: { type: string }
+                topology:
+                  type: object
+                  properties:
+                    scope: { type: string, enum: [undeclared, same-host, same-zone, cross-zone, cross-region, public-internet] }
+                    source: { type: string, enum: [unavailable, operator-declared] }
       responses:
         "201": { description: Session and short-lived join token }
   /sessions/{sessionId}:

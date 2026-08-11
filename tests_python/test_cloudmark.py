@@ -326,7 +326,8 @@ class CloudMarkTests(unittest.TestCase):
 
         report = evaluate_suitability(runs, self._suitability_system("controller"), agents.get)
         observations = report["provider_observations"]
-        self.assertEqual(observations["version"], "provider-observations-v1")
+        self.assertEqual(observations["version"], "provider-observations-v2")
+        self.assertTrue(observations["policy"]["exact_pair_topology"])
         self.assertFalse(observations["policy"]["provider_ranking"])
         group = observations["groups"][0]
         self.assertEqual(group["target_count"], 3)
@@ -411,6 +412,60 @@ class CloudMarkTests(unittest.TestCase):
         self.assertEqual(network["sample_count"], 1)
         self.assertEqual(network["target_count"], 2)
         self.assertEqual(network["run_ids"], ["run_network_pair"])
+        self.assertEqual(network["topology_scope"], "undeclared")
+        self.assertIn("topology", " ".join(network["reasons"]).lower())
+
+    def test_provider_observations_keep_paired_topologies_in_separate_contracts(self) -> None:
+        completed_at = datetime.now(timezone.utc).isoformat()
+        systems = {
+            "agent_a": {"last_seen_at": completed_at, "system": self._suitability_system("agent-a")},
+            "agent_b": {"last_seen_at": completed_at, "system": self._suitability_system("agent-b")},
+        }
+
+        def network_run(run_id: str, scope: str, rate: int) -> dict[str, object]:
+            return {
+                "id": run_id,
+                "suite": "network",
+                "profile": "network-peer-standard",
+                "status": "completed",
+                "finished_at": completed_at,
+                "methodology_version": "network-v2",
+                "request": {},
+                "result": {
+                    "methodology_version": "network-v2",
+                    "session": {"topology": {"scope": scope, "source": "operator-declared"}},
+                    "measurements": [
+                        {
+                            "direction": "a-to-b",
+                            "sender": {"id": "agent_a"},
+                            "receiver": {"id": "agent_b"},
+                            "metrics": {"received_bits_per_second": rate},
+                        },
+                        {
+                            "direction": "b-to-a",
+                            "sender": {"id": "agent_b"},
+                            "receiver": {"id": "agent_a"},
+                            "metrics": {"received_bits_per_second": rate - 10_000_000},
+                        },
+                    ],
+                },
+            }
+
+        report = evaluate_suitability(
+            [
+                network_run("run_same_zone", "same-zone", 500_000_000),
+                network_run("run_cross_zone", "cross-zone", 350_000_000),
+            ],
+            self._suitability_system("controller"),
+            systems.get,
+        )
+        metrics = [
+            item
+            for item in report["provider_observations"]["groups"][0]["metric_cohorts"]
+            if item["key"] == "network.directional_floor_bps"
+        ]
+        self.assertEqual({item["topology_scope"] for item in metrics}, {"same-zone", "cross-zone"})
+        self.assertTrue(all(item["sample_count"] == 1 for item in metrics))
 
     def test_storage_metrics_keep_tail_latency_percentiles(self) -> None:
         section = {
@@ -495,6 +550,19 @@ class CloudMarkTests(unittest.TestCase):
             self.assertEqual(database.get_session("session_test")["status"], "waiting")
             database.add_agent("agent_b", "session_test", "b", "generator", {})
             self.assertEqual(database.get_session("session_test")["status"], "ready")
+
+    def test_pairing_persists_validated_topology_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            controller = CloudMarkController(Path(directory))
+            created = controller.create_session(
+                "same-zone pair",
+                {"scope": "same-zone", "source": "operator-declared"},
+            )
+            session = controller.database.get_session(created["id"])
+            self.assertEqual(created["topology"], {"scope": "same-zone", "source": "operator-declared"})
+            self.assertEqual(session["topology"], created["topology"])
+            with self.assertRaisesRegex(ValueError, "topology scope"):
+                controller.create_session("invalid", {"scope": "nearby", "source": "operator-declared"})
 
     def test_agent_task_queue_is_scoped_and_persistent(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -2027,7 +2095,7 @@ max: 1.50
                 self.assertEqual(suitability["requirements_version"], "workload-requirements-1.0")
                 with urllib.request.urlopen(f"{base}/provider-comparisons", timeout=5) as response:
                     provider_observations = json.load(response)
-                self.assertEqual(provider_observations["version"], "provider-observations-v1")
+                self.assertEqual(provider_observations["version"], "provider-observations-v2")
                 self.assertEqual(provider_observations["rating_status"], "not-rated")
                 self.assertFalse(provider_observations["policy"]["provider_ranking"])
                 request = urllib.request.Request(

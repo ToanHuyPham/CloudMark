@@ -99,11 +99,11 @@ own documents or controlled drills; VM performance cannot substitute for them.
 
 ### Repeated-window descriptive observations
 
-`provider-observations-v1` implements the non-rating portion of that
+`provider-observations-v2` implements the non-rating portion of that
 aggregation. It creates an exact cohort from provider, product/SKU, region, and
 operating system, then separates every metric again by profile, methodology,
-and unit. Cross-SKU, cross-region, cross-OS, and cross-methodology merging is
-forbidden. A paired network Run is one observation even when both endpoints
+unit, and paired topology. Cross-SKU, cross-region, cross-OS,
+cross-methodology, and cross-topology merging is forbidden. A paired network Run is one observation even when both endpoints
 belong to the same cohort.
 
 One UTC calendar day derived from the completed Run timestamp is one
