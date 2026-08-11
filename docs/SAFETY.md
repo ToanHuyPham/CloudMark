@@ -61,7 +61,7 @@ systems.
 ## Remote execution
 
 - Remote tasks are authenticated per Agent and restricted to compute, memory,
-  storage, guarded network, and guarded PostgreSQL kinds; arbitrary shell
+  storage, guarded network, guarded PostgreSQL, and guarded Web/API/TLS kinds; arbitrary shell
   commands are refused.
 - The Agent validates suite, installed profile, protocol version, explicit load
   confirmation, and timeout before executing.
@@ -91,6 +91,25 @@ systems.
 - The Target watchdog stops PostgreSQL and removes the generated cluster after
   success, failure, timeout, cancellation, or more than 20 seconds without
   successful Controller contact.
+
+## Web, API, and TLS
+
+- Web runs require two authenticated provider Agents and explicit
+  `confirm_web_load` authorization.
+- Nginx binds the exact Target address on fixed TCP ports 58080 and 58443. It
+  allows only the paired Generator and Target addresses, then denies all other
+  clients.
+- The Agent generates only the fixed health, 1 KiB JSON, and 256 KiB static
+  payloads. Scheme, path, port, concurrency, duration, TLS version, and
+  keep-alive behavior are allow-listed.
+- The per-run certificate and key are ephemeral. The self-signed certificate
+  measures TLS handling and does not claim public trust-chain quality.
+- Arbitrary URLs and DDoS traffic are not supported. ApacheBench jobs are
+  bounded by time, concurrency, request ceiling, task timeout, and Controller
+  contact watchdog.
+- The Target watchdog stops Nginx and removes generated configuration,
+  payloads, logs, certificates, and keys on every normal terminal path.
+  Unknown residual directories after abrupt host failure require manual review.
 
 ## Bootstrap
 

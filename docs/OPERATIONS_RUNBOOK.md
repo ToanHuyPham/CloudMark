@@ -144,6 +144,12 @@ Target Agent as a non-root account, and allow TCP `55432` only from the paired
 Generator. Verify `cleanup_verified` before treating a completed database run
 as valid evidence.
 
+For Web/API/TLS peer profiles, install the web pack on both Agents and run the
+Target Agent as a non-root account. Allow TCP `58080` and `58443` only between
+the paired Generator and Target. Verify `cleanup_verified` and review Generator
+headroom before treating a completed run as comparable evidence; ApacheBench
+can become the limiting component.
+
 ## 11. Troubleshooting
 
 ### API is offline
@@ -191,6 +197,22 @@ using the CloudMark workspace. Preserve the PostgreSQL log for diagnosis, then
 remove only the named `task_*` directory below the configured Agent
 `database-services` workspace. Never delete the workspace root or an unknown
 PostgreSQL data directory.
+
+### A Web/API/TLS peer run cannot start
+
+- verify the Target reports `nginx` and `openssl`;
+- verify the Generator reports `ab`;
+- restart each Agent after installing the web pack so inventory refreshes;
+- verify TCP `58080` and `58443` are reachable only between the paired Agents;
+- run the Target Agent as a non-root account;
+- verify no other saturation or paired-service suite is using either Agent.
+
+If the Agent reports a residual web service directory after an abrupt Agent or
+host failure, stop the Agent and verify that no Nginx process is using the
+CloudMark workspace. Preserve `nginx-process.log` and `nginx-error.log` for
+diagnosis, then remove only the named `task_*` directory below the configured
+Agent `web-services` workspace. Never delete the workspace root, an unknown
+Nginx directory, or a directory while its process is still active.
 
 ## 12. Optional Codex local environment
 

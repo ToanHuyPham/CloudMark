@@ -97,3 +97,16 @@ unavailable until a reviewed sampling method is implemented.
 network interaction without contaminating the Target with the load generator.
 Fixed durable settings improve comparability, while refusing to invent missing
 tail latency prevents a misleading provider score.
+
+## D-011: Guarded Web/API/TLS paired baseline
+
+**Decision:** The first web executor creates a fresh Nginx service on a Target
+Agent and runs versioned ApacheBench jobs from a paired Generator. It accepts
+only fixed addresses, ports, endpoints, payloads, concurrency levels, and TLS
+1.2 behavior. The per-run certificate and complete service directory are
+removed after the run. Arbitrary URLs and DDoS load are refused.
+
+**Reason:** Separating the service and generator measures their provider path
+without routing traffic through the Controller. A fixed workload makes results
+auditable and limits accidental exposure, while explicit ApacheBench
+limitations prevent the Generator from being mistaken for Target capacity.

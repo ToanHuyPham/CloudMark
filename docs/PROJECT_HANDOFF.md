@@ -68,7 +68,10 @@ orchestrates bounded idle latency, directional TCP scaling, adaptive UDP
 loss/jitter sweeps, and simultaneous bidirectional TCP between the two Agents.
 The first paired service executor creates an isolated durable PostgreSQL cluster
 on Agent A and runs allow-listed pgbench workloads from Agent B; cleanup is part
-of the evidence contract.
+of the evidence contract. The second paired service executor creates an
+isolated Nginx HTTP/TLS service on Agent A and runs fixed ApacheBench workloads
+from Agent B. Both service lifecycles use Target-owned watchdogs and verified
+ephemeral cleanup; the Controller never carries benchmark traffic.
 
 ## Repository map
 

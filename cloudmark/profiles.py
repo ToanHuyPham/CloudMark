@@ -223,6 +223,50 @@ DATABASE_PROFILES: dict[str, dict[str, Any]] = {
 }
 
 
+WEB_PROFILES: dict[str, dict[str, Any]] = {
+    "web-peer-quick": {
+        "label": "Web & TLS Peer Quick",
+        "description": "Short HTTP, HTTPS, keep-alive, TLS connection, JSON, and static-transfer baseline between paired Agents.",
+        "estimated_minutes": 4,
+        "requires_agents": 2,
+        "engine": "nginx",
+        "http_port": 58080,
+        "https_port": 58443,
+        "profile_version": "1.0",
+        "methodology_version": "web-http-v1",
+        "jobs": [
+            {"name": "http-api-c1", "scheme": "http", "path": "/api/v1/record", "concurrency": 1, "duration": 15, "warmup": 2, "keep_alive": True},
+            {"name": "http-api-c16", "scheme": "http", "path": "/api/v1/record", "concurrency": 16, "duration": 20, "warmup": 2, "keep_alive": True},
+            {"name": "https-api-c16", "scheme": "https", "path": "/api/v1/record", "concurrency": 16, "duration": 20, "warmup": 2, "keep_alive": True},
+            {"name": "https-handshake-c4", "scheme": "https", "path": "/health", "concurrency": 4, "duration": 15, "warmup": 2, "keep_alive": False},
+            {"name": "http-asset-256k-c4", "scheme": "http", "path": "/assets/256k.bin", "concurrency": 4, "duration": 20, "warmup": 2, "keep_alive": True},
+        ],
+    },
+    "web-peer-standard": {
+        "label": "Web & TLS Peer Standard",
+        "description": "HTTP and TLS concurrency curves, connection churn, API-sized responses, and 256 KiB static transfer evidence.",
+        "estimated_minutes": 8,
+        "requires_agents": 2,
+        "engine": "nginx",
+        "http_port": 58080,
+        "https_port": 58443,
+        "profile_version": "1.0",
+        "methodology_version": "web-http-v1",
+        "jobs": [
+            {"name": "http-api-c1", "scheme": "http", "path": "/api/v1/record", "concurrency": 1, "duration": 30, "warmup": 3, "keep_alive": True},
+            {"name": "http-api-c16", "scheme": "http", "path": "/api/v1/record", "concurrency": 16, "duration": 40, "warmup": 3, "keep_alive": True},
+            {"name": "http-api-c64", "scheme": "http", "path": "/api/v1/record", "concurrency": 64, "duration": 45, "warmup": 3, "keep_alive": True},
+            {"name": "https-api-c16", "scheme": "https", "path": "/api/v1/record", "concurrency": 16, "duration": 40, "warmup": 3, "keep_alive": True},
+            {"name": "https-api-c64", "scheme": "https", "path": "/api/v1/record", "concurrency": 64, "duration": 45, "warmup": 3, "keep_alive": True},
+            {"name": "https-handshake-c4", "scheme": "https", "path": "/health", "concurrency": 4, "duration": 30, "warmup": 3, "keep_alive": False},
+            {"name": "http-asset-256k-c4", "scheme": "http", "path": "/assets/256k.bin", "concurrency": 4, "duration": 35, "warmup": 3, "keep_alive": True},
+            {"name": "http-asset-256k-c16", "scheme": "http", "path": "/assets/256k.bin", "concurrency": 16, "duration": 40, "warmup": 3, "keep_alive": True},
+            {"name": "https-asset-256k-c8", "scheme": "https", "path": "/assets/256k.bin", "concurrency": 8, "duration": 40, "warmup": 3, "keep_alive": True},
+        ],
+    },
+}
+
+
 ASSESSMENT_DOMAINS: list[dict[str, Any]] = [
     {"id": "system-inventory", "label": "System & Hardware Inventory", "status": "available", "summary": "OS, kernel, CPU, RAM, disks, NICs and runtime capabilities"},
     {"id": "provider-identity", "label": "Provider & Instance Identity", "status": "available", "summary": "Trusted metadata, declared manifests, region, zone and confidence"},
@@ -232,7 +276,7 @@ ASSESSMENT_DOMAINS: list[dict[str, Any]] = [
     {"id": "storage", "label": "Storage, Filesystem & Object", "status": "available", "summary": "Safe block/filesystem profiles available; object and snapshot tests pending"},
     {"id": "network", "label": "Network & Connectivity", "status": "partial", "summary": "Two-Agent TCP, UDP, idle latency, loaded RTT, and simultaneous bidirectional evidence available; topology validity pending"},
     {"id": "gpu", "label": "GPU & Accelerators", "status": "roadmap", "summary": "GPU inventory, VRAM, transfer, compute and framework profiles"},
-    {"id": "web", "label": "Web, API & TLS", "status": "roadmap", "summary": "HTTP, TLS, concurrency, tail latency and saturation profiles"},
+    {"id": "web", "label": "Web, API & TLS", "status": "partial", "summary": "Guarded two-Agent Nginx HTTP/TLS concurrency, tail latency, connection churn, and transfer profiles available"},
     {"id": "database", "label": "Database & Cache", "status": "partial", "summary": "Guarded two-Agent PostgreSQL/pgbench profiles available; MySQL/MariaDB, Redis, replication, and recovery pending"},
     {"id": "containers", "label": "Containers & Kubernetes", "status": "partial", "summary": "Runtime discovery available; image, pod, network and scaling tests pending"},
     {"id": "security", "label": "Security & Isolation", "status": "roadmap", "summary": "IAM, firewall, exposure, tenant isolation and hardening evidence"},
@@ -246,7 +290,7 @@ ASSESSMENT_DOMAINS: list[dict[str, Any]] = [
 
 SCENARIOS: list[dict[str, Any]] = [
     {"id": "storage-backup", "label": "Storage & Backup", "status": "available", "primary": "storage", "coverage": "Block storage performance"},
-    {"id": "web-app", "label": "Web & App Hosting", "status": "roadmap", "primary": "web", "coverage": "Application executor required"},
+    {"id": "web-app", "label": "Web & App Hosting", "status": "partial", "primary": "web", "coverage": "HTTP/TLS serving evidence; dynamic application runtime pending"},
     {"id": "dev-test", "label": "Dev & Test", "status": "roadmap", "primary": "compute", "coverage": "Compute profile required"},
     {"id": "database", "label": "Database Management", "status": "partial", "primary": "database", "coverage": "PostgreSQL transaction and storage evidence"},
     {"id": "network", "label": "Networking & Connectivity", "status": "partial", "primary": "network", "coverage": "Directional TCP/UDP, latency, loss, jitter, and duplex evidence"},
@@ -267,6 +311,7 @@ def all_profiles() -> dict[str, Any]:
         "storage": STORAGE_PROFILES,
         "network": NETWORK_PROFILES,
         "database": DATABASE_PROFILES,
+        "web": WEB_PROFILES,
         "domains": ASSESSMENT_DOMAINS,
         "scenarios": SCENARIOS,
     }

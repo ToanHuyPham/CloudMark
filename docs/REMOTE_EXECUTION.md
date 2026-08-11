@@ -108,6 +108,12 @@ never becomes a completed assessment.
 
 ## Current boundary
 
+Paired network, PostgreSQL, and Web/API/TLS assessments use durable Agent tasks
+and the same authenticated heartbeat/cancellation transport, but they are not
+single-system `agent_id` dispatches. They require a ready Target/Generator
+session and suite-specific confirmation. Service start/client/stop kinds remain
+fixed Agent allow-list entries and never accept arbitrary commands or targets.
+
 Version `0.5.0` does not remotely install packages or execute provider
 control-plane mutations. Bootstrap remains an explicit operator action requiring
 root or administrator approval. Automatic Agent re-enrollment, fleet labels,

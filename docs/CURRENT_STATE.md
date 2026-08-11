@@ -36,6 +36,12 @@ baseline is still the repository head.
   progress/control heartbeat, fixed safety limits, and verified cleanup; the
   milestone passes 53 Python tests, 3 rendered-dashboard tests, dashboard lint,
   and the production dashboard build without running a real load;
+- simulation-verified `web-http-v1` paired executor with an isolated Nginx
+  Target, fixed HTTP/HTTPS endpoints, Generator-side ApacheBench workloads,
+  exact address allow-listing, TLS 1.2 evidence, progress/control heartbeat,
+  fixed safety limits, and verified cleanup; the complete milestone passes 64
+  Python tests, 3 rendered-dashboard tests, dashboard lint, and the production
+  build without starting provider load;
 - responsive dashboard navigation and execution-target selection;
 - repository-level Codex guidance, durable handoff documentation, consistent
   SQLite runtime snapshots, guarded secret backup, recoverable restore, and
@@ -112,8 +118,12 @@ Controller run: `run_1c572100e8704843`.
   behavior remain unavailable;
 - an abrupt Agent or host termination can leave an isolated PostgreSQL task
   directory for manual operator review; the Agent refuses to overwrite or
-  automatically delete unknown residual state;
-- web/application executors are not yet implemented;
+  automatically delete unknown residual state; the same review requirement
+  applies to an isolated Web service directory;
+- Web/API/TLS coverage is Partial: fixed static/JSON endpoints, HTTP/HTTPS
+  concurrency, connection churn, transfer rate, and tail latency are
+  implemented; generator-saturation validation, dynamic applications,
+  HTTP/2/3, CDN, WAF, autoscaling, and DDoS resilience remain unavailable;
 - GPU evidence and GPU benchmarks are not complete;
 - final workload suitability and provider-scoring engines remain Roadmap;
 - Windows is suitable for the Controller and inventory, but benchmark executor
@@ -122,12 +132,12 @@ Controller run: `run_1c572100e8704843`.
 
 ## Next priorities
 
-1. Implement the guarded web/API client/server executor on the paired-service
-   lifecycle introduced by the PostgreSQL milestone.
-2. Build evidence-gated workload suitability and provider evaluation.
-3. Add repeated time-window evidence and provider comparison views.
-4. Add route/MTU evidence, generator-saturation checks, and repeated network
+1. Build evidence-gated workload suitability and provider evaluation.
+2. Add repeated time-window evidence and provider comparison views.
+3. Add route/MTU evidence, generator-saturation checks, and repeated network
    windows before promoting the network domain from Partial.
+4. Add Web generator-saturation validation and dynamic application,
+   HTTP/2/3, reverse-proxy, CDN, WAF, and autoscaling evidence.
 5. Extend database coverage with transaction tail latency, MySQL/MariaDB,
    Redis, replication, backup/restore, and recovery evidence.
 6. Complete remaining compute, memory/NUMA, GPU, security, reliability,

@@ -134,6 +134,29 @@ type DatabaseMeasurement = {
   tool: { name: string; version?: string };
 };
 
+type WebMeasurement = {
+  name: string;
+  scheme: "http" | "https";
+  path: string;
+  concurrency: number;
+  duration_seconds: number;
+  warmup_seconds: number;
+  keep_alive: boolean;
+  metrics: {
+    complete_requests: number;
+    failed_requests: number;
+    non_2xx_responses: number;
+    successful_requests: number;
+    success_percent: number;
+    requests_per_second: number;
+    time_per_request_ms: number;
+    transfer_rate_kib_per_second?: number;
+    latency_percentiles_ms: { p50: number; p90: number; p95: number; p99: number; p100: number };
+    tls: { status: string; protocol?: string; cipher?: string; raw?: string };
+  };
+  tool: { name: string; version?: string };
+};
+
 type Run = {
   id: string;
   suite: string;
@@ -173,11 +196,16 @@ type Run = {
     udp_measurements?: NetworkUdpMeasurement[];
     bidirectional_measurements?: NetworkBidirectionalMeasurement[];
     database_measurements?: DatabaseMeasurement[];
+    web_measurements?: WebMeasurement[];
     server?: {
-      engine: string;
-      scale_factor: number;
+      engine?: string;
+      scale_factor?: number;
       estimated_dataset_bytes?: number;
-      tools?: { postgres?: string; pgbench?: string };
+      listen_address?: string;
+      ports?: { http?: number; https?: number };
+      tls?: { protocol?: string; cipher?: string; certificate?: string };
+      payloads?: Record<string, number>;
+      tools?: { postgres?: string; pgbench?: string; nginx?: string; openssl?: string };
       durability?: Record<string, string | number>;
     };
     cleanup?: { status: string; cleanup_verified?: boolean };
@@ -262,6 +290,26 @@ type Dashboard = {
         connect_per_transaction?: boolean;
       }[];
     }>;
+    web: Record<string, {
+      label: string;
+      description: string;
+      estimated_minutes: number;
+      requires_agents: number;
+      engine: string;
+      http_port: number;
+      https_port: number;
+      profile_version: string;
+      methodology_version: string;
+      jobs: {
+        name: string;
+        scheme: "http" | "https";
+        path: string;
+        concurrency: number;
+        duration: number;
+        warmup: number;
+        keep_alive: boolean;
+      }[];
+    }>;
     domains: AssessmentDomain[];
     scenarios: Scenario[];
   };
@@ -322,6 +370,7 @@ export default function Home() {
   const [selectedStorageProfile, setSelectedStorageProfile] = useState("disk-quick");
   const [selectedNetworkProfile, setSelectedNetworkProfile] = useState("network-peer-quick");
   const [selectedDatabaseProfile, setSelectedDatabaseProfile] = useState("postgres-peer-quick");
+  const [selectedWebProfile, setSelectedWebProfile] = useState("web-peer-quick");
   const [selectedExecutionTarget, setSelectedExecutionTarget] = useState("local");
   const [selectedSessionId, setSelectedSessionId] = useState("");
   const [pairing, setPairing] = useState<{ id: string; join_token: string; expires_at: string } | null>(null);
@@ -406,6 +455,18 @@ export default function Home() {
   const maxDatabaseTps = Math.max(
     1,
     ...databaseMeasurements.map((item) => item.metrics.transactions_per_second || 0),
+  );
+  const activeWeb = dashboard?.runs.find(
+    (run) => run.suite === "web" && ["queued", "running"].includes(run.status),
+  );
+  const latestWeb = dashboard?.runs.find(
+    (run) => run.suite === "web" && run.status === "completed" && run.result?.web_measurements?.length,
+  );
+  const webMeasurements = latestWeb?.result?.web_measurements || [];
+  const webProfile = dashboard?.profiles.web[selectedWebProfile];
+  const maxWebRps = Math.max(
+    1,
+    ...webMeasurements.map((item) => item.metrics.requests_per_second || 0),
   );
   const latestStorage = dashboard?.runs.find(
     (run) => run.suite === "storage" && run.status === "completed" && run.result?.jobs?.length
@@ -729,6 +790,67 @@ export default function Home() {
     }
   }
 
+  async function startWeb() {
+    if (!requireToken()) return;
+    if (!selectedSession || selectedSession.status !== "ready") {
+      setNotice("Join one target and one generator Agent before starting a Web/API/TLS run.");
+      return;
+    }
+    const target = selectedSession.agents.find((agent) => agent.role === "target");
+    const generator = selectedSession.agents.find((agent) => agent.role === "generator");
+    const targetCapabilities = target?.system.inventory?.capabilities || {};
+    if (!targetCapabilities.nginx || !targetCapabilities.openssl) {
+      setNotice("The target Agent needs Nginx and OpenSSL. Install the CloudMark web pack and restart the Agent.");
+      return;
+    }
+    if (!generator?.system.inventory?.capabilities?.ab) {
+      setNotice("The generator Agent needs ApacheBench. Install the CloudMark web pack and restart the Agent.");
+      return;
+    }
+    setBusy(true);
+    setNotice(null);
+    try {
+      const response = await fetch(`${API}/runs`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-CloudMark-Token": token },
+        body: JSON.stringify({
+          suite: "web",
+          profile: selectedWebProfile,
+          session_id: selectedSession.id,
+          confirm_web_load: true,
+        }),
+      });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || "Unable to start the Web/API/TLS assessment");
+      setNotice(`Created ${payload.id}. HTTP and TLS traffic will remain between the paired provider Agents.`);
+      await loadDashboard();
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Web/API/TLS assessment failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function cancelWeb() {
+    if (!activeWeb || !requireToken()) return;
+    setBusy(true);
+    try {
+      const response = await fetch(`${API}/runs/${activeWeb.id}/cancel`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-CloudMark-Token": token },
+        body: "{}",
+      });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || "Unable to cancel the Web/API/TLS assessment");
+      setNotice(`Cancellation requested for ${activeWeb.id}. Ephemeral Nginx cleanup remains mandatory.`);
+      await loadDashboard();
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Unable to cancel the Web/API/TLS assessment");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   function saveToken() {
     sessionStorage.setItem("cloudmark-controller-token", token.trim());
     setToken(token.trim());
@@ -743,8 +865,9 @@ export default function Home() {
     ["storage", "Storage Assessment", "04"],
     ["network", "Distributed Testing", "05"],
     ["database", "Database Assessment", "06"],
-    ["scenarios", "Workload Suitability", "07"],
-    ["history", "History", "08"],
+    ["web", "Web & API Assessment", "07"],
+    ["scenarios", "Workload Suitability", "08"],
+    ["history", "History", "09"],
   ];
 
   const executionTargetPanel = (
@@ -1077,6 +1200,45 @@ export default function Home() {
               {databaseMeasurements.map((measurement) => <article className="panel" key={measurement.name}><span>{measurement.workload.toUpperCase()} · C{measurement.clients} / J{measurement.threads}</span><strong>{measurement.metrics.latency_average_ms.toFixed(2)} ms</strong><small>{measurement.metrics.failed_transactions} failed · {measurement.metrics.transactions_processed.toLocaleString()} transactions</small></article>)}
               <article className={`panel cleanup-evidence ${latestDatabase?.result?.cleanup?.cleanup_verified ? "verified" : "unknown"}`}><span>EPHEMERAL CLEANUP</span><strong>{latestDatabase?.result?.cleanup?.cleanup_verified ? "Verified" : "Unavailable"}</strong><small>{latestDatabase?.result?.server?.estimated_dataset_bytes ? `${formatBytes(latestDatabase.result.server.estimated_dataset_bytes)} estimated dataset` : "Dataset size unavailable"}</small></article>
             </section>}
+          </div>
+        )}
+
+        {activeView === "web" && (
+          <div className="view web-view">
+            <section className="section-intro">
+              <div><span className="section-kicker">TWO-AGENT WEB, API & TLS ASSESSMENT</span><h2>Measure serving capacity, tail latency, TLS cost, and static transfer without using the Controller as a traffic endpoint.</h2><p>CloudMark starts an isolated Nginx service on the Target and runs bounded ApacheBench jobs from the Generator. Only fixed CloudMark endpoints, ports, and concurrency levels are accepted.</p></div>
+              <div className="runner-actions"><label><span>PROFILE</span><select value={selectedWebProfile} onChange={(event) => setSelectedWebProfile(event.target.value)} disabled={Boolean(activeWeb)}>{Object.entries(dashboard?.profiles.web || {}).map(([id, profile]) => <option key={id} value={id}>{profile.label} · ≈ {profile.estimated_minutes} min</option>)}</select></label><button className="button primary" onClick={createPairing} disabled={busy}>New session</button></div>
+            </section>
+            <section className="web-contract-grid">
+              <article className="panel web-profile-card">
+                <div className="panel-head"><div><span className="section-kicker">VERSIONED WORKLOAD</span><h3>{webProfile?.label || "Web & TLS profile"}</h3></div><span className="run-id">HTTP {webProfile?.http_port || "—"} / TLS {webProfile?.https_port || "—"}</span></div>
+                <p>{webProfile?.description}</p>
+                <div className="web-job-grid">{webProfile?.jobs.map((job) => <div key={job.name}><span>{job.scheme.toUpperCase()}</span><strong>{job.name}</strong><small>C{job.concurrency} · {job.path} · {job.duration}s · {job.keep_alive ? "keep-alive" : "new connections"}</small></div>)}</div>
+              </article>
+              <article className="panel web-safety-card">
+                <span className="section-kicker">EXECUTION CONTRACT</span><h3>Owned, isolated, and bounded</h3>
+                <ul><li>Exact Target address; never binds to all interfaces</li><li>Only the paired Generator and Target addresses are allowed</li><li>Fixed health, 1 KiB JSON, and 256 KiB static payloads</li><li>Ephemeral self-signed certificate with a fixed TLS 1.2 methodology</li><li>Temporary service files and keys are removed after every terminal path</li></ul>
+                <p>This is controlled load testing, not DDoS testing. Arbitrary URLs, ports, payloads, and external targets are rejected.</p>
+              </article>
+            </section>
+            {pairing && <section className="pairing-card"><div><span>SHORT-LIVED JOIN CREDENTIAL</span><strong>{pairing.id}</strong><small>Expires {new Date(pairing.expires_at).toLocaleTimeString("en-US")}</small></div><code>{pairing.join_token}</code></section>}
+            {pairing && <section className="panel agent-commands"><div><span className="section-kicker">RUN ON PROVIDER VMS</span><h3>Target hosts Nginx; Generator runs ApacheBench</h3></div><code>cloudmark agent --controller https://CONTROLLER --session {pairing.id} --token {pairing.join_token} --role target --advertise-address VM_A_IP</code><code>cloudmark agent --controller https://CONTROLLER --session {pairing.id} --token {pairing.join_token} --role generator --advertise-address VM_B_IP</code><p>Install the <strong>web</strong> pack on both machines and open TCP 58080 and 58443 only between the paired machines.</p></section>}
+            <section className="panel session-panel">
+              <div className="panel-head"><div><span className="section-kicker">PAIRED EXECUTION</span><h3>Web assessment readiness</h3></div><label className="compact-select"><span>SESSION</span><select value={selectedSession?.id || ""} onChange={(event) => setSelectedSessionId(event.target.value)}>{dashboard?.sessions.map((session) => <option key={session.id} value={session.id}>{session.label} · {session.status}</option>)}</select></label></div>
+              {selectedSession ? <div className="agent-roster">{["target", "generator"].map((role) => { const agent = selectedSession.agents.find((item) => item.role === role); const ready = role === "target" ? Boolean(agent?.system.inventory?.capabilities?.nginx && agent?.system.inventory?.capabilities?.openssl) : Boolean(agent?.system.inventory?.capabilities?.ab); return <article key={role} className={agent && ready ? "connected" : "waiting"}><span>{role.toUpperCase()}</span><strong>{agent?.name || `Waiting for ${role}`}</strong><small>{agent ? `${agent.endpoint.address || "No advertised IP"} · ${ready ? "web tools ready" : "web pack required"}` : "Join command has not connected"}</small></article>; })}</div> : <div className="empty-row">Create a session, then connect both provider Agents.</div>}
+              <div className="session-actions"><p><strong>{selectedSession?.status === "ready" ? "Pair connected" : "Two Agents required"}</strong><small>The Controller validates role-specific tools and the exact profile before accepting the run.</small></p><button className="button primary" onClick={startWeb} disabled={busy || Boolean(activeWeb) || selectedSession?.status !== "ready"}>Run Web/API/TLS assessment</button></div>
+            </section>
+            {activeWeb && <section className="panel run-progress" aria-live="polite"><div><span className="section-kicker">ACTIVE WEB RUN / {activeWeb.id}</span><strong>{activeWeb.current_job || activeWeb.phase || "Preparing isolated Nginx"}</strong><small>{activeWeb.completed_steps || 0} of {activeWeb.total_steps || 1} steps · {Math.round((activeWeb.progress || 0) * 100)}%</small></div><div className="progress-track"><i style={{ width: `${Math.max(2, (activeWeb.progress || 0) * 100)}%` }} /></div><button className="button danger" onClick={cancelWeb} disabled={busy || activeWeb.cancel_requested}>{activeWeb.cancel_requested ? "Cancelling" : "Cancel run"}</button></section>}
+            <section className="panel web-results">
+              <div className="panel-head"><div><span className="section-kicker">LATEST COMPLETED RUN</span><h3>HTTP request throughput by workload</h3></div><span className="run-id">{latestWeb?.id || "NO RUN YET"}</span></div>
+              {webMeasurements.length ? <div className="bar-chart">{webMeasurements.map((measurement) => { const rps = measurement.metrics.requests_per_second || 0; return <div className="bar-row" key={measurement.name}><span>{measurement.name} · C{measurement.concurrency}</span><div><i style={{ width: `${Math.max(3, (rps / maxWebRps) * 100)}%` }} /></div><strong>{Math.round(rps).toLocaleString()} req/s</strong></div>; })}</div> : <div className="empty-chart compact"><div className="chart-grid" /><strong>No Web/API/TLS result yet</strong><p>Connect a prepared Target and Generator to establish the first controlled serving baseline.</p></div>}
+            </section>
+            {webMeasurements.length > 0 && <section className="web-evidence-grid">
+              {webMeasurements.map((measurement) => <article className="panel" key={measurement.name}><span>{measurement.scheme.toUpperCase()} · C{measurement.concurrency} · {measurement.keep_alive ? "KEEP-ALIVE" : "NEW CONNECTION"}</span><strong>{measurement.metrics.latency_percentiles_ms.p95.toFixed(2)} ms p95</strong><small>{measurement.metrics.latency_percentiles_ms.p99.toFixed(2)} ms p99 · {measurement.metrics.success_percent.toFixed(3)}% success · {measurement.metrics.transfer_rate_kib_per_second?.toFixed(1) ?? "—"} KiB/s</small></article>)}
+              <article className="panel"><span>TLS EVIDENCE</span><strong>{webMeasurements.find((measurement) => measurement.metrics.tls.status === "measured")?.metrics.tls.protocol || "Unavailable"}</strong><small>Ephemeral self-signed certificate · trust-chain issuance is not evaluated</small></article>
+              <article className={`panel cleanup-evidence ${latestWeb?.result?.cleanup?.cleanup_verified ? "verified" : "unknown"}`}><span>EPHEMERAL CLEANUP</span><strong>{latestWeb?.result?.cleanup?.cleanup_verified ? "Verified" : "Unavailable"}</strong><small>Service directory, certificate, private key, payloads, and process state</small></article>
+            </section>}
+            <section className="panel web-method-note"><span className="section-kicker">INTERPRETATION LIMITS</span><p>ApacheBench can become the throughput bottleneck, so CloudMark retains this domain as Partial and does not assign provider suitability from these measurements alone. Dynamic application runtimes, reverse proxies, HTTP/2, HTTP/3, CDN, WAF, autoscaling, and DDoS resilience require separate evidence.</p></section>
           </div>
         )}
 

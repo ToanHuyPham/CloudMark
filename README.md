@@ -28,6 +28,7 @@ timestamp, and raw result.
 | Available | Explicit remote Agent dispatch for CPU, memory, and storage with live progress, cancellation, and result attribution |
 | Partial | Guarded peer network executor: directional TCP scaling, idle latency, loaded TCP RTT, adaptive UDP loss/jitter sweeps, and simultaneous bidirectional TCP |
 | Partial | Guarded two-Agent PostgreSQL/pgbench profiles with durable settings and verified ephemeral cleanup |
+| Partial | Guarded two-Agent Nginx/ApacheBench HTTP, API, TLS, connection-churn, tail-latency, and static-transfer profiles |
 | Roadmap | Route/MTU evidence, generator-saturation validation, repeated network windows, mTLS enrollment, and remaining network validity checks |
 | Roadmap | Remaining CPU, memory/NUMA, GPU, application, platform, operations, and provider executors |
 | Roadmap | Final workload suitability and provider scoring engine |
@@ -153,6 +154,7 @@ Controller is never an iperf3 endpoint.
 - [Remote Agent execution](docs/REMOTE_EXECUTION.md)
 - [Network methodology](docs/NETWORK_METHODOLOGY.md)
 - [PostgreSQL database methodology](docs/DATABASE_METHODOLOGY.md)
+- [Web, API, and TLS methodology](docs/WEB_METHODOLOGY.md)
 - [Safety model](docs/SAFETY.md)
 - [Product roadmap and machine topology matrix](docs/ROADMAP.md)
 
@@ -162,13 +164,15 @@ Version `0.5.0` adds authenticated remote dispatch of CPU, memory, and storage
 profiles, per-task heartbeat and cancellation, same-target load exclusion,
 provider/Agent attribution, and strict result-version validation. The current
 development head also implements the versioned `network-v2` standard profile
-and the first `database-postgresql-v1` client/server profiles.
+and the first `database-postgresql-v1` and `web-http-v1` client/server profiles.
 Compute and memory remain `Partial` until floating-point, crypto, compilation,
 latency, NUMA, and broader architecture coverage are implemented. Network
 remains partial until route/MTU capture, generator-validity checks, repeated
 topology-aware windows, and mTLS enrollment are implemented. PostgreSQL remains
 partial until tail latency, replication, and recovery evidence are available.
-Web/application and control-plane executors remain explicitly unavailable.
+Web/API/TLS remains partial until generator-saturation validation, dynamic
+application, HTTP/2/3, CDN, WAF, and autoscaling evidence are available.
+Control-plane executors remain explicitly unavailable.
 
 ## License
 

@@ -132,9 +132,11 @@ own generators for CPU and network resources.
   backup/restore, and recovery — planned;
 - MySQL/MariaDB OLTP read/write and fsync-sensitive profiles;
 - Redis GET/SET, pipelines, persistence, and tail latency;
-- static web, JSON API, TLS, keep-alive, and concurrency ramps;
+- static web, JSON API, TLS 1.2, keep-alive, connection churn, concurrency
+  ramps, P50–P99 latency, error rate, and static transfer — available in
+  `web-http-v1`;
 - reverse proxy, compression, and HTTP/2 or HTTP/3 when supported;
-- soak testing, error rate, P95/P99, and saturation point;
+- generator-saturation validation, longer soak testing, and saturation point;
 - DDoS-style testing only as an **authorized resilience test** on operator-owned
   systems with rate and duration limits, never against third parties.
 

@@ -166,6 +166,10 @@ In the dashboard:
   PostgreSQL service and guarded pgbench workloads. PostgreSQL remains
   `Partial` until tail-percentile, replication, recovery, MySQL, and Redis
   methodologies are implemented.
+- **Web & API Assessment** starts an isolated Nginx service on the Target and
+  runs fixed HTTP, HTTPS, connection-churn, JSON, and static-transfer workloads
+  from the Generator. It reports request rate, failures, P50–P99 latency, TLS,
+  transfer, and cleanup evidence while rejecting arbitrary URLs and DDoS load.
 - **Workload Suitability** maps technical evidence to 12 use cases. Missing
   required metrics return `Insufficient evidence`, not zero.
 - **History** retains raw results so conclusions can be recalculated when the
@@ -220,7 +224,7 @@ This command displays a plan and does not modify the system.
 | `storage` | fio, smartmontools, nvme-cli |
 | `network` | iperf3, ethtool, mtr, DNS tools |
 | `database` | sysbench, PostgreSQL server/client tools including pgbench, Redis |
-| `web` | nginx and HTTP utilities |
+| `web` | Nginx, ApacheBench, and OpenSSL |
 
 ## 7. Bootstrap tools
 
@@ -467,7 +471,35 @@ contact. The Controller fails a task after a 45-second task-heartbeat gap. See
 [`REMOTE_EXECUTION.md`](REMOTE_EXECUTION.md) for the complete protocol and
 safety contract.
 
-## 12. Workload suitability
+## 12. Run a Web/API/TLS peer assessment
+
+Use the same Target and Generator roles as the network and database topology.
+Install the web pack on both machines, then restart both Agents so their
+capabilities are refreshed:
+
+```bash
+sudo python -m cloudmark bootstrap --packs web --yes
+```
+
+Open **Web & API Assessment**, select `Web & TLS Peer Quick` or `Web & TLS
+Peer Standard`, choose the paired session, and select **Run Web/API/TLS
+assessment**. CloudMark creates fixed payloads and an ephemeral certificate
+beneath the Target Agent workspace, starts isolated Nginx listeners, dispatches
+bounded ApacheBench jobs from the Generator, then stops Nginx and verifies
+removal of the complete service directory.
+
+Allow TCP ports `58080` and `58443` only from the Generator peer address to the
+Target. Run the Target Agent as a non-root account. The API accepts only fixed
+CloudMark endpoints and never accepts an arbitrary target URL. DDoS testing is
+outside this methodology.
+
+The dashboard reports request throughput, error counts, success percentage,
+P50/P90/P95/P99/maximum latency, transfer rate, TLS protocol evidence, tool
+versions, and cleanup status. Compare only equivalent Target and Generator
+classes and verify Generator headroom because ApacheBench may become the
+bottleneck. See [`WEB_METHODOLOGY.md`](WEB_METHODOLOGY.md).
+
+## 13. Workload suitability
 
 The 12 use cases use three coverage states:
 
@@ -478,7 +510,7 @@ The 12 use cases use three coverage states:
 A suitability conclusion appears only after all mandatory raw evidence is
 available. See the assessment catalog for each use case's hard gates.
 
-## 13. API quick reference
+## 14. API quick reference
 
 Health:
 
@@ -501,7 +533,7 @@ curl -X POST http://127.0.0.1:8787/api/v1/runs \
   -d '{"suite":"inventory","profile":"default"}'
 ```
 
-## 14. Local data
+## 15. Local data
 
 ```text
 .cloudmark/
@@ -514,7 +546,7 @@ curl -X POST http://127.0.0.1:8787/api/v1/runs \
 
 The complete directory is excluded by `.gitignore`.
 
-## 15. Recommended provider-assessment procedure
+## 16. Recommended provider-assessment procedure
 
 1. Create two clean VMs with the same SKU, OS, and disk type.
 2. Use anti-affinity when possible so the VMs do not share a physical host.
@@ -526,7 +558,7 @@ The complete directory is excluded by `.gitignore`.
 8. Create fresh instances and repeat in different time windows.
 9. Never generalize one VM or one run to the complete provider.
 
-## 16. Troubleshooting
+## 17. Troubleshooting
 
 ### Dashboard reports API offline
 
@@ -584,7 +616,7 @@ credentials and requires HTTPS for remote control connections by default.
   management address hidden behind NAT;
 - do not expose the iperf3 port range to the public Internet.
 
-## 17. Validate the project
+## 18. Validate the project
 
 Python tests:
 

@@ -40,9 +40,9 @@ PACKAGES = {
         "zypper": ["sysbench", "postgresql-server", "postgresql-contrib", "redis"],
     },
     "web": {
-        "apt": ["nginx", "apache2-utils"],
-        "dnf": ["nginx", "httpd-tools"],
-        "zypper": ["nginx", "apache2-utils"],
+        "apt": ["nginx", "apache2-utils", "openssl"],
+        "dnf": ["nginx", "httpd-tools", "openssl"],
+        "zypper": ["nginx", "apache2-utils", "openssl"],
     },
 }
 

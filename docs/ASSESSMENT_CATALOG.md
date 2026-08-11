@@ -25,7 +25,7 @@ evidence returns `Insufficient evidence`, never an artificial zero.
 | 6 | Storage, Filesystem & Object | Sequential/random/mixed I/O, queue-depth sweep, sync/fsync, P50–P99.9, burst/throttle, metadata, integrity, object PUT/GET/list, and snapshot/restore | 1 system for block; 2–3 for object/backup | Available |
 | 7 | Network & Connectivity | TCP/UDP, 1–16 streams, idle/loaded RTT, jitter/loss/reorder, retransmits, MTU, DNS, IPv4/IPv6, private/public, and cross-zone/region | 2 agents + Controller | Partial |
 | 8 | GPU & Accelerators | Model/driver, VRAM, H2D/D2H, compute, tensor/floating-point profiles, framework probes, thermal/power stability, and media encode/decode | 1 GPU system; 2 for serving | Roadmap |
-| 9 | Web, API & TLS | Static/JSON, TLS handshake, keep-alive, HTTP/2/3, concurrency ramp, P50–P99, error rate, saturation, soak, and reverse proxy | target + generator + Controller | Roadmap |
+| 9 | Web, API & TLS | Static/JSON, TLS handshake, keep-alive, HTTP/2/3, concurrency ramp, P50–P99, error rate, saturation, soak, and reverse proxy | target + generator + Controller | Partial |
 | 10 | Database & Cache | PostgreSQL/MySQL OLTP, read-only/read-write, connection scaling, checkpoint/fsync, Redis GET/SET/pipeline/persistence, and replication lag | server + client; 3+ for replication | Partial |
 | 11 | Containers & Kubernetes | Runtime discovery, pull/unpack, cold start, overlay I/O, pod density, service latency, CNI, scheduling, and autoscaling response | 1 for containers; 2–3+ for Kubernetes | Partial |
 | 12 | Security & Isolation | Port/exposure inventory, firewall/security-group evidence, TLS posture, IAM/RBAC, hardening, tenant-isolation signals, and auditability | 1–2 systems; control-plane adapter when required | Roadmap |
@@ -56,6 +56,14 @@ durable, ephemeral PostgreSQL service on a Target Agent and built-in pgbench
 workloads from a separate Generator. Transaction tail percentiles,
 MySQL/MariaDB, Redis, replication, backup/restore, and failover remain missing;
 database coverage therefore remains `Partial`.
+
+The current development head also implements the first domain 9 subset with an
+isolated Nginx service on a Target Agent and bounded ApacheBench HTTP/TLS jobs
+from a separate Generator. Fixed JSON/static payloads, connection churn,
+concurrency, P50–P99 latency, errors, transfer, TLS evidence, and cleanup are
+available. Generator-saturation validation, dynamic application runtimes,
+HTTP/2/3, reverse proxy, CDN, WAF, autoscaling, and resilience remain missing;
+web coverage therefore remains `Partial`.
 
 ## Mapping evidence to intended use
 

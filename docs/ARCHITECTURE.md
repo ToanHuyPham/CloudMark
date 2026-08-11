@@ -95,7 +95,7 @@ Controller lock.
 
 ## Client/server workload services
 
-Database and future web executors use the same paired topology as provider
+Database and web executors use the same paired topology as provider
 network assessment while retaining service-specific task allow-lists. A start
 task creates an ephemeral service on the Target, bounded client tasks execute on
 the Generator, and a stop task verifies cleanup. The service watchdog is owned
@@ -105,6 +105,13 @@ lost control connection.
 `database-postgresql-v1` is the first implementation. It accepts only fixed
 PostgreSQL settings and built-in pgbench workloads. The Controller never sends
 SQL, paths, credentials, or arbitrary server configuration to an Agent.
+
+`web-http-v1` uses the same lifecycle to create an isolated Nginx service on
+the Target. The Agent generates fixed payloads and an ephemeral certificate,
+binds the exact advertised address on ports 58080 and 58443, and permits only
+the paired Generator address. Generator tasks accept only versioned
+ApacheBench jobs over three fixed endpoints. The Controller never accepts an
+arbitrary URL and is not an HTTP/TLS traffic endpoint.
 
 ## Network direction policy
 

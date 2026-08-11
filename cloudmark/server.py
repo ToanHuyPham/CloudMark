@@ -39,11 +39,19 @@ from .profiles import (
     MEMORY_PROFILES,
     NETWORK_PROFILES,
     STORAGE_PROFILES,
+    WEB_PROFILES,
     all_profiles,
 )
 from .provider import detect_provider
 from .remote import RemoteError, remote_default_timeout, remote_total_steps, run_remote_benchmark, validate_remote_agent
 from .runner import RUNNER_VERSION, CancellationToken, JobContext, RunCancelled, RunTimedOut
+from .web_benchmark import (
+    WebBenchmarkError,
+    run_web,
+    validate_web_run,
+    web_default_timeout,
+    web_total_steps,
+)
 
 
 def _json_bytes(value: Any) -> bytes:
@@ -103,8 +111,8 @@ class CloudMarkController:
         suite = str(request.get("suite", ""))
         profile = str(request.get("profile", ""))
         agent_id = str(request.get("agent_id", "")).strip()
-        if suite not in {"inventory", "compute", "memory", "storage", "network", "database"}:
-            raise ValueError("Supported suites are inventory, compute, memory, storage, network, and database.")
+        if suite not in {"inventory", "compute", "memory", "storage", "network", "database", "web"}:
+            raise ValueError("Supported suites are inventory, compute, memory, storage, network, database, and web.")
         if agent_id and suite not in {"compute", "memory", "storage"}:
             raise ValueError("agent_id is supported only for compute, memory, and storage runs.")
         remote_agent: dict[str, Any] | None = None
@@ -131,7 +139,7 @@ class CloudMarkController:
                     (
                         run
                         for run in self.database.list_runs(200)
-                        if run["suite"] in {"network", "database"}
+                        if run["suite"] in {"network", "database", "web"}
                         and run["status"] in {"queued", "running"}
                         and str(run.get("request", {}).get("session_id", "")) == str(remote_agent["session_id"])
                     ),
@@ -169,7 +177,7 @@ class CloudMarkController:
                 (
                     run
                     for run in self.database.list_runs(200)
-                    if run["suite"] in {"compute", "memory", "storage", "database"}
+                    if run["suite"] in {"compute", "memory", "storage", "database", "web"}
                     and run["status"] in {"queued", "running"}
                     and (
                         str(run.get("request", {}).get("session_id", "")) == session_id
@@ -220,6 +228,38 @@ class CloudMarkController:
             methodology_version = str(profile_config["methodology_version"])
             tool_version = "postgresql/pgbench-agent"
             default_timeout = database_default_timeout(profile)
+        elif suite == "web":
+            if request.get("confirm_web_load") is not True:
+                raise ValueError(
+                    "Web test requires confirm_web_load=true because it creates an ephemeral service and generates sustained HTTP/TLS traffic."
+                )
+            session_id = str(request.get("session_id", ""))
+            _, target, generator = validate_web_run(self.database, session_id, profile)
+            for web_agent in (target, generator):
+                if self.database.has_active_agent_task(str(web_agent["id"])):
+                    raise ValueError(f"Agent {web_agent['name']} already has an active task.")
+            conflicting_run = next(
+                (
+                    run
+                    for run in self.database.list_runs(200)
+                    if run["status"] in {"queued", "running"}
+                    and (
+                        str(run.get("request", {}).get("session_id", "")) == session_id
+                        or (
+                            (agent := self.database.get_agent(str(run.get("request", {}).get("agent_id", ""))))
+                            and str(agent["session_id"]) == session_id
+                        )
+                    )
+                ),
+                None,
+            )
+            if conflicting_run:
+                raise ValueError("A selected Agent in this session already has an active assessment.")
+            profile_config = WEB_PROFILES[profile]
+            total_steps = web_total_steps(profile)
+            methodology_version = str(profile_config["methodology_version"])
+            tool_version = "nginx/apachebench-agent"
+            default_timeout = web_default_timeout(profile)
         else:
             total_steps = 1
             methodology_version = "inventory-v1"
@@ -335,6 +375,14 @@ class CloudMarkController:
                     str(request["profile"]),
                     context=context,
                 )
+            elif request["suite"] == "web":
+                result = run_web(
+                    self.database,
+                    run_id,
+                    str(request["session_id"]),
+                    str(request["profile"]),
+                    context=context,
+                )
             else:
                 raise ValueError(f"No executor is registered for suite {request['suite']}.")
             result_tool = result.get("tool") if isinstance(result, dict) else None
@@ -378,7 +426,7 @@ class CloudMarkController:
                 error=str(exc),
                 phase="failed",
             )
-        except (DatabaseBenchmarkError, DistributedError) as exc:
+        except (DatabaseBenchmarkError, DistributedError, WebBenchmarkError) as exc:
             self.database.update_run(
                 run_id,
                 status="failed",

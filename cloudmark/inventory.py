@@ -10,7 +10,7 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
-from .tooling import find_postgres_binary
+from .tooling import find_postgres_binary, find_web_binary
 
 
 def _run(command: list[str], timeout: float = 3.0) -> str | None:
@@ -205,6 +205,9 @@ def collect_inventory(workspace: Path | None = None) -> dict[str, Any]:
             "initdb": find_postgres_binary("initdb") is not None,
             "pgbench": find_postgres_binary("pgbench") is not None,
             "pg_isready": find_postgres_binary("pg_isready") is not None,
+            "nginx": find_web_binary("nginx") is not None,
+            "ab": find_web_binary("ab") is not None,
+            "openssl": find_web_binary("openssl") is not None,
             "sysbench": shutil.which("sysbench") is not None,
             "gcc": shutil.which("gcc") is not None,
             "docker": shutil.which("docker") is not None,

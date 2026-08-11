@@ -11,7 +11,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from cloudmark.agent import AgentBenchmarkFailure, AgentWorker, join_session
 from cloudmark.benchmarks import _metrics, _parse_fio_log, run_storage
@@ -45,10 +45,18 @@ from cloudmark.profiles import (
     NETWORK_PROFILES,
     SCENARIOS,
     STORAGE_PROFILES,
+    WEB_PROFILES,
 )
 from cloudmark.provider import _declared_manifest
 from cloudmark.runner import CancellationToken, JobContext, ProcessResult, RunCancelled, RunTimedOut
 from cloudmark.server import CloudMarkController, Server
+from cloudmark.web_benchmark import (
+    WebBenchmarkError,
+    parse_ab_output,
+    run_web,
+    validate_web_run,
+    web_total_steps,
+)
 
 
 class CloudMarkTests(unittest.TestCase):
@@ -593,7 +601,7 @@ initial connection time = 4.000 ms
 tps = 400.000000 (without initial connection time)
 """
         with patch.object(worker, "_postgres_tool", return_value="pgbench"), patch.object(
-            worker, "_guarded_task_process", side_effect=[(0, "warmup", ""), (0, summary, "")]
+            worker, "_guarded_service_process", side_effect=[(0, "warmup", ""), (0, summary, "")]
         ) as process, patch("cloudmark.agent.tool_version", return_value="pgbench 16.2"):
             result = worker._run_database_client(
                 "task_abc123",
@@ -648,6 +656,14 @@ tps = 400.000000 (without initial connection time)
             worker._cleanup_expired()
         stop.assert_called_once_with("task_deadbeef")
 
+    def test_agent_web_watchdog_cleans_up_after_controller_contact_loss(self) -> None:
+        worker = AgentWorker("http://127.0.0.1:8787", "agent", "token")
+        worker.active_web_servers["task_webdeadbeef"] = SimpleNamespace(deadline=time.monotonic() + 300)
+        worker.last_controller_contact = time.monotonic() - 21
+        with patch.object(worker, "_stop_web_server") as stop:
+            worker._cleanup_expired()
+        stop.assert_called_once_with("task_webdeadbeef")
+
     def test_guarded_database_process_stops_immediately_on_controller_cancellation(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             worker = AgentWorker(
@@ -660,7 +676,7 @@ tps = 400.000000 (without initial connection time)
             ):
                 started = time.monotonic()
                 with self.assertRaisesRegex(AgentBenchmarkFailure, "cancelled"):
-                    worker._guarded_task_process(
+                    worker._guarded_service_process(
                         "task_deadbeef",
                         [sys.executable, "-c", "import time; time.sleep(30)"],
                         environment=os.environ.copy(),
@@ -862,12 +878,341 @@ tps = 400.000000 (without initial connection time)
             self.assertTrue(cleanup_seen.is_set())
             self.assertTrue(captured.exception.partial_result["cleanup"]["cleanup_verified"])
 
+    @staticmethod
+    def _apachebench_summary() -> str:
+        return """
+Server Software:        nginx/1.24.0
+Server Hostname:        10.0.0.10
+Server Port:            58443
+SSL/TLS Protocol:       TLSv1.2,ECDHE-RSA-AES256-GCM-SHA384,2048,256
+Document Path:          /api/v1/record
+Document Length:        1024 bytes
+Concurrency Level:      16
+Time taken for tests:   20.000 seconds
+Complete requests:      20000
+Failed requests:        2
+   (Connect: 1, Receive: 1, Length: 0, Exceptions: 0)
+Non-2xx responses:      1
+Keep-Alive requests:    19997
+Total transferred:      22000000 bytes
+HTML transferred:       20480000 bytes
+Requests per second:    1000.00 [#/sec] (mean)
+Time per request:       16.000 [ms] (mean)
+Time per request:       1.000 [ms] (mean, across all concurrent requests)
+Transfer rate:          1074.22 [Kbytes/sec] received
+
+Connection Times (ms)
+              min  mean[+/-sd] median   max
+Connect:        1    2   1.0      2      10
+Processing:     1   10   5.0      8      50
+Waiting:        1    8   4.0      7      40
+Total:          2   12   5.5     10      55
+
+Percentage of the requests served within a certain time (ms)
+  50%     10
+  66%     12
+  75%     14
+  80%     16
+  90%     20
+  95%     25
+  98%     35
+  99%     40
+ 100%     55 (longest request)
+"""
+
+    def test_apachebench_parser_preserves_tail_latency_failures_tls_and_connection_times(self) -> None:
+        metrics = parse_ab_output(self._apachebench_summary())
+        self.assertEqual(metrics["complete_requests"], 20000)
+        self.assertEqual(metrics["successful_requests"], 19997)
+        self.assertEqual(metrics["failed_requests"], 2)
+        self.assertEqual(metrics["non_2xx_responses"], 1)
+        self.assertEqual(metrics["requests_per_second"], 1000.0)
+        self.assertEqual(metrics["latency_percentiles_ms"]["p99"], 40.0)
+        self.assertEqual(metrics["connection_times"]["connect"]["max_ms"], 10.0)
+        self.assertEqual(metrics["tls"]["protocol"], "TLSv1.2")
+
+    def test_web_run_requires_nginx_openssl_and_apachebench_on_the_correct_roles(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            database = Database(Path(directory) / "test.sqlite3")
+            database.create_session("session_web", "web", "hash", "2099-01-01T00:00:00+00:00")
+            target_system = {"inventory": {"capabilities": {"nginx": True, "openssl": True}}}
+            generator_system = {"inventory": {"capabilities": {"ab": True}}}
+            database.add_agent(
+                "agent_target", "session_web", "target", "target", target_system, endpoint={"address": "10.0.0.10"}
+            )
+            database.add_agent(
+                "agent_generator",
+                "session_web",
+                "generator",
+                "generator",
+                generator_system,
+                endpoint={"address": "10.0.0.11"},
+            )
+            _, target, generator = validate_web_run(database, "session_web", "web-peer-quick")
+            self.assertEqual(target["id"], "agent_target")
+            self.assertEqual(generator["id"], "agent_generator")
+
+    def test_agent_builds_only_allowlisted_apachebench_commands(self) -> None:
+        worker = AgentWorker("http://127.0.0.1:8787", "agent", "token")
+        with patch.object(worker, "_web_tool", return_value="ab"), patch.object(
+            worker,
+            "_guarded_service_process",
+            side_effect=[(0, "warmup", ""), (0, self._apachebench_summary(), "")],
+        ) as process, patch("cloudmark.agent.web_tool_version", return_value="ApacheBench, Version 2.4.62"):
+            result = worker._run_web_client(
+                "task_web123",
+                {
+                    "target_address": "10.0.0.10",
+                    "scheme": "https",
+                    "port": 58443,
+                    "path": "/api/v1/record",
+                    "concurrency": 16,
+                    "duration_seconds": 20,
+                    "warmup_seconds": 2,
+                    "keep_alive": True,
+                    "run_completed_steps": 1,
+                    "run_total_steps": 7,
+                },
+            )
+        measured_command = process.call_args_list[1].args[1]
+        self.assertIn("-k", measured_command)
+        self.assertIn("-f", measured_command)
+        self.assertEqual(measured_command[measured_command.index("-f") + 1], "TLS1.2")
+        self.assertEqual(measured_command[-1], "https://10.0.0.10:58443/api/v1/record")
+        self.assertEqual(result["apachebench"]["metrics"]["requests_per_second"], 1000.0)
+        with self.assertRaisesRegex(WebBenchmarkError, "path"):
+            worker._run_web_client(
+                "task_web123",
+                {
+                    "target_address": "10.0.0.10",
+                    "scheme": "https",
+                    "port": 58443,
+                    "path": "/operator-supplied-target",
+                    "concurrency": 16,
+                    "duration_seconds": 20,
+                    "run_completed_steps": 1,
+                    "run_total_steps": 7,
+                },
+            )
+
+    def test_agent_refuses_web_cleanup_outside_its_workspace(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory) / "agent"
+            outside = Path(directory) / "not-a-web-service"
+            outside.mkdir()
+            worker = AgentWorker("http://127.0.0.1:8787", "agent", "token", workspace=workspace)
+            with self.assertRaisesRegex(WebBenchmarkError, "outside"):
+                worker._remove_web_root(outside)
+            self.assertTrue(outside.exists())
+
+    def test_agent_web_service_config_restricts_peer_ports_tls_and_workspace(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            worker = AgentWorker(
+                "http://127.0.0.1:8787", "agent", "token", workspace=Path(directory) / "agent"
+            )
+            process = MagicMock()
+            process.poll.return_value = None
+            process.returncode = 0
+            connection = MagicMock()
+            with patch.object(worker, "_web_tool", side_effect=lambda name: name), patch.object(
+                worker, "_guarded_service_process", return_value=(0, "", "")
+            ), patch.object(
+                worker, "_service_control_update"
+            ), patch("cloudmark.agent.web_tool_version", return_value="test-version"), patch(
+                "cloudmark.agent.subprocess.Popen", return_value=process
+            ), patch("cloudmark.agent.socket.create_connection", return_value=connection), patch(
+                "cloudmark.agent.os.geteuid", return_value=1000, create=True
+            ):
+                result = worker._start_web_server(
+                    "task_webconfig",
+                    {
+                        "listen_address": "10.0.0.10",
+                        "allowed_client_address": "10.0.0.11",
+                        "http_port": 58080,
+                        "https_port": 58443,
+                        "deadline_seconds": 300,
+                        "run_completed_steps": 0,
+                        "run_total_steps": 7,
+                    },
+                )
+            config = worker.active_web_servers["task_webconfig"].config_path.read_text(encoding="utf-8")
+            self.assertIn("listen 10.0.0.10:58080;", config)
+            self.assertIn("listen 10.0.0.10:58443 ssl;", config)
+            self.assertIn("allow 10.0.0.11;", config)
+            self.assertIn("deny all;", config)
+            self.assertIn("ssl_protocols TLSv1.2;", config)
+            self.assertIn("ssl_ciphers ECDHE-RSA-AES128-GCM-SHA256;", config)
+            self.assertNotIn("0.0.0.0", config)
+            self.assertEqual(result["payloads"]["api_bytes"], 1024)
+            with patch("cloudmark.agent.subprocess.run", return_value=SimpleNamespace(returncode=0)):
+                cleanup = worker._stop_web_server("task_webconfig")
+            self.assertTrue(cleanup["cleanup_verified"])
+
+    def test_web_orchestrator_records_measurements_and_verified_cleanup(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            database = Database(Path(directory) / "test.sqlite3")
+            database.create_session("session_web", "web", "hash", "2099-01-01T00:00:00+00:00")
+            target_system = {"inventory": {"capabilities": {"nginx": True, "openssl": True}}}
+            generator_system = {"inventory": {"capabilities": {"ab": True}}}
+            database.add_agent(
+                "agent_target", "session_web", "target", "target", target_system, endpoint={"address": "10.0.0.10"}
+            )
+            database.add_agent(
+                "agent_generator",
+                "session_web",
+                "generator",
+                "generator",
+                generator_system,
+                endpoint={"address": "10.0.0.11"},
+            )
+            total_steps = web_total_steps("web-peer-quick")
+            database.create_run(
+                "run_web", "web", "web-peer-quick", {"suite": "web"}, total_steps=total_steps
+            )
+            done = threading.Event()
+
+            def complete_tasks() -> None:
+                while not done.is_set():
+                    handled = False
+                    for agent_id in ("agent_target", "agent_generator"):
+                        task = database.claim_agent_task(agent_id)
+                        if not task:
+                            continue
+                        handled = True
+                        if task["kind"] == "web-service-start":
+                            result = {
+                                "ready": True,
+                                "engine": "nginx",
+                                "tools": {"nginx": "nginx/1.24.0", "openssl": "OpenSSL 3.0"},
+                            }
+                        elif task["kind"] == "web-client":
+                            result = {
+                                "apachebench": {
+                                    "scheme": task["payload"]["scheme"],
+                                    "path": task["payload"]["path"],
+                                    "concurrency": task["payload"]["concurrency"],
+                                    "duration_seconds": task["payload"]["duration_seconds"],
+                                    "metrics": {
+                                        "requests_per_second": 1000.0,
+                                        "latency_percentiles_ms": {"p95": 5.0, "p99": 10.0},
+                                        "success_percent": 100.0,
+                                    },
+                                    "tool": {"name": "ab", "version": "ApacheBench 2.4"},
+                                }
+                            }
+                        else:
+                            result = {"status": "completed", "cleanup_verified": True}
+                        database.finish_agent_task(task["id"], agent_id, status="completed", result=result)
+                    if not handled:
+                        time.sleep(0.005)
+
+            worker = threading.Thread(target=complete_tasks, daemon=True)
+            worker.start()
+            try:
+                context = JobContext("run_web", total_steps=total_steps, timeout_seconds=30)
+                result = run_web(database, "run_web", "session_web", "web-peer-quick", context=context)
+            finally:
+                done.set()
+                worker.join(timeout=2)
+            self.assertEqual(total_steps, 7)
+            self.assertEqual(len(result["web_measurements"]), 5)
+            self.assertTrue(result["cleanup"]["cleanup_verified"])
+            self.assertFalse(result["policy"]["controller_in_data_path"])
+
+    def test_web_orchestrator_schedules_cleanup_after_client_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            database = Database(Path(directory) / "test.sqlite3")
+            database.create_session("session_web", "web", "hash", "2099-01-01T00:00:00+00:00")
+            target_system = {"inventory": {"capabilities": {"nginx": True, "openssl": True}}}
+            generator_system = {"inventory": {"capabilities": {"ab": True}}}
+            database.add_agent(
+                "agent_target", "session_web", "target", "target", target_system, endpoint={"address": "10.0.0.10"}
+            )
+            database.add_agent(
+                "agent_generator",
+                "session_web",
+                "generator",
+                "generator",
+                generator_system,
+                endpoint={"address": "10.0.0.11"},
+            )
+            total_steps = web_total_steps("web-peer-quick")
+            database.create_run(
+                "run_web_failure", "web", "web-peer-quick", {"suite": "web"}, total_steps=total_steps
+            )
+            done = threading.Event()
+            cleanup_seen = threading.Event()
+
+            def complete_tasks() -> None:
+                while not done.is_set():
+                    handled = False
+                    for agent_id in ("agent_target", "agent_generator"):
+                        task = database.claim_agent_task(agent_id)
+                        if not task:
+                            continue
+                        handled = True
+                        if task["kind"] == "web-service-start":
+                            database.finish_agent_task(task["id"], agent_id, status="completed", result={"ready": True})
+                        elif task["kind"] == "web-client":
+                            database.finish_agent_task(
+                                task["id"], agent_id, status="failed", error="simulated web client failure"
+                            )
+                        else:
+                            cleanup_seen.set()
+                            database.finish_agent_task(
+                                task["id"],
+                                agent_id,
+                                status="completed",
+                                result={"status": "completed", "cleanup_verified": True},
+                            )
+                    if not handled:
+                        time.sleep(0.005)
+
+            worker = threading.Thread(target=complete_tasks, daemon=True)
+            worker.start()
+            try:
+                context = JobContext("run_web_failure", total_steps=total_steps, timeout_seconds=30)
+                with self.assertRaisesRegex(DistributedError, "simulated web client failure") as captured:
+                    run_web(database, "run_web_failure", "session_web", "web-peer-quick", context=context)
+            finally:
+                done.set()
+                worker.join(timeout=2)
+            self.assertTrue(cleanup_seen.is_set())
+            self.assertTrue(captured.exception.partial_result["cleanup"]["cleanup_verified"])
+
+    def test_controller_admits_only_confirmed_web_pair_runs(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            controller = CloudMarkController(Path(directory))
+            controller.database.create_session("session_web", "web", "hash", "2099-01-01T00:00:00+00:00")
+            target_system = {"inventory": {"capabilities": {"nginx": True, "openssl": True}}}
+            generator_system = {"inventory": {"capabilities": {"ab": True}}}
+            controller.database.add_agent(
+                "agent_target", "session_web", "target", "target", target_system, endpoint={"address": "10.0.0.10"}
+            )
+            controller.database.add_agent(
+                "agent_generator",
+                "session_web",
+                "generator",
+                "generator",
+                generator_system,
+                endpoint={"address": "10.0.0.11"},
+            )
+            request = {"suite": "web", "profile": "web-peer-quick", "session_id": "session_web"}
+            with self.assertRaisesRegex(ValueError, "confirm_web_load"):
+                controller.submit_run(request)
+            with patch.object(controller, "_execute_run"):
+                run = controller.submit_run({**request, "confirm_web_load": True})
+            stored = controller.database.get_run(run["id"])
+            self.assertEqual(stored["total_steps"], 7)
+            self.assertEqual(stored["methodology_version"], "web-http-v1")
+            self.assertEqual(stored["tool_version"], "nginx/apachebench-agent")
+
     def test_scenario_coverage_does_not_overstate_executors(self) -> None:
         statuses = {scenario["id"]: scenario["status"] for scenario in SCENARIOS}
         self.assertEqual(statuses["storage-backup"], "available")
         self.assertEqual(statuses["database"], "partial")
         self.assertEqual(statuses["network"], "partial")
-        self.assertEqual(statuses["web-app"], "roadmap")
+        self.assertEqual(statuses["web-app"], "partial")
 
     def test_assessment_catalog_covers_full_infrastructure_stack(self) -> None:
         domains = {domain["id"]: domain["status"] for domain in ASSESSMENT_DOMAINS}
@@ -877,6 +1222,7 @@ tps = 400.000000 (without initial connection time)
         self.assertEqual(domains["storage"], "available")
         self.assertEqual(domains["network"], "partial")
         self.assertEqual(domains["database"], "partial")
+        self.assertEqual(domains["web"], "partial")
         self.assertEqual(domains["reliability"], "roadmap")
 
     def test_bootstrap_includes_base_pack(self) -> None:
@@ -905,6 +1251,21 @@ tps = 400.000000 (without initial connection time)
             self.assertEqual(profile["methodology_version"], "database-postgresql-v1")
             self.assertLessEqual(profile["scale_factor"], 100)
             self.assertTrue(all(job["duration"] <= 60 for job in profile["jobs"]))
+
+    def test_bootstrap_web_pack_includes_nginx_apachebench_and_openssl(self) -> None:
+        with patch("cloudmark.bootstrap.detect_manager", return_value="apt"):
+            plan = create_plan(["web"])
+        self.assertIn("nginx", plan.packages)
+        self.assertIn("apache2-utils", plan.packages)
+        self.assertIn("openssl", plan.packages)
+
+    def test_web_profiles_are_versioned_and_bounded(self) -> None:
+        self.assertEqual(web_total_steps("web-peer-quick"), 7)
+        self.assertEqual(web_total_steps("web-peer-standard"), 11)
+        for profile in WEB_PROFILES.values():
+            self.assertEqual(profile["methodology_version"], "web-http-v1")
+            self.assertTrue(all(job["duration"] <= 60 for job in profile["jobs"]))
+            self.assertTrue(all(job["concurrency"] <= 64 for job in profile["jobs"]))
 
     def test_memory_preflight_rejects_unsupported_platforms_before_compilation(self) -> None:
         with tempfile.TemporaryDirectory() as directory, patch("cloudmark.compute.sys.platform", "win32"):
@@ -1195,6 +1556,8 @@ max: 1.50
                 self.assertIn("memory-quick", dashboard["profiles"]["memory"])
                 self.assertIn("disk-sustained", dashboard["profiles"]["storage"])
                 self.assertIn("network-peer-quick", dashboard["profiles"]["network"])
+                self.assertIn("postgres-peer-quick", dashboard["profiles"]["database"])
+                self.assertIn("web-peer-quick", dashboard["profiles"]["web"])
                 self.assertIn("sessions", dashboard)
                 request = urllib.request.Request(
                     f"{base}/runs/run_http/cancel",
