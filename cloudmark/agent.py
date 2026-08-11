@@ -20,6 +20,16 @@ from urllib.parse import urlparse
 from . import __version__
 from .benchmarks import run_storage
 from .compute import run_system_benchmark
+from .database_benchmark import (
+    DATABASE_ALLOWED_CLIENTS,
+    DATABASE_ALLOWED_THREADS,
+    DATABASE_MAX_DURATION,
+    DATABASE_MAX_SCALE,
+    DATABASE_PORT_MAX,
+    DATABASE_PORT_MIN,
+    DatabaseBenchmarkError,
+    parse_pgbench_output,
+)
 from .inventory import collect_inventory
 from .network import (
     ALLOWED_LATENCY_COUNT_MAX,
@@ -40,6 +50,10 @@ from .profiles import COMPUTE_PROFILES, MEMORY_PROFILES, STORAGE_PROFILES
 from .provider import detect_provider
 from .remote import REMOTE_METHODOLOGY_VERSION
 from .runner import CancellationToken, JobContext, RunCancelled, RunTimedOut
+from .tooling import find_postgres_binary, tool_version
+
+
+DATABASE_CONTROLLER_CONTACT_TIMEOUT_SECONDS = 20
 
 
 def _validate_controller(controller: str, allow_http: bool) -> str:
@@ -128,6 +142,21 @@ class ActiveServer:
     deadline: float
 
 
+@dataclass
+class ActiveDatabaseServer:
+    process: subprocess.Popen[str]
+    deadline: float
+    root: Path
+    data_dir: Path
+    log_path: Path
+    log_handle: Any
+    postgres_version: str | None
+    pgbench_version: str | None
+    scale_factor: int
+    port: int
+    settings: dict[str, Any]
+
+
 class AgentBenchmarkFailure(RuntimeError):
     def __init__(self, message: str, *, status: str, result: dict[str, Any] | None):
         super().__init__(message)
@@ -153,15 +182,19 @@ class AgentWorker:
         self.workspace = workspace.resolve()
         self.workspace.mkdir(parents=True, exist_ok=True)
         self.active_servers: dict[str, ActiveServer] = {}
+        self.active_database_servers: dict[str, ActiveDatabaseServer] = {}
         self.pending_completions: dict[str, dict[str, Any]] = {}
+        self.last_controller_contact = time.monotonic()
 
     def _api(self, suffix: str, data: dict[str, Any], *, timeout: float = 45) -> dict[str, Any]:
-        return _request_json(
+        response = _request_json(
             f"{self.controller}/api/v1/agents/{self.agent_id}/{suffix}",
             data=data,
             agent_token=self.agent_token,
             timeout=timeout,
         )
+        self.last_controller_contact = time.monotonic()
+        return response
 
     @staticmethod
     def _iperf() -> str:
@@ -363,6 +396,456 @@ class AgentWorker:
             raise NetworkError(stderr.strip() or stdout.strip() or "iperf3 server failed.")
         return {"iperf": parse_iperf_json(stdout)}
 
+    @staticmethod
+    def _postgres_tool(name: str) -> str:
+        executable = find_postgres_binary(name)
+        if not executable:
+            raise DatabaseBenchmarkError(
+                f"{name} is not installed or discoverable. Run CloudMark bootstrap with the database pack."
+            )
+        return executable
+
+    @staticmethod
+    def _database_port(value: Any) -> int:
+        port = int(value)
+        if not DATABASE_PORT_MIN <= port <= DATABASE_PORT_MAX:
+            raise DatabaseBenchmarkError("Database task port is outside the CloudMark allow-list.")
+        return port
+
+    def _database_root(self, task_id: str) -> Path:
+        if not task_id.startswith("task_") or not task_id.removeprefix("task_").isalnum():
+            raise DatabaseBenchmarkError("Database service task ID is invalid.")
+        base = (self.workspace / "database-services").resolve()
+        root = (base / task_id).resolve()
+        try:
+            root.relative_to(base)
+        except ValueError as exc:
+            raise DatabaseBenchmarkError("Database service path escaped the Agent workspace.") from exc
+        return root
+
+    @staticmethod
+    def _terminate_process(process: subprocess.Popen[str], timeout: float = 10) -> None:
+        if process.poll() is not None:
+            return
+        process.terminate()
+        try:
+            process.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=5)
+
+    @staticmethod
+    def _tail_text(path: Path, limit: int = 16_384) -> str:
+        if not path.is_file():
+            return ""
+        with path.open("rb") as handle:
+            handle.seek(0, 2)
+            size = handle.tell()
+            handle.seek(max(0, size - limit))
+            return handle.read().decode(errors="replace")
+
+    def _remove_database_root(self, root: Path) -> bool:
+        base = (self.workspace / "database-services").resolve()
+        resolved = root.resolve()
+        try:
+            relative = resolved.relative_to(base)
+        except ValueError as exc:
+            raise DatabaseBenchmarkError("Agent refused cleanup outside its database service workspace.") from exc
+        if not relative.parts:
+            raise DatabaseBenchmarkError("Agent refused cleanup of the database service root.")
+        if resolved.exists():
+            shutil.rmtree(resolved)
+        return not resolved.exists()
+
+    def _stop_database_server(self, server_task_id: str) -> dict[str, Any]:
+        active = self.active_database_servers.get(server_task_id)
+        if not active:
+            root = self._database_root(server_task_id)
+            return {
+                "status": "already-absent",
+                "cleanup_verified": not root.exists(),
+                "server_task_id": server_task_id,
+            }
+        self._terminate_process(active.process, timeout=15)
+        active.log_handle.close()
+        log_tail = self._tail_text(active.log_path)
+        cleaned = self._remove_database_root(active.root)
+        self.active_database_servers.pop(server_task_id, None)
+        return {
+            "status": "completed",
+            "cleanup_verified": cleaned,
+            "server_task_id": server_task_id,
+            "server_returncode": active.process.returncode,
+            "postgres_log_tail": log_tail,
+        }
+
+    def _start_database_server(self, task_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+        if self.active_database_servers:
+            raise DatabaseBenchmarkError("Agent already has an active database service.")
+        service_root = self.workspace / "database-services"
+        if service_root.is_dir() and any(item.is_dir() for item in service_root.iterdir()):
+            raise DatabaseBenchmarkError(
+                "Agent found a residual database service directory. Verify that no CloudMark PostgreSQL process "
+                "is running, then follow the recovery runbook before retrying."
+            )
+        if os.name != "nt" and hasattr(os, "geteuid") and os.geteuid() == 0:
+            raise DatabaseBenchmarkError("PostgreSQL assessment must run from a non-root Agent account.")
+        listen_address = str(payload.get("listen_address", ""))
+        allowed_client = str(payload.get("allowed_client_address", ""))
+        parsed_listen = self._peer_address(listen_address)
+        parsed_client = self._peer_address(allowed_client)
+        port = self._database_port(payload.get("port"))
+        scale_factor = int(payload.get("scale_factor", 0))
+        max_connections = int(payload.get("max_connections", 0))
+        deadline_seconds = int(payload.get("deadline_seconds", 0))
+        completed_steps = int(payload.get("run_completed_steps", -1))
+        total_steps = int(payload.get("run_total_steps", 0))
+        if not 1 <= scale_factor <= DATABASE_MAX_SCALE:
+            raise DatabaseBenchmarkError("Database scale factor is outside the CloudMark allow-list.")
+        if not 11 <= max_connections <= 64:
+            raise DatabaseBenchmarkError("Database max_connections is outside the CloudMark allow-list.")
+        if not 120 <= deadline_seconds <= 3_600:
+            raise DatabaseBenchmarkError("Database service deadline is outside the CloudMark allow-list.")
+        if completed_steps != 0 or not 2 <= total_steps <= 64:
+            raise DatabaseBenchmarkError("Database setup progress metadata is invalid.")
+
+        root = self._database_root(task_id)
+        data_dir = root / "cluster"
+        log_path = root / "postgres.log"
+        estimated_bytes = scale_factor * 20 * 1024 * 1024
+        disk = shutil.disk_usage(self.workspace)
+        reserve = max(1024**3, int(disk.total * 0.05))
+        if disk.free < estimated_bytes + reserve:
+            raise DatabaseBenchmarkError("Insufficient free space for the ephemeral database dataset and safety reserve.")
+        root.mkdir(parents=True, exist_ok=False)
+
+        initdb = self._postgres_tool("initdb")
+        postgres = self._postgres_tool("postgres")
+        pgbench = self._postgres_tool("pgbench")
+        pg_isready = self._postgres_tool("pg_isready")
+        environment = os.environ.copy()
+        environment["LC_ALL"] = "C"
+        log_handle: Any | None = None
+        process: subprocess.Popen[str] | None = None
+        try:
+            init_code, init_stdout, init_stderr = self._guarded_task_process(
+                task_id,
+                [
+                    initdb,
+                    "-D",
+                    str(data_dir),
+                    "-U",
+                    "cloudmark",
+                    "--auth-local=trust",
+                    "--auth-host=trust",
+                ],
+                environment=environment,
+                expected_duration=120,
+                phase="database-initialization",
+                current_job="initdb",
+                completed_steps=completed_steps,
+                total_steps=total_steps,
+            )
+            if init_code != 0:
+                raise DatabaseBenchmarkError(init_stderr.strip() or init_stdout.strip() or "initdb failed.")
+            prefix = 128 if parsed_client.version == 6 else 32
+            (data_dir / "pg_hba.conf").write_text(
+                "local all cloudmark trust\n"
+                "host postgres cloudmark 127.0.0.1/32 trust\n"
+                "host postgres cloudmark ::1/128 trust\n"
+                f"host postgres cloudmark {allowed_client}/{prefix} trust\n",
+                encoding="utf-8",
+            )
+            settings = {
+                "fsync": "on",
+                "full_page_writes": "on",
+                "synchronous_commit": "on",
+                "shared_buffers": "128MB",
+                "max_connections": max_connections,
+                "unix_socket_directories": "",
+            }
+            listen_value = f"{listen_address},127.0.0.1" if parsed_listen.version == 4 else f"{listen_address},::1"
+            command = [postgres, "-D", str(data_dir), "-h", listen_value, "-p", str(port)]
+            for key, value in settings.items():
+                command.extend(["-c", f"{key}={value}"])
+            log_handle = log_path.open("w", encoding="utf-8")
+            process = subprocess.Popen(
+                command,
+                stdout=log_handle,
+                stderr=subprocess.STDOUT,
+                text=True,
+                shell=False,
+                env=environment,
+                creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+            )
+            ready_deadline = time.monotonic() + 30
+            next_control_update = time.monotonic()
+            while time.monotonic() < ready_deadline:
+                if process.poll() is not None:
+                    raise DatabaseBenchmarkError("PostgreSQL exited before becoming ready.")
+                if time.monotonic() >= next_control_update:
+                    try:
+                        control = self._api(
+                            f"tasks/{task_id}/progress",
+                            {
+                                "progress": 0.0,
+                                "phase": "database-initialization",
+                                "current_job": "postgres-readiness",
+                                "completed_steps": completed_steps,
+                                "total_steps": total_steps,
+                            },
+                            timeout=5,
+                        )
+                    except (RuntimeError, urllib.error.URLError, TimeoutError, OSError) as exc:
+                        if (
+                            time.monotonic() - self.last_controller_contact
+                            > DATABASE_CONTROLLER_CONTACT_TIMEOUT_SECONDS
+                        ):
+                            raise AgentBenchmarkFailure(
+                                "Database service stopped after losing Controller contact.",
+                                status="failed",
+                                result=None,
+                            ) from exc
+                    else:
+                        if control.get("cancel_requested") or control.get("task_status") != "running":
+                            raise AgentBenchmarkFailure(
+                                "Database service cancelled by the Controller.", status="cancelled", result=None
+                            )
+                    next_control_update = time.monotonic() + 2
+                ready = subprocess.run(
+                    [pg_isready, "-h", "127.0.0.1", "-p", str(port), "-U", "cloudmark", "-d", "postgres"],
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                    check=False,
+                    shell=False,
+                    env=environment,
+                    creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+                )
+                if ready.returncode == 0:
+                    break
+                time.sleep(0.25)
+            else:
+                raise DatabaseBenchmarkError("PostgreSQL did not become ready within 30 seconds.")
+
+            prepare_code, prepare_stdout, prepare_stderr = self._guarded_task_process(
+                task_id,
+                [
+                    pgbench,
+                    "-i",
+                    "-s",
+                    str(scale_factor),
+                    "-h",
+                    "127.0.0.1",
+                    "-p",
+                    str(port),
+                    "-U",
+                    "cloudmark",
+                    "postgres",
+                ],
+                environment=environment,
+                expected_duration=240,
+                phase="database-initialization",
+                current_job=f"pgbench-scale-{scale_factor}",
+                completed_steps=completed_steps,
+                total_steps=total_steps,
+            )
+            if prepare_code != 0:
+                raise DatabaseBenchmarkError(
+                    prepare_stderr.strip() or prepare_stdout.strip() or "pgbench initialization failed."
+                )
+            active = ActiveDatabaseServer(
+                process=process,
+                deadline=time.monotonic() + deadline_seconds,
+                root=root,
+                data_dir=data_dir,
+                log_path=log_path,
+                log_handle=log_handle,
+                postgres_version=tool_version(postgres),
+                pgbench_version=tool_version(pgbench),
+                scale_factor=scale_factor,
+                port=port,
+                settings=settings,
+            )
+            self.active_database_servers[task_id] = active
+            return {
+                "ready": True,
+                "engine": "postgresql",
+                "port": port,
+                "scale_factor": scale_factor,
+                "estimated_dataset_bytes": estimated_bytes,
+                "durability": settings,
+                "tools": {"postgres": active.postgres_version, "pgbench": active.pgbench_version},
+            }
+        except BaseException:
+            if process is not None:
+                self._terminate_process(process)
+            if log_handle is not None:
+                log_handle.close()
+            self._remove_database_root(root)
+            raise
+
+    def _guarded_task_process(
+        self,
+        task_id: str,
+        command: list[str],
+        *,
+        environment: dict[str, str],
+        expected_duration: int,
+        phase: str,
+        current_job: str,
+        completed_steps: int,
+        total_steps: int,
+    ) -> tuple[int, str, str]:
+        process = subprocess.Popen(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            shell=False,
+            env=environment,
+            creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+        )
+        try:
+            started = time.monotonic()
+            last_contact = started
+            next_update = started
+            while process.poll() is None:
+                now = time.monotonic()
+                if now - started > expected_duration + 20:
+                    raise AgentBenchmarkFailure(
+                        "Database task exceeded its guarded timeout.", status="failed", result=None
+                    )
+                if now >= next_update:
+                    elapsed_fraction = min(0.99, max(0.0, (now - started) / max(1, expected_duration)))
+                    try:
+                        response = self._api(
+                            f"tasks/{task_id}/progress",
+                            {
+                                "progress": min(0.99, (completed_steps + elapsed_fraction) / max(1, total_steps)),
+                                "phase": phase,
+                                "current_job": current_job,
+                                "completed_steps": completed_steps,
+                                "total_steps": total_steps,
+                            },
+                            timeout=5,
+                        )
+                        last_contact = time.monotonic()
+                    except (RuntimeError, urllib.error.URLError, TimeoutError, OSError):
+                        if time.monotonic() - last_contact > DATABASE_CONTROLLER_CONTACT_TIMEOUT_SECONDS:
+                            raise AgentBenchmarkFailure(
+                                "Database task stopped after losing Controller contact.", status="failed", result=None
+                            )
+                    else:
+                        if response.get("cancel_requested") or response.get("task_status") != "running":
+                            raise AgentBenchmarkFailure(
+                                "Database task cancelled by the Controller.", status="cancelled", result=None
+                            )
+                    next_update = time.monotonic() + 2
+                time.sleep(0.2)
+            stdout, stderr = process.communicate()
+            return int(process.returncode or 0), stdout, stderr
+        except BaseException:
+            self._terminate_process(process)
+            process.communicate()
+            raise
+
+    def _run_database_client(self, task_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+        address = str(payload.get("target_address", ""))
+        self._peer_address(address)
+        port = self._database_port(payload.get("port"))
+        workload = str(payload.get("workload", ""))
+        if workload not in {"select-only", "tpcb-like"}:
+            raise DatabaseBenchmarkError("Database workload is outside the CloudMark allow-list.")
+        clients = int(payload.get("clients", 0))
+        threads = int(payload.get("threads", 0))
+        duration = int(payload.get("duration_seconds", 0))
+        warmup = int(payload.get("warmup_seconds", 0))
+        if clients not in DATABASE_ALLOWED_CLIENTS or threads not in DATABASE_ALLOWED_THREADS or threads > clients:
+            raise DatabaseBenchmarkError("Database concurrency is outside the CloudMark allow-list.")
+        if not 1 <= duration <= DATABASE_MAX_DURATION or not 0 <= warmup <= 10:
+            raise DatabaseBenchmarkError("Database duration is outside the CloudMark allow-list.")
+        connect_per_transaction = payload.get("connect_per_transaction") is True
+        completed_steps = int(payload.get("run_completed_steps", 0))
+        total_steps = int(payload.get("run_total_steps", 1))
+        if not 0 <= completed_steps < total_steps <= 64:
+            raise DatabaseBenchmarkError("Database progress metadata is invalid.")
+
+        pgbench = self._postgres_tool("pgbench")
+        environment = os.environ.copy()
+        environment["LC_ALL"] = "C"
+        environment["PGCONNECT_TIMEOUT"] = "5"
+
+        def command(seconds: int, progress: bool) -> list[str]:
+            value = [
+                pgbench,
+                "-h",
+                address,
+                "-p",
+                str(port),
+                "-U",
+                "cloudmark",
+                "-c",
+                str(clients),
+                "-j",
+                str(threads),
+                "-T",
+                str(seconds),
+                "-b",
+                workload,
+            ]
+            if progress:
+                value.extend(["-P", "1"])
+            if connect_per_transaction:
+                value.append("-C")
+            value.append("postgres")
+            return value
+
+        if warmup:
+            code, stdout, stderr = self._guarded_task_process(
+                task_id,
+                command(warmup, False),
+                environment=environment,
+                expected_duration=warmup,
+                phase="database-warmup",
+                current_job=workload,
+                completed_steps=completed_steps,
+                total_steps=total_steps,
+            )
+            if code != 0:
+                raise DatabaseBenchmarkError(stderr.strip() or stdout.strip() or "pgbench warm-up failed.")
+        code, stdout, stderr = self._guarded_task_process(
+            task_id,
+            command(duration, True),
+            environment=environment,
+            expected_duration=duration,
+            phase="measuring-database",
+            current_job=workload,
+            completed_steps=completed_steps,
+            total_steps=total_steps,
+        )
+        if code != 0:
+            raise DatabaseBenchmarkError(stderr.strip() or stdout.strip() or "pgbench workload failed.")
+        return {
+            "pgbench": {
+                "workload": workload,
+                "clients": clients,
+                "threads": threads,
+                "duration_seconds": duration,
+                "warmup_seconds": warmup,
+                "connect_per_transaction": connect_per_transaction,
+                "metrics": parse_pgbench_output(stdout, stderr),
+                "tool": {"name": "pgbench", "version": tool_version(pgbench)},
+                "raw": {"stdout": stdout, "stderr": stderr},
+            }
+        }
+
+    def _stop_database_task(self, payload: dict[str, Any]) -> dict[str, Any]:
+        server_task_id = str(payload.get("server_task_id", ""))
+        if not server_task_id:
+            raise DatabaseBenchmarkError("Database cleanup task is missing its service ID.")
+        return self._stop_database_server(server_task_id)
+
     def _benchmark_evidence(self) -> dict[str, Any]:
         return {
             "captured_at": datetime.now(timezone.utc).isoformat(),
@@ -496,6 +979,12 @@ class AgentWorker:
             return self._run_latency(payload)
         if kind == "network-server-collect":
             return self._collect_server(payload)
+        if kind == "database-server-start":
+            return self._start_database_server(str(task["id"]), payload)
+        if kind == "database-client":
+            return self._run_database_client(str(task["id"]), payload)
+        if kind == "database-server-stop":
+            return self._stop_database_task(payload)
         if kind in {"benchmark-compute", "benchmark-memory", "benchmark-storage"}:
             return self._run_benchmark(task, payload)
         raise NetworkError(f"Agent refused unsupported task kind: {kind}")
@@ -509,6 +998,13 @@ class AgentWorker:
                 active.process.kill()
             active.process.communicate()
             self.active_servers.pop(task_id, None)
+        controller_contact_expired = (
+            now - self.last_controller_contact > DATABASE_CONTROLLER_CONTACT_TIMEOUT_SECONDS
+        )
+        for task_id, active in list(self.active_database_servers.items()):
+            if now < active.deadline and not controller_contact_expired:
+                continue
+            self._stop_database_server(task_id)
 
     def once(self) -> bool:
         self._cleanup_expired()
@@ -529,7 +1025,7 @@ class AgentWorker:
             completion = {"status": exc.status, "error": str(exc)}
             if exc.result is not None:
                 completion["result"] = exc.result
-        except (NetworkError, OSError, ValueError) as exc:
+        except (DatabaseBenchmarkError, NetworkError, OSError, ValueError) as exc:
             completion = {"status": "failed", "error": str(exc)}
         task_id = str(task["id"])
         self.pending_completions[task_id] = completion
@@ -558,6 +1054,8 @@ class AgentWorker:
                     active.process.kill()
                 active.process.communicate()
             self.active_servers.clear()
+            for task_id in list(self.active_database_servers):
+                self._stop_database_server(task_id)
 
 
 def join_and_work(

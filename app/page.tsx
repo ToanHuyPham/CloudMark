@@ -114,6 +114,26 @@ type NetworkBidirectionalMeasurement = {
   };
 };
 
+type DatabaseMeasurement = {
+  name: string;
+  workload: "select-only" | "tpcb-like";
+  clients: number;
+  threads: number;
+  duration_seconds: number;
+  warmup_seconds: number;
+  connect_per_transaction: boolean;
+  metrics: {
+    transactions_processed: number;
+    failed_transactions: number;
+    transactions_per_second: number;
+    latency_average_ms: number;
+    initial_connection_time_ms?: number;
+    tail_latency_status: "unavailable";
+    progress: { elapsed_seconds: number; tps: number; latency_average_ms: number; failed: number }[];
+  };
+  tool: { name: string; version?: string };
+};
+
 type Run = {
   id: string;
   suite: string;
@@ -152,6 +172,15 @@ type Run = {
     latency_measurements?: NetworkLatencyMeasurement[];
     udp_measurements?: NetworkUdpMeasurement[];
     bidirectional_measurements?: NetworkBidirectionalMeasurement[];
+    database_measurements?: DatabaseMeasurement[];
+    server?: {
+      engine: string;
+      scale_factor: number;
+      estimated_dataset_bytes?: number;
+      tools?: { postgres?: string; pgbench?: string };
+      durability?: Record<string, string | number>;
+    };
+    cleanup?: { status: string; cleanup_verified?: boolean };
     analysis?: {
       scored: boolean;
       latency_comparison: string;
@@ -213,6 +242,26 @@ type Dashboard = {
       udp_rate_fractions?: number[];
       bidirectional_streams?: number;
     }>;
+    database: Record<string, {
+      label: string;
+      description: string;
+      estimated_minutes: number;
+      requires_agents: number;
+      engine: string;
+      scale_factor: number;
+      port: number;
+      profile_version: string;
+      methodology_version: string;
+      jobs: {
+        name: string;
+        workload: string;
+        clients: number;
+        threads: number;
+        duration: number;
+        warmup: number;
+        connect_per_transaction?: boolean;
+      }[];
+    }>;
     domains: AssessmentDomain[];
     scenarios: Scenario[];
   };
@@ -272,6 +321,7 @@ export default function Home() {
   const [selectedMemoryProfile, setSelectedMemoryProfile] = useState("memory-quick");
   const [selectedStorageProfile, setSelectedStorageProfile] = useState("disk-quick");
   const [selectedNetworkProfile, setSelectedNetworkProfile] = useState("network-peer-quick");
+  const [selectedDatabaseProfile, setSelectedDatabaseProfile] = useState("postgres-peer-quick");
   const [selectedExecutionTarget, setSelectedExecutionTarget] = useState("local");
   const [selectedSessionId, setSelectedSessionId] = useState("");
   const [pairing, setPairing] = useState<{ id: string; join_token: string; expires_at: string } | null>(null);
@@ -345,6 +395,18 @@ export default function Home() {
   const bidirectionalMeasurements = latestNetwork?.result?.bidirectional_measurements || [];
   const networkAnalysis = latestNetwork?.result?.analysis?.directions || [];
   const maxNetworkRate = Math.max(1, ...networkMeasurements.map((item) => item.metrics.received_bits_per_second || 0));
+  const activeDatabase = dashboard?.runs.find(
+    (run) => run.suite === "database" && ["queued", "running"].includes(run.status),
+  );
+  const latestDatabase = dashboard?.runs.find(
+    (run) => run.suite === "database" && run.status === "completed" && run.result?.database_measurements?.length,
+  );
+  const databaseMeasurements = latestDatabase?.result?.database_measurements || [];
+  const databaseProfile = dashboard?.profiles.database[selectedDatabaseProfile];
+  const maxDatabaseTps = Math.max(
+    1,
+    ...databaseMeasurements.map((item) => item.metrics.transactions_per_second || 0),
+  );
   const latestStorage = dashboard?.runs.find(
     (run) => run.suite === "storage" && run.status === "completed" && run.result?.jobs?.length
       && (run.request?.agent_id || "local") === selectedExecutionTarget,
@@ -481,13 +543,13 @@ export default function Home() {
       const response = await fetch(`${API}/sessions`, {
         method: "POST",
         headers: { "Content-Type": "application/json", "X-CloudMark-Token": token },
-        body: JSON.stringify({ label: "Provider internal network assessment" }),
+        body: JSON.stringify({ label: "Provider paired assessment" }),
       });
       const payload = await response.json();
       if (!response.ok) throw new Error(payload.error || "Unable to create a pairing session");
       setPairing(payload);
       setSelectedSessionId(payload.id);
-      setNotice("A 30-minute pairing session is ready for two cloud agents.");
+      setNotice("A 30-minute pairing session is ready for two provider Agents.");
       await loadDashboard();
     } catch (error) {
       setNotice(error instanceof Error ? error.message : "Unable to create the pairing session");
@@ -606,6 +668,67 @@ export default function Home() {
     }
   }
 
+  async function startDatabase() {
+    if (!requireToken()) return;
+    if (!selectedSession || selectedSession.status !== "ready") {
+      setNotice("Join one target and one generator Agent before starting a database run.");
+      return;
+    }
+    const target = selectedSession.agents.find((agent) => agent.role === "target");
+    const generator = selectedSession.agents.find((agent) => agent.role === "generator");
+    const targetCapabilities = target?.system.inventory?.capabilities || {};
+    if (!targetCapabilities.postgres || !targetCapabilities.initdb || !targetCapabilities.pgbench || !targetCapabilities.pg_isready) {
+      setNotice("The target Agent needs PostgreSQL server tools and pgbench. Install the CloudMark database pack and restart the Agent.");
+      return;
+    }
+    if (!generator?.system.inventory?.capabilities?.pgbench) {
+      setNotice("The generator Agent needs pgbench. Install the CloudMark database pack and restart the Agent.");
+      return;
+    }
+    setBusy(true);
+    setNotice(null);
+    try {
+      const response = await fetch(`${API}/runs`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-CloudMark-Token": token },
+        body: JSON.stringify({
+          suite: "database",
+          profile: selectedDatabaseProfile,
+          session_id: selectedSession.id,
+          confirm_database_load: true,
+        }),
+      });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || "Unable to start the database assessment");
+      setNotice(`Created ${payload.id}. PostgreSQL data and transaction traffic remain inside the paired provider Agents.`);
+      await loadDashboard();
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Database assessment failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function cancelDatabase() {
+    if (!activeDatabase || !requireToken()) return;
+    setBusy(true);
+    try {
+      const response = await fetch(`${API}/runs/${activeDatabase.id}/cancel`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-CloudMark-Token": token },
+        body: "{}",
+      });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || "Unable to cancel the database assessment");
+      setNotice(`Cancellation requested for ${activeDatabase.id}. Ephemeral database cleanup remains mandatory.`);
+      await loadDashboard();
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Unable to cancel the database assessment");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   function saveToken() {
     sessionStorage.setItem("cloudmark-controller-token", token.trim());
     setToken(token.trim());
@@ -619,8 +742,9 @@ export default function Home() {
     ["compute", "Compute & Memory", "03"],
     ["storage", "Storage Assessment", "04"],
     ["network", "Distributed Testing", "05"],
-    ["scenarios", "Workload Suitability", "06"],
-    ["history", "History", "07"],
+    ["database", "Database Assessment", "06"],
+    ["scenarios", "Workload Suitability", "07"],
+    ["history", "History", "08"],
   ];
 
   const executionTargetPanel = (
@@ -916,6 +1040,43 @@ export default function Home() {
             <section className="network-checks">
               {[["TCP", "1 / 4 / 8 / 16 streams", "AVAILABLE"], ["UDP", "25 / 50 / 90% adaptive sweep", "AVAILABLE IN STANDARD"], ["LATENCY", "idle ICMP · loaded TCP RTT", "AVAILABLE IN STANDARD"], ["DIRECTION", "A→B · B→A · simultaneous", "AVAILABLE"]].map(([name, detail, state]) => <article key={name}><span>{name}</span><strong>{detail}</strong><small>{state}</small></article>)}
             </section>
+          </div>
+        )}
+
+        {activeView === "database" && (
+          <div className="view database-view">
+            <section className="section-intro">
+              <div><span className="section-kicker">TWO-AGENT DATABASE ASSESSMENT</span><h2>Measure the database service, storage path, CPU, and provider network together.</h2><p>CloudMark creates an isolated PostgreSQL cluster on the Target and dispatches exact pgbench workloads from the Generator. The Controller stores evidence but never carries transaction traffic.</p></div>
+              <div className="runner-actions"><label><span>PROFILE</span><select value={selectedDatabaseProfile} onChange={(event) => setSelectedDatabaseProfile(event.target.value)} disabled={Boolean(activeDatabase)}>{Object.entries(dashboard?.profiles.database || {}).map(([id, profile]) => <option key={id} value={id}>{profile.label} · ≈ {profile.estimated_minutes} min</option>)}</select></label><button className="button primary" onClick={createPairing} disabled={busy}>New session</button></div>
+            </section>
+            <section className="database-contract-grid">
+              <article className="panel database-profile-card">
+                <div className="panel-head"><div><span className="section-kicker">VERSIONED WORKLOAD</span><h3>{databaseProfile?.label || "PostgreSQL profile"}</h3></div><span className="run-id">SCALE {databaseProfile?.scale_factor || "—"}</span></div>
+                <p>{databaseProfile?.description}</p>
+                <div className="database-job-grid">{databaseProfile?.jobs.map((job) => <div key={job.name}><span>{job.workload}</span><strong>{job.name}</strong><small>C{job.clients} · J{job.threads} · {job.duration}s{job.connect_per_transaction ? " · reconnect" : ""}</small></div>)}</div>
+              </article>
+              <article className="panel database-safety-card">
+                <span className="section-kicker">EXECUTION CONTRACT</span><h3>Ephemeral and bounded by design</h3>
+                <ul><li>Target-only temporary PostgreSQL cluster</li><li>Generator address is the only remote database client</li><li>Durability remains enabled: fsync, full-page writes, synchronous commit</li><li>Fixed port 55432 and allow-listed built-in pgbench scripts</li><li>Dataset and logs removed after success, failure, timeout, or cancellation</li></ul>
+                <p>Transaction tail percentiles are not claimed in PostgreSQL v1; average latency, failures, TPS, and one-second progress are retained.</p>
+              </article>
+            </section>
+            {pairing && <section className="pairing-card"><div><span>SHORT-LIVED JOIN CREDENTIAL</span><strong>{pairing.id}</strong><small>Expires {new Date(pairing.expires_at).toLocaleTimeString("en-US")}</small></div><code>{pairing.join_token}</code></section>}
+            {pairing && <section className="panel agent-commands"><div><span className="section-kicker">RUN ON PROVIDER VMS</span><h3>Target hosts PostgreSQL; Generator runs pgbench</h3></div><code>cloudmark agent --controller https://CONTROLLER --session {pairing.id} --token {pairing.join_token} --role target --advertise-address VM_A_IP</code><code>cloudmark agent --controller https://CONTROLLER --session {pairing.id} --token {pairing.join_token} --role generator --advertise-address VM_B_IP</code><p>Install the <strong>database</strong> pack on both machines before starting their Agents.</p></section>}
+            <section className="panel session-panel">
+              <div className="panel-head"><div><span className="section-kicker">PAIRED EXECUTION</span><h3>Database readiness</h3></div><label className="compact-select"><span>SESSION</span><select value={selectedSession?.id || ""} onChange={(event) => setSelectedSessionId(event.target.value)}>{dashboard?.sessions.map((session) => <option key={session.id} value={session.id}>{session.label} · {session.status}</option>)}</select></label></div>
+              {selectedSession ? <div className="agent-roster">{["target", "generator"].map((role) => { const agent = selectedSession.agents.find((item) => item.role === role); const ready = role === "target" ? Boolean(agent?.system.inventory?.capabilities?.postgres && agent?.system.inventory?.capabilities?.initdb && agent?.system.inventory?.capabilities?.pgbench && agent?.system.inventory?.capabilities?.pg_isready) : Boolean(agent?.system.inventory?.capabilities?.pgbench); return <article key={role} className={agent && ready ? "connected" : "waiting"}><span>{role.toUpperCase()}</span><strong>{agent?.name || `Waiting for ${role}`}</strong><small>{agent ? `${agent.endpoint.address || "No advertised IP"} · ${ready ? "database tools ready" : "database pack required"}` : "Join command has not connected"}</small></article>; })}</div> : <div className="empty-row">Create a session, then connect both provider Agents.</div>}
+              <div className="session-actions"><p><strong>{selectedSession?.status === "ready" ? "Pair connected" : "Two Agents required"}</strong><small>The Controller validates PostgreSQL capabilities again before accepting the run.</small></p><button className="button primary" onClick={startDatabase} disabled={busy || Boolean(activeDatabase) || selectedSession?.status !== "ready"}>Run database assessment</button></div>
+            </section>
+            {activeDatabase && <section className="panel run-progress" aria-live="polite"><div><span className="section-kicker">ACTIVE DATABASE RUN / {activeDatabase.id}</span><strong>{activeDatabase.current_job || activeDatabase.phase || "Preparing PostgreSQL"}</strong><small>{activeDatabase.completed_steps || 0} of {activeDatabase.total_steps || 1} steps · {Math.round((activeDatabase.progress || 0) * 100)}%</small></div><div className="progress-track"><i style={{ width: `${Math.max(2, (activeDatabase.progress || 0) * 100)}%` }} /></div><button className="button danger" onClick={cancelDatabase} disabled={busy || activeDatabase.cancel_requested}>{activeDatabase.cancel_requested ? "Cancelling" : "Cancel run"}</button></section>}
+            <section className="panel database-results">
+              <div className="panel-head"><div><span className="section-kicker">LATEST COMPLETED RUN</span><h3>PostgreSQL transaction throughput</h3></div><span className="run-id">{latestDatabase?.id || "NO RUN YET"}</span></div>
+              {databaseMeasurements.length ? <div className="bar-chart">{databaseMeasurements.map((measurement) => { const tps = measurement.metrics.transactions_per_second || 0; return <div className="bar-row" key={measurement.name}><span>{measurement.name} · C{measurement.clients}</span><div><i style={{ width: `${Math.max(3, (tps / maxDatabaseTps) * 100)}%` }} /></div><strong>{Math.round(tps).toLocaleString()} TPS</strong></div>; })}</div> : <div className="empty-chart compact"><div className="chart-grid" /><strong>No PostgreSQL result yet</strong><p>Connect a prepared target and generator to establish the first database baseline.</p></div>}
+            </section>
+            {databaseMeasurements.length > 0 && <section className="database-evidence-grid">
+              {databaseMeasurements.map((measurement) => <article className="panel" key={measurement.name}><span>{measurement.workload.toUpperCase()} · C{measurement.clients} / J{measurement.threads}</span><strong>{measurement.metrics.latency_average_ms.toFixed(2)} ms</strong><small>{measurement.metrics.failed_transactions} failed · {measurement.metrics.transactions_processed.toLocaleString()} transactions</small></article>)}
+              <article className={`panel cleanup-evidence ${latestDatabase?.result?.cleanup?.cleanup_verified ? "verified" : "unknown"}`}><span>EPHEMERAL CLEANUP</span><strong>{latestDatabase?.result?.cleanup?.cleanup_verified ? "Verified" : "Unavailable"}</strong><small>{latestDatabase?.result?.server?.estimated_dataset_bytes ? `${formatBytes(latestDatabase.result.server.estimated_dataset_bytes)} estimated dataset` : "Dataset size unavailable"}</small></article>
+            </section>}
           </div>
         )}
 

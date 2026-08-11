@@ -126,7 +126,10 @@ combined with private or VPC network results.
 Client/server workloads use at least two agents to avoid competing with their
 own generators for CPU and network resources.
 
-- PostgreSQL pgbench read-only, read/write, connection scaling, and checkpoints;
+- PostgreSQL pgbench read-only, durable read/write, concurrency scaling, and
+  connection churn — available in `database-postgresql-v1`;
+- PostgreSQL transaction tail percentiles, checkpoint isolation, replication,
+  backup/restore, and recovery — planned;
 - MySQL/MariaDB OLTP read/write and fsync-sensitive profiles;
 - Redis GET/SET, pipelines, persistence, and tail latency;
 - static web, JSON API, TLS, keep-alive, and concurrency ramps;

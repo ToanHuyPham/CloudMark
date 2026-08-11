@@ -25,7 +25,7 @@ components:
       type: object
       required: [suite]
       properties:
-        suite: { type: string, enum: [inventory, compute, memory, storage, network] }
+        suite: { type: string, enum: [inventory, compute, memory, storage, network, database] }
         profile: { type: string }
         agent_id:
           type: string
@@ -36,6 +36,10 @@ components:
           description: Required for CPU and memory saturation profiles.
         confirm_write: { type: boolean, default: false }
         confirm_network_load: { type: boolean, default: false }
+        confirm_database_load:
+          type: boolean
+          default: false
+          description: Required for an ephemeral PostgreSQL dataset and paired pgbench transaction load.
         session_id: { type: string }
         timeout_seconds: { type: integer, minimum: 30, maximum: 43200 }
     Run:

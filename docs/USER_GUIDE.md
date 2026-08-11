@@ -162,6 +162,10 @@ In the dashboard:
   runs guarded TCP, UDP, idle-latency, and simultaneous bidirectional profiles.
   Network remains `Partial` because route/MTU capture, generator-saturation
   validation, repeated-window aggregation, and mTLS enrollment are incomplete.
+- **Database Assessment** uses the same paired Agents for an isolated
+  PostgreSQL service and guarded pgbench workloads. PostgreSQL remains
+  `Partial` until tail-percentile, replication, recovery, MySQL, and Redis
+  methodologies are implemented.
 - **Workload Suitability** maps technical evidence to 12 use cases. Missing
   required metrics return `Insufficient evidence`, not zero.
 - **History** retains raw results so conclusions can be recalculated when the
@@ -215,7 +219,7 @@ This command displays a plan and does not modify the system.
 | `memory` | GCC and the OpenMP runtime |
 | `storage` | fio, smartmontools, nvme-cli |
 | `network` | iperf3, ethtool, mtr, DNS tools |
-| `database` | sysbench, PostgreSQL, Redis |
+| `database` | sysbench, PostgreSQL server/client tools including pgbench, Redis |
 | `web` | nginx and HTTP utilities |
 
 ## 7. Bootstrap tools
@@ -421,6 +425,34 @@ deadline. Overall network coverage remains `Partial` because automatic
 route/MTU capture, generator-saturation rejection, repeated-window aggregation,
 and mTLS Agent enrollment are not complete.
 
+## 11. Run a PostgreSQL peer assessment
+
+Use the same Target and Generator roles as the network topology. Install the
+database pack on both machines, then restart both Agents so their capabilities
+are refreshed:
+
+```bash
+sudo python -m cloudmark bootstrap --packs database --yes
+```
+
+Open **Database Assessment**, select `PostgreSQL Peer Quick` or `PostgreSQL
+Peer Standard`, choose the paired session, and select **Run database
+assessment**. CloudMark creates a temporary PostgreSQL cluster beneath the
+Target Agent workspace, initializes a fixed pgbench dataset, runs built-in
+workloads from the Generator, stops PostgreSQL, and verifies removal of the
+cluster.
+
+Allow TCP port `55432` only from the Generator peer address to the Target. Run
+the Target Agent as a non-root account; PostgreSQL initialization refuses root.
+Do not reuse the temporary CloudMark cluster for application data. The profile
+keeps `fsync`, full-page writes, and synchronous commit enabled so the result is
+not an unsafe durability-off headline number.
+
+The dashboard reports TPS, average latency, failed transactions, concurrency,
+dataset scale, tool versions, and cleanup status. PostgreSQL v1 marks
+transaction P95/P99 latency unavailable rather than estimating it from
+one-second averages. See [`DATABASE_METHODOLOGY.md`](DATABASE_METHODOLOGY.md).
+
 ### Dispatch a single-system profile to an Agent
 
 After an Agent is online, open **Compute & Memory** or **Storage Assessment**
@@ -435,7 +467,7 @@ contact. The Controller fails a task after a 45-second task-heartbeat gap. See
 [`REMOTE_EXECUTION.md`](REMOTE_EXECUTION.md) for the complete protocol and
 safety contract.
 
-## 11. Workload suitability
+## 12. Workload suitability
 
 The 12 use cases use three coverage states:
 
@@ -446,7 +478,7 @@ The 12 use cases use three coverage states:
 A suitability conclusion appears only after all mandatory raw evidence is
 available. See the assessment catalog for each use case's hard gates.
 
-## 12. API quick reference
+## 13. API quick reference
 
 Health:
 
@@ -469,7 +501,7 @@ curl -X POST http://127.0.0.1:8787/api/v1/runs \
   -d '{"suite":"inventory","profile":"default"}'
 ```
 
-## 13. Local data
+## 14. Local data
 
 ```text
 .cloudmark/
@@ -482,7 +514,7 @@ curl -X POST http://127.0.0.1:8787/api/v1/runs \
 
 The complete directory is excluded by `.gitignore`.
 
-## 14. Recommended provider-assessment procedure
+## 15. Recommended provider-assessment procedure
 
 1. Create two clean VMs with the same SKU, OS, and disk type.
 2. Use anti-affinity when possible so the VMs do not share a physical host.
@@ -494,7 +526,7 @@ The complete directory is excluded by `.gitignore`.
 8. Create fresh instances and repeat in different time windows.
 9. Never generalize one VM or one run to the complete provider.
 
-## 15. Troubleshooting
+## 16. Troubleshooting
 
 ### Dashboard reports API offline
 
@@ -552,7 +584,7 @@ credentials and requires HTTPS for remote control connections by default.
   management address hidden behind NAT;
 - do not expose the iperf3 port range to the public Internet.
 
-## 16. Validate the project
+## 17. Validate the project
 
 Python tests:
 

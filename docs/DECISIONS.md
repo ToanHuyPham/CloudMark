@@ -84,3 +84,16 @@ remain unscored because their protocols and sampling differ.
 large instances, while treating ICMP and TCP RTT as interchangeable would
 create false precision. Independent Agent-side caps remain necessary even when
 the Controller derives a guarded target.
+
+## D-010: Ephemeral paired database baseline
+
+**Decision:** The first database executor uses a fresh PostgreSQL cluster on a
+Target Agent and built-in pgbench workloads from a paired Generator. Server
+durability remains enabled, configuration is fixed by versioned profiles, and
+the cluster is removed after the run. Transaction tail percentiles remain
+unavailable until a reviewed sampling method is implemented.
+
+**Reason:** A two-Agent service measures database, storage, CPU, and provider
+network interaction without contaminating the Target with the load generator.
+Fixed durable settings improve comparability, while refusing to invent missing
+tail latency prevents a misleading provider score.

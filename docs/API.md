@@ -135,6 +135,26 @@ scaling, UDP rate sweeps derived from each direction's TCP baseline, and one
 simultaneous bidirectional TCP measurement. No performance traffic is sent to
 the Controller.
 
+## Create a PostgreSQL peer run
+
+```json
+{
+  "suite": "database",
+  "profile": "postgres-peer-quick",
+  "session_id": "session_123",
+  "confirm_database_load": true
+}
+```
+
+The session must contain an online Target with `postgres`, `initdb`,
+`pg_isready`, and `pgbench`, plus an online Generator with `pgbench`.
+`confirm_database_load` is mandatory because the run creates a temporary
+dataset and generates read/write transactions. Supported profiles are
+`postgres-peer-quick` and `postgres-peer-standard`. The result contains
+`database_measurements`, fixed durability settings, tool versions, target and
+generator identity, and cleanup evidence. Transaction traffic never traverses
+the Controller.
+
 ## Cancel a run
 
 ```http

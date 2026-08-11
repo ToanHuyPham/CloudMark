@@ -17,6 +17,14 @@ from . import __version__
 from .benchmarks import BenchmarkError, run_storage, storage_preflight
 from .compute import ComputeError, run_system_benchmark, system_preflight
 from .database import Database
+from .database_benchmark import (
+    DatabaseBenchmarkError,
+    database_default_timeout,
+    database_total_steps,
+    run_database,
+    validate_database_run,
+)
+from .distributed import DistributedError
 from .inventory import collect_inventory
 from .network import (
     NetworkError,
@@ -25,7 +33,14 @@ from .network import (
     run_network,
     validate_network_run,
 )
-from .profiles import COMPUTE_PROFILES, MEMORY_PROFILES, NETWORK_PROFILES, STORAGE_PROFILES, all_profiles
+from .profiles import (
+    COMPUTE_PROFILES,
+    DATABASE_PROFILES,
+    MEMORY_PROFILES,
+    NETWORK_PROFILES,
+    STORAGE_PROFILES,
+    all_profiles,
+)
 from .provider import detect_provider
 from .remote import RemoteError, remote_default_timeout, remote_total_steps, run_remote_benchmark, validate_remote_agent
 from .runner import RUNNER_VERSION, CancellationToken, JobContext, RunCancelled, RunTimedOut
@@ -88,8 +103,8 @@ class CloudMarkController:
         suite = str(request.get("suite", ""))
         profile = str(request.get("profile", ""))
         agent_id = str(request.get("agent_id", "")).strip()
-        if suite not in {"inventory", "compute", "memory", "storage", "network"}:
-            raise ValueError("Supported suites are inventory, compute, memory, storage, and network.")
+        if suite not in {"inventory", "compute", "memory", "storage", "network", "database"}:
+            raise ValueError("Supported suites are inventory, compute, memory, storage, network, and database.")
         if agent_id and suite not in {"compute", "memory", "storage"}:
             raise ValueError("agent_id is supported only for compute, memory, and storage runs.")
         remote_agent: dict[str, Any] | None = None
@@ -112,18 +127,18 @@ class CloudMarkController:
                     "Wait for it to finish or cancel it before starting another saturation load there."
                 )
             if remote_agent:
-                conflicting_network = next(
+                conflicting_distributed = next(
                     (
                         run
                         for run in self.database.list_runs(200)
-                        if run["suite"] == "network"
+                        if run["suite"] in {"network", "database"}
                         and run["status"] in {"queued", "running"}
                         and str(run.get("request", {}).get("session_id", "")) == str(remote_agent["session_id"])
                     ),
                     None,
                 )
-                if conflicting_network:
-                    raise ValueError("The selected Agent session already has an active network assessment.")
+                if conflicting_distributed:
+                    raise ValueError("The selected Agent session already has an active distributed assessment.")
             request["execution"] = "remote-agent" if remote_agent else "controller-host"
         if suite == "storage":
             if not request.get("confirm_write"):
@@ -154,11 +169,14 @@ class CloudMarkController:
                 (
                     run
                     for run in self.database.list_runs(200)
-                    if run["suite"] in {"compute", "memory", "storage"}
+                    if run["suite"] in {"compute", "memory", "storage", "database"}
                     and run["status"] in {"queued", "running"}
                     and (
-                        (agent := self.database.get_agent(str(run.get("request", {}).get("agent_id", ""))))
-                        and str(agent["session_id"]) == session_id
+                        str(run.get("request", {}).get("session_id", "")) == session_id
+                        or (
+                            (agent := self.database.get_agent(str(run.get("request", {}).get("agent_id", ""))))
+                            and str(agent["session_id"]) == session_id
+                        )
                     )
                 ),
                 None,
@@ -170,6 +188,38 @@ class CloudMarkController:
             methodology_version = str(profile_config["methodology_version"])
             tool_version = "iperf3/ping-agent" if methodology_version == "network-v2" else "iperf3-agent"
             default_timeout = network_default_timeout(profile)
+        elif suite == "database":
+            if request.get("confirm_database_load") is not True:
+                raise ValueError(
+                    "Database test requires confirm_database_load=true because it creates an ephemeral dataset and generates transactions."
+                )
+            session_id = str(request.get("session_id", ""))
+            _, target, generator = validate_database_run(self.database, session_id, profile)
+            for database_agent in (target, generator):
+                if self.database.has_active_agent_task(str(database_agent["id"])):
+                    raise ValueError(f"Agent {database_agent['name']} already has an active task.")
+            conflicting_run = next(
+                (
+                    run
+                    for run in self.database.list_runs(200)
+                    if run["status"] in {"queued", "running"}
+                    and (
+                        str(run.get("request", {}).get("session_id", "")) == session_id
+                        or (
+                            (agent := self.database.get_agent(str(run.get("request", {}).get("agent_id", ""))))
+                            and str(agent["session_id"]) == session_id
+                        )
+                    )
+                ),
+                None,
+            )
+            if conflicting_run:
+                raise ValueError("A selected Agent in this session already has an active assessment.")
+            profile_config = DATABASE_PROFILES[profile]
+            total_steps = database_total_steps(profile)
+            methodology_version = str(profile_config["methodology_version"])
+            tool_version = "postgresql/pgbench-agent"
+            default_timeout = database_default_timeout(profile)
         else:
             total_steps = 1
             methodology_version = "inventory-v1"
@@ -269,7 +319,7 @@ class CloudMarkController:
                         run_id,
                         context=context,
                     )
-            else:
+            elif request["suite"] == "network":
                 result = run_network(
                     self.database,
                     run_id,
@@ -277,6 +327,16 @@ class CloudMarkController:
                     str(request["profile"]),
                     context=context,
                 )
+            elif request["suite"] == "database":
+                result = run_database(
+                    self.database,
+                    run_id,
+                    str(request["session_id"]),
+                    str(request["profile"]),
+                    context=context,
+                )
+            else:
+                raise ValueError(f"No executor is registered for suite {request['suite']}.")
             result_tool = result.get("tool") if isinstance(result, dict) else None
             self.database.update_run(
                 run_id,
@@ -315,6 +375,14 @@ class CloudMarkController:
                 run_id,
                 status="failed",
                 result=exc.partial_result,
+                error=str(exc),
+                phase="failed",
+            )
+        except (DatabaseBenchmarkError, DistributedError) as exc:
+            self.database.update_run(
+                run_id,
+                status="failed",
+                result=getattr(exc, "partial_result", None),
                 error=str(exc),
                 phase="failed",
             )

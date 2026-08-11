@@ -23,6 +23,7 @@ test("server-renders the CloudMark dashboard shell", async () => {
   assert.match(html, /Infrastructure assessment/);
   assert.match(html, /Assessment Catalog/);
   assert.match(html, /Storage Assessment/);
+  assert.match(html, /Database Assessment/);
   assert.match(html, /Cloud → controller test disabled/);
   assert.doesNotMatch(html, /codex-preview|Your site is taking shape|react-loading-skeleton|qualification lab/i);
 });
@@ -49,7 +50,7 @@ test("keeps production metadata and project policy explicit", async () => {
   assert.match(page, /EXCLUSIVE LOAD POLICY/);
   assert.match(page, /EXECUTION TARGET/);
   assert.match(styles, /@media \(max-width: 900px\)/);
-  assert.match(styles, /grid-template-columns: repeat\(7, minmax\(0, 1fr\)\)/);
+  assert.match(styles, /grid-template-columns: repeat\(8, minmax\(0, 1fr\)\)/);
   assert.match(styles, /overflow-x: hidden/);
   assert.doesNotMatch(styles, /\.nav-item:not\(\.active\)\s*\{\s*font-size:\s*0/);
   assert.match(styles, /--type-micro:\s*10px/);
@@ -70,6 +71,7 @@ test("keeps public product copy English-only", async () => {
     "../cloudmark/profiles.py",
     "../docs/ASSESSMENT_CATALOG.md",
     "../docs/COMPUTE_MEMORY_METHODOLOGY.md",
+    "../docs/DATABASE_METHODOLOGY.md",
     "../docs/REMOTE_EXECUTION.md",
     "../docs/ROADMAP.md",
     "../docs/USER_GUIDE.md",

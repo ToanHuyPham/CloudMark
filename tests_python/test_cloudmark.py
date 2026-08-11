@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import tempfile
 import sys
 import threading
@@ -12,11 +13,19 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from cloudmark.agent import AgentWorker, join_session
+from cloudmark.agent import AgentBenchmarkFailure, AgentWorker, join_session
 from cloudmark.benchmarks import _metrics, _parse_fio_log, run_storage
 from cloudmark.bootstrap import create_plan
 from cloudmark.compute import ComputeError, parse_sysbench_cpu, run_system_benchmark, system_preflight
 from cloudmark.database import Database
+from cloudmark.database_benchmark import (
+    DatabaseBenchmarkError,
+    database_total_steps,
+    parse_pgbench_output,
+    run_database,
+    validate_database_run,
+)
+from cloudmark.distributed import DistributedError
 from cloudmark.inventory import collect_inventory
 from cloudmark.network import (
     ALLOWED_UDP_RATE_MAX,
@@ -31,6 +40,7 @@ from cloudmark.network import (
 from cloudmark.profiles import (
     ASSESSMENT_DOMAINS,
     COMPUTE_PROFILES,
+    DATABASE_PROFILES,
     MEMORY_PROFILES,
     NETWORK_PROFILES,
     SCENARIOS,
@@ -530,6 +540,328 @@ class CloudMarkTests(unittest.TestCase):
         self.assertEqual(network_total_steps("network-peer-quick"), 4)
         self.assertEqual(network_total_steps("network-peer-standard"), 17)
 
+    def test_pgbench_parser_preserves_transactions_latency_failures_and_progress(self) -> None:
+        stdout = """
+transaction type: <builtin: TPC-B (sort of)>
+number of transactions actually processed: 12345
+number of failed transactions: 3 (0.024%)
+latency average = 4.250 ms
+initial connection time = 12.500 ms
+tps = 941.176470 (without initial connection time)
+"""
+        stderr = "progress: 1.0 s, 900.0 tps, lat 4.100 ms stddev 1.250, 1 failed\n"
+        metrics = parse_pgbench_output(stdout, stderr)
+        self.assertEqual(metrics["transactions_processed"], 12345)
+        self.assertEqual(metrics["failed_transactions"], 3)
+        self.assertEqual(metrics["transactions_per_second"], 941.17647)
+        self.assertEqual(metrics["latency_average_ms"], 4.25)
+        self.assertEqual(metrics["progress"][0]["failed"], 1)
+        self.assertEqual(metrics["tail_latency_status"], "unavailable")
+
+    def test_database_run_requires_postgresql_capabilities_on_the_correct_roles(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            database = Database(Path(directory) / "test.sqlite3")
+            database.create_session("session_db", "database", "hash", "2099-01-01T00:00:00+00:00")
+            target_system = {
+                "inventory": {
+                    "capabilities": {"postgres": True, "initdb": True, "pgbench": True, "pg_isready": True}
+                }
+            }
+            generator_system = {"inventory": {"capabilities": {"pgbench": True}}}
+            database.add_agent(
+                "agent_target", "session_db", "target", "target", target_system, endpoint={"address": "10.0.0.10"}
+            )
+            database.add_agent(
+                "agent_generator",
+                "session_db",
+                "generator",
+                "generator",
+                generator_system,
+                endpoint={"address": "10.0.0.11"},
+            )
+            _, target, generator = validate_database_run(database, "session_db", "postgres-peer-quick")
+            self.assertEqual(target["id"], "agent_target")
+            self.assertEqual(generator["id"], "agent_generator")
+
+    def test_agent_builds_only_allowlisted_pgbench_commands(self) -> None:
+        worker = AgentWorker("http://127.0.0.1:8787", "agent", "token")
+        summary = """
+number of transactions actually processed: 1000
+number of failed transactions: 0 (0.000%)
+latency average = 2.500 ms
+initial connection time = 4.000 ms
+tps = 400.000000 (without initial connection time)
+"""
+        with patch.object(worker, "_postgres_tool", return_value="pgbench"), patch.object(
+            worker, "_guarded_task_process", side_effect=[(0, "warmup", ""), (0, summary, "")]
+        ) as process, patch("cloudmark.agent.tool_version", return_value="pgbench 16.2"):
+            result = worker._run_database_client(
+                "task_abc123",
+                {
+                    "target_address": "10.0.0.10",
+                    "port": 55432,
+                    "workload": "tpcb-like",
+                    "clients": 4,
+                    "threads": 2,
+                    "duration_seconds": 30,
+                    "warmup_seconds": 3,
+                    "connect_per_transaction": False,
+                    "run_completed_steps": 1,
+                    "run_total_steps": 5,
+                },
+            )
+        measured_command = process.call_args_list[1].args[1]
+        self.assertIn("-b", measured_command)
+        self.assertEqual(measured_command[measured_command.index("-b") + 1], "tpcb-like")
+        self.assertNotIn("-C", measured_command)
+        self.assertEqual(result["pgbench"]["metrics"]["transactions_per_second"], 400.0)
+        with self.assertRaisesRegex(DatabaseBenchmarkError, "workload"):
+            worker._run_database_client(
+                "task_abc123",
+                {
+                    "target_address": "10.0.0.10",
+                    "port": 55432,
+                    "workload": "custom-sql",
+                    "clients": 4,
+                    "threads": 2,
+                    "duration_seconds": 30,
+                    "run_completed_steps": 1,
+                    "run_total_steps": 5,
+                },
+            )
+
+    def test_agent_refuses_database_cleanup_outside_its_workspace(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory) / "agent"
+            outside = Path(directory) / "not-a-database-service"
+            outside.mkdir()
+            worker = AgentWorker("http://127.0.0.1:8787", "agent", "token", workspace=workspace)
+            with self.assertRaisesRegex(DatabaseBenchmarkError, "outside"):
+                worker._remove_database_root(outside)
+            self.assertTrue(outside.exists())
+
+    def test_agent_database_watchdog_cleans_up_after_controller_contact_loss(self) -> None:
+        worker = AgentWorker("http://127.0.0.1:8787", "agent", "token")
+        worker.active_database_servers["task_deadbeef"] = SimpleNamespace(deadline=time.monotonic() + 300)
+        worker.last_controller_contact = time.monotonic() - 21
+        with patch.object(worker, "_stop_database_server") as stop:
+            worker._cleanup_expired()
+        stop.assert_called_once_with("task_deadbeef")
+
+    def test_guarded_database_process_stops_immediately_on_controller_cancellation(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            worker = AgentWorker(
+                "http://127.0.0.1:8787", "agent", "token", workspace=Path(directory) / "agent"
+            )
+            with patch.object(
+                worker,
+                "_api",
+                return_value={"cancel_requested": True, "task_status": "running"},
+            ):
+                started = time.monotonic()
+                with self.assertRaisesRegex(AgentBenchmarkFailure, "cancelled"):
+                    worker._guarded_task_process(
+                        "task_deadbeef",
+                        [sys.executable, "-c", "import time; time.sleep(30)"],
+                        environment=os.environ.copy(),
+                        expected_duration=30,
+                        phase="database-initialization",
+                        current_job="test",
+                        completed_steps=0,
+                        total_steps=2,
+                    )
+            self.assertLess(time.monotonic() - started, 5)
+
+    def test_database_orchestrator_records_measurements_and_verified_cleanup(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            database = Database(Path(directory) / "test.sqlite3")
+            database.create_session("session_db", "database", "hash", "2099-01-01T00:00:00+00:00")
+            target_system = {
+                "inventory": {
+                    "capabilities": {"postgres": True, "initdb": True, "pgbench": True, "pg_isready": True}
+                }
+            }
+            generator_system = {"inventory": {"capabilities": {"pgbench": True}}}
+            database.add_agent(
+                "agent_target", "session_db", "target", "target", target_system, endpoint={"address": "10.0.0.10"}
+            )
+            database.add_agent(
+                "agent_generator",
+                "session_db",
+                "generator",
+                "generator",
+                generator_system,
+                endpoint={"address": "10.0.0.11"},
+            )
+            total_steps = database_total_steps("postgres-peer-quick")
+            database.create_run(
+                "run_database",
+                "database",
+                "postgres-peer-quick",
+                {"suite": "database"},
+                total_steps=total_steps,
+            )
+            done = threading.Event()
+
+            def complete_tasks() -> None:
+                while not done.is_set():
+                    handled = False
+                    for agent_id in ("agent_target", "agent_generator"):
+                        task = database.claim_agent_task(agent_id)
+                        if not task:
+                            continue
+                        handled = True
+                        if task["kind"] == "database-server-start":
+                            result = {
+                                "ready": True,
+                                "engine": "postgresql",
+                                "scale_factor": 10,
+                                "tools": {"postgres": "postgres 16.2", "pgbench": "pgbench 16.2"},
+                            }
+                        elif task["kind"] == "database-client":
+                            result = {
+                                "pgbench": {
+                                    "workload": task["payload"]["workload"],
+                                    "clients": task["payload"]["clients"],
+                                    "threads": task["payload"]["threads"],
+                                    "duration_seconds": task["payload"]["duration_seconds"],
+                                    "metrics": {"transactions_per_second": 1000.0, "latency_average_ms": 4.0},
+                                    "tool": {"name": "pgbench", "version": "pgbench 16.2"},
+                                }
+                            }
+                        else:
+                            result = {"status": "completed", "cleanup_verified": True}
+                        database.finish_agent_task(task["id"], agent_id, status="completed", result=result)
+                    if not handled:
+                        time.sleep(0.005)
+
+            worker = threading.Thread(target=complete_tasks, daemon=True)
+            worker.start()
+            try:
+                context = JobContext("run_database", total_steps=total_steps, timeout_seconds=30)
+                result = run_database(
+                    database,
+                    "run_database",
+                    "session_db",
+                    "postgres-peer-quick",
+                    context=context,
+                )
+            finally:
+                done.set()
+                worker.join(timeout=2)
+            self.assertEqual(total_steps, 5)
+            self.assertEqual(len(result["database_measurements"]), 3)
+            self.assertTrue(result["cleanup"]["cleanup_verified"])
+            self.assertFalse(result["policy"]["controller_in_data_path"])
+
+    def test_controller_admits_only_confirmed_database_pair_runs(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            controller = CloudMarkController(Path(directory))
+            controller.database.create_session("session_db", "database", "hash", "2099-01-01T00:00:00+00:00")
+            target_system = {
+                "inventory": {
+                    "capabilities": {"postgres": True, "initdb": True, "pgbench": True, "pg_isready": True}
+                }
+            }
+            generator_system = {"inventory": {"capabilities": {"pgbench": True}}}
+            controller.database.add_agent(
+                "agent_target", "session_db", "target", "target", target_system, endpoint={"address": "10.0.0.10"}
+            )
+            controller.database.add_agent(
+                "agent_generator",
+                "session_db",
+                "generator",
+                "generator",
+                generator_system,
+                endpoint={"address": "10.0.0.11"},
+            )
+            request = {
+                "suite": "database",
+                "profile": "postgres-peer-quick",
+                "session_id": "session_db",
+            }
+            with self.assertRaisesRegex(ValueError, "confirm_database_load"):
+                controller.submit_run(request)
+            with patch.object(controller, "_execute_run"):
+                run = controller.submit_run({**request, "confirm_database_load": True})
+            stored = controller.database.get_run(run["id"])
+            self.assertEqual(stored["total_steps"], 5)
+            self.assertEqual(stored["methodology_version"], "database-postgresql-v1")
+            self.assertEqual(stored["tool_version"], "postgresql/pgbench-agent")
+
+    def test_database_orchestrator_schedules_cleanup_after_client_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            database = Database(Path(directory) / "test.sqlite3")
+            database.create_session("session_db", "database", "hash", "2099-01-01T00:00:00+00:00")
+            target_system = {
+                "inventory": {
+                    "capabilities": {"postgres": True, "initdb": True, "pgbench": True, "pg_isready": True}
+                }
+            }
+            generator_system = {"inventory": {"capabilities": {"pgbench": True}}}
+            database.add_agent(
+                "agent_target", "session_db", "target", "target", target_system, endpoint={"address": "10.0.0.10"}
+            )
+            database.add_agent(
+                "agent_generator",
+                "session_db",
+                "generator",
+                "generator",
+                generator_system,
+                endpoint={"address": "10.0.0.11"},
+            )
+            total_steps = database_total_steps("postgres-peer-quick")
+            database.create_run(
+                "run_database_failure",
+                "database",
+                "postgres-peer-quick",
+                {"suite": "database"},
+                total_steps=total_steps,
+            )
+            done = threading.Event()
+            cleanup_seen = threading.Event()
+
+            def complete_tasks() -> None:
+                while not done.is_set():
+                    handled = False
+                    for agent_id in ("agent_target", "agent_generator"):
+                        task = database.claim_agent_task(agent_id)
+                        if not task:
+                            continue
+                        handled = True
+                        if task["kind"] == "database-server-start":
+                            database.finish_agent_task(task["id"], agent_id, status="completed", result={"ready": True})
+                        elif task["kind"] == "database-client":
+                            database.finish_agent_task(task["id"], agent_id, status="failed", error="simulated client failure")
+                        else:
+                            cleanup_seen.set()
+                            database.finish_agent_task(
+                                task["id"],
+                                agent_id,
+                                status="completed",
+                                result={"status": "completed", "cleanup_verified": True},
+                            )
+                    if not handled:
+                        time.sleep(0.005)
+
+            worker = threading.Thread(target=complete_tasks, daemon=True)
+            worker.start()
+            try:
+                context = JobContext("run_database_failure", total_steps=total_steps, timeout_seconds=30)
+                with self.assertRaisesRegex(DistributedError, "simulated client failure") as captured:
+                    run_database(
+                        database,
+                        "run_database_failure",
+                        "session_db",
+                        "postgres-peer-quick",
+                        context=context,
+                    )
+            finally:
+                done.set()
+                worker.join(timeout=2)
+            self.assertTrue(cleanup_seen.is_set())
+            self.assertTrue(captured.exception.partial_result["cleanup"]["cleanup_verified"])
+
     def test_scenario_coverage_does_not_overstate_executors(self) -> None:
         statuses = {scenario["id"]: scenario["status"] for scenario in SCENARIOS}
         self.assertEqual(statuses["storage-backup"], "available")
@@ -544,6 +876,7 @@ class CloudMarkTests(unittest.TestCase):
         self.assertTrue({"containers", "security", "reliability", "observability", "control-plane", "cost", "consistency"}.issubset(domains))
         self.assertEqual(domains["storage"], "available")
         self.assertEqual(domains["network"], "partial")
+        self.assertEqual(domains["database"], "partial")
         self.assertEqual(domains["reliability"], "roadmap")
 
     def test_bootstrap_includes_base_pack(self) -> None:
@@ -557,6 +890,21 @@ class CloudMarkTests(unittest.TestCase):
         self.assertIn("sysbench", plan.packages)
         self.assertIn("gcc", plan.packages)
         self.assertIn("libgomp1", plan.packages)
+
+    def test_bootstrap_database_pack_includes_postgresql_and_pgbench_packages(self) -> None:
+        with patch("cloudmark.bootstrap.detect_manager", return_value="apt"):
+            plan = create_plan(["database"])
+        self.assertIn("postgresql", plan.packages)
+        self.assertIn("postgresql-contrib", plan.packages)
+        self.assertIn("database", plan.packs)
+
+    def test_database_profiles_are_versioned_and_bounded(self) -> None:
+        self.assertEqual(database_total_steps("postgres-peer-quick"), 5)
+        self.assertEqual(database_total_steps("postgres-peer-standard"), 9)
+        for profile in DATABASE_PROFILES.values():
+            self.assertEqual(profile["methodology_version"], "database-postgresql-v1")
+            self.assertLessEqual(profile["scale_factor"], 100)
+            self.assertTrue(all(job["duration"] <= 60 for job in profile["jobs"]))
 
     def test_memory_preflight_rejects_unsupported_platforms_before_compilation(self) -> None:
         with tempfile.TemporaryDirectory() as directory, patch("cloudmark.compute.sys.platform", "win32"):

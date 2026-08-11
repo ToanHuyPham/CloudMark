@@ -66,6 +66,9 @@ explicitly selected authenticated Agent. Provider network benchmark traffic
 must not traverse the operator system. The standard `network-v2` profile
 orchestrates bounded idle latency, directional TCP scaling, adaptive UDP
 loss/jitter sweeps, and simultaneous bidirectional TCP between the two Agents.
+The first paired service executor creates an isolated durable PostgreSQL cluster
+on Agent A and runs allow-listed pgbench workloads from Agent B; cleanup is part
+of the evidence contract.
 
 ## Repository map
 

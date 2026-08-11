@@ -36,8 +36,8 @@ PACKAGES = {
     },
     "database": {
         "apt": ["sysbench", "postgresql", "postgresql-contrib", "redis-server"],
-        "dnf": ["sysbench", "postgresql-server", "redis"],
-        "zypper": ["sysbench", "postgresql-server", "redis"],
+        "dnf": ["sysbench", "postgresql-server", "postgresql-contrib", "redis"],
+        "zypper": ["sysbench", "postgresql-server", "postgresql-contrib", "redis"],
     },
     "web": {
         "apt": ["nginx", "apache2-utils"],

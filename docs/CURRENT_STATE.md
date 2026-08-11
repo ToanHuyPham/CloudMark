@@ -31,6 +31,11 @@ baseline is still the repository head.
   latency, loaded TCP RTT, adaptive UDP loss/jitter sweeps, and simultaneous
   bidirectional TCP; provider-pair validation is intentionally deferred until
   the complete project is ready for operator testing;
+- simulation-verified `database-postgresql-v1` paired executor with isolated
+  Target clusters, Generator-side built-in pgbench workloads, durable settings,
+  progress/control heartbeat, fixed safety limits, and verified cleanup; the
+  milestone passes 53 Python tests, 3 rendered-dashboard tests, dashboard lint,
+  and the production dashboard build without running a real load;
 - responsive dashboard navigation and execution-target selection;
 - repository-level Codex guidance, durable handoff documentation, consistent
   SQLite runtime snapshots, guarded secret backup, recoverable restore, and
@@ -101,8 +106,14 @@ Controller run: `run_1c572100e8704843`.
   simultaneous bidirectional throughput; route/MTU evidence,
   generator-saturation rejection, repeated topology-aware windows, and mTLS
   remain unimplemented;
-- database and web/application executors are not yet a complete provider-grade
-  assessment suite;
+- PostgreSQL database coverage is Partial: read-only, durable read/write,
+  concurrency, and connection churn are implemented; transaction tail
+  percentiles, replication, recovery, MySQL/MariaDB, Redis, and managed-service
+  behavior remain unavailable;
+- an abrupt Agent or host termination can leave an isolated PostgreSQL task
+  directory for manual operator review; the Agent refuses to overwrite or
+  automatically delete unknown residual state;
+- web/application executors are not yet implemented;
 - GPU evidence and GPU benchmarks are not complete;
 - final workload suitability and provider-scoring engines remain Roadmap;
 - Windows is suitable for the Controller and inventory, but benchmark executor
@@ -111,14 +122,17 @@ Controller run: `run_1c572100e8704843`.
 
 ## Next priorities
 
-1. Implement guarded database and web client/server executors.
+1. Implement the guarded web/API client/server executor on the paired-service
+   lifecycle introduced by the PostgreSQL milestone.
 2. Build evidence-gated workload suitability and provider evaluation.
 3. Add repeated time-window evidence and provider comparison views.
 4. Add route/MTU evidence, generator-saturation checks, and repeated network
    windows before promoting the network domain from Partial.
-5. Complete remaining compute, memory/NUMA, GPU, security, reliability,
+5. Extend database coverage with transaction tail latency, MySQL/MariaDB,
+   Redis, replication, backup/restore, and recovery evidence.
+6. Complete remaining compute, memory/NUMA, GPU, security, reliability,
    observability, container, and control-plane executors.
-6. Run provider-machine validation only after the development milestones are
+7. Run provider-machine validation only after the development milestones are
    complete and the operator explicitly starts acceptance testing.
 
 ## Operational reminder

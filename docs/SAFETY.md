@@ -61,7 +61,8 @@ systems.
 ## Remote execution
 
 - Remote tasks are authenticated per Agent and restricted to compute, memory,
-  storage, and the guarded network kinds; arbitrary shell commands are refused.
+  storage, guarded network, and guarded PostgreSQL kinds; arbitrary shell
+  commands are refused.
 - The Agent validates suite, installed profile, protocol version, explicit load
   confirmation, and timeout before executing.
 - The Agent workspace is configured locally and cannot be supplied by a remote
@@ -73,6 +74,23 @@ systems.
   closes the task at the Controller.
 - Completed remote evidence must match the dispatched profile and methodology
   versions. Failed or cancelled evidence remains partial.
+
+## Database
+
+- Database runs require two authenticated provider Agents and explicit
+  `confirm_database_load` authorization.
+- PostgreSQL uses an ephemeral cluster below the Target Agent workspace. The
+  Agent refuses caller-controlled data directories and preserves at least 1 GiB
+  or 5% free space.
+- Port, scale factor, client count, thread count, duration, database name,
+  username, server settings, and pgbench scripts are allow-listed.
+- Host authentication permits only the exact paired Generator address. No
+  database password or generated secret is persisted in a task payload.
+- Durability settings stay enabled. The executor does not present an unsafe
+  `fsync=off` result as production database performance.
+- The Target watchdog stops PostgreSQL and removes the generated cluster after
+  success, failure, timeout, cancellation, or more than 20 seconds without
+  successful Controller contact.
 
 ## Bootstrap
 

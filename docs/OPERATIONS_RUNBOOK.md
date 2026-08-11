@@ -139,6 +139,11 @@ repository.
 7. Preserve failed runs; diagnose them before retrying.
 8. Repeat official profiles in multiple time windows.
 
+For PostgreSQL peer profiles, install the database pack on both Agents, run the
+Target Agent as a non-root account, and allow TCP `55432` only from the paired
+Generator. Verify `cleanup_verified` before treating a completed database run
+as valid evidence.
+
 ## 11. Troubleshooting
 
 ### API is offline
@@ -169,6 +174,23 @@ repository.
 - confirm free space and tool versions;
 - do not immediately rerun a write-heavy or saturation profile;
 - verify cleanup before the next run.
+
+### A PostgreSQL peer run cannot start
+
+- verify the Target reports `postgres`, `initdb`, `pg_isready`, and `pgbench`;
+- verify the Generator reports `pgbench`;
+- restart each Agent after installing the database pack so inventory refreshes;
+- verify TCP `55432` is reachable only from the Generator peer address;
+- run the Target Agent as a non-root account;
+- inspect the retained partial result and do not manually reuse an ephemeral
+  CloudMark cluster.
+
+If the Agent reports a residual database service directory after an abrupt
+Agent or host failure, stop the Agent and verify that no PostgreSQL process is
+using the CloudMark workspace. Preserve the PostgreSQL log for diagnosis, then
+remove only the named `task_*` directory below the configured Agent
+`database-services` workspace. Never delete the workspace root or an unknown
+PostgreSQL data directory.
 
 ## 12. Optional Codex local environment
 
