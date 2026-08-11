@@ -50,6 +50,12 @@ baseline is still the repository head.
   converted to zero and provider status remains `not-rated`; the milestone
   passes 70 Python tests, 3 rendered-dashboard tests, dashboard lint, and the
   production build without starting provider load;
+- `provider-observations-v1` exact provider/SKU/region/OS cohorts with strict
+  profile/methodology compatibility, UTC-day windows, network Run
+  de-duplication, median/P10/P90/best/worst/spread statistics, and a guarded
+  nine-sample/three-target/three-window comparable state; the milestone passes
+  72 Python tests, 3 rendered-dashboard tests, dashboard lint, and the
+  production build without starting provider load;
 - repository-level Codex guidance, durable handoff documentation, consistent
   SQLite runtime snapshots, guarded secret backup, recoverable restore, and
   safe Windows local-process launch/stop scripts.
@@ -132,25 +138,25 @@ Controller run: `run_1c572100e8704843`.
   implemented; generator-saturation validation, dynamic applications,
   HTTP/2/3, CDN, WAF, autoscaling, and DDoS resilience remain unavailable;
 - GPU evidence and GPU benchmarks are not complete;
-- multi-target/time-window provider aggregation, stability distributions,
-  timestamped cost, operational domains, and final provider ratings remain
-  Roadmap; current suitability evaluates individual observed targets only;
+- scheduled sampling campaigns, cross-zone analysis, timestamped cost,
+  operational domains, and final provider ratings remain Roadmap; suitability
+  evaluates individual targets while provider observations remain descriptive;
 - Windows is suitable for the Controller and inventory, but benchmark executor
   parity with Linux is incomplete;
 - one VM and one time window cannot establish provider-wide quality.
 
 ## Next priorities
 
-1. Add repeated time-window evidence, same-SKU aggregation, and provider
-   comparison views without relaxing the `not-rated` provider gate.
-2. Add route/MTU evidence, generator-saturation checks, and repeated network
+1. Add route/MTU evidence, generator-saturation checks, and repeated network
    windows before promoting the network domain from Partial.
-3. Add Web generator-saturation validation and dynamic application,
+2. Add Web generator-saturation validation and dynamic application,
    HTTP/2/3, reverse-proxy, CDN, WAF, and autoscaling evidence.
-4. Extend database coverage with transaction tail latency, MySQL/MariaDB,
+3. Extend database coverage with transaction tail latency, MySQL/MariaDB,
    Redis, replication, backup/restore, and recovery evidence.
-5. Complete remaining compute, memory/NUMA, GPU, security, reliability,
+4. Complete remaining compute, memory/NUMA, GPU, security, reliability,
    observability, container, and control-plane executors.
+5. Add explicit sampling campaigns, timestamped price inputs, and cohort
+   export before any final provider-rating methodology.
 6. Calibrate and version requirement thresholds across regional clouds, global
    clouds, and self-operated bare metal before treating them as stable policy.
 7. Run provider-machine validation only after the development milestones are

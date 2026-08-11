@@ -125,3 +125,16 @@ security, reliability, control-plane, and cost gates exist.
 future executor exists, but a synthetic percentage would hide missing evidence
 and one VM cannot establish provider quality. Separate coverage, measured gate
 results, limitations, and provider readiness preserve honest claims.
+
+## D-013: Exact cohorts before provider comparison
+
+**Decision:** Repeated-window statistics group only matching provider, SKU,
+region, operating system, profile, methodology, metric, and unit. One UTC
+calendar day is one window. A metric becomes comparable only after nine valid
+fresh samples from three targets and three windows. Paired network Runs are
+de-duplicated. Median, P10, P90, actual best/worst, and relative spread remain
+descriptive; CloudMark does not rank providers.
+
+**Reason:** Mixing regions, operating systems, profiles, or methodology
+versions creates false precision. A small sample can still aid diagnosis but
+must not look statistically equivalent to repeated independent evidence.

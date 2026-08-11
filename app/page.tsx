@@ -306,6 +306,71 @@ type SuitabilityTarget = {
   };
 };
 
+type ProviderMetricCohort = {
+  contract_id: string;
+  key: string;
+  label: string;
+  suite: string;
+  direction: "higher" | "lower";
+  unit: string;
+  profile: string;
+  methodology_version: string;
+  status: "comparable" | "observational";
+  reasons: string[];
+  sample_count: number;
+  target_count: number;
+  window_count: number;
+  windows: string[];
+  run_ids: string[];
+  latest_observed_at?: string;
+  statistics: {
+    median: number;
+    p10: number;
+    p90: number;
+    minimum: number;
+    maximum: number;
+    best: number;
+    worst: number;
+    relative_spread_percent?: number;
+    stability: "stable" | "moderate" | "variable" | "insufficient-sampling";
+  };
+};
+
+type ProviderObservationGroup = {
+  id: string;
+  provider: string;
+  instance_type: string;
+  region: string;
+  operating_system: string;
+  scope: string;
+  comparison_status: "observational" | "partial" | "sampling-ready";
+  rating_status: "not-rated";
+  target_ids: string[];
+  target_count: number;
+  windows: string[];
+  window_count: number;
+  observed_suites: string[];
+  criteria: { label: string; satisfied: boolean }[];
+  gaps: string[];
+  metric_cohorts: ProviderMetricCohort[];
+};
+
+type ProviderObservations = {
+  version: string;
+  rating_status: "not-rated";
+  window_definition: string;
+  minimum_comparable_sampling: { samples: number; targets: number; windows: number };
+  policy: {
+    exact_profile_and_methodology: boolean;
+    cross_sku_aggregation: boolean;
+    cross_region_aggregation: boolean;
+    cross_os_aggregation: boolean;
+    provider_ranking: boolean;
+  };
+  groups: ProviderObservationGroup[];
+  excluded_targets: { target_id: string; reason: string }[];
+};
+
 type SuitabilityReport = {
   engine_version: string;
   requirements_version: string;
@@ -313,6 +378,7 @@ type SuitabilityReport = {
   policy: { missing_evidence_is_zero: boolean; composite_provider_score: boolean; target_scoped: boolean; max_evidence_age_days: number };
   levels: Record<string, { label: string; description: string }>;
   targets: SuitabilityTarget[];
+  provider_observations: ProviderObservations;
 };
 
 type Dashboard = {
@@ -459,6 +525,7 @@ export default function Home() {
   const [selectedSuitabilityTarget, setSelectedSuitabilityTarget] = useState("controller");
   const [selectedRequirementLevel, setSelectedRequirementLevel] = useState("essential");
   const [selectedSuitabilityScenario, setSelectedSuitabilityScenario] = useState("web-app");
+  const [selectedProviderContract, setSelectedProviderContract] = useState("");
   const [selectedExecutionTarget, setSelectedExecutionTarget] = useState("local");
   const [selectedSessionId, setSelectedSessionId] = useState("");
   const [pairing, setPairing] = useState<{ id: string; join_token: string; expires_at: string } | null>(null);
@@ -605,6 +672,17 @@ export default function Home() {
     below: suitabilityScenarios.filter((scenario) => scenario.verdict === "below-requirement").length,
     insufficient: suitabilityScenarios.filter((scenario) => scenario.verdict === "insufficient").length,
   };
+  const providerObservations = dashboard?.suitability.provider_observations;
+  const providerGroups = providerObservations?.groups || [];
+  const providerContracts = Array.from(new Map(
+    providerGroups.flatMap((group) => group.metric_cohorts).map((metric) => [metric.contract_id, metric]),
+  ).values()).sort((left, right) => `${left.suite}.${left.label}.${left.profile}`.localeCompare(`${right.suite}.${right.label}.${right.profile}`));
+  const activeProviderContract = providerContracts.find((metric) => metric.contract_id === selectedProviderContract)
+    || providerContracts[0];
+  const comparableMetricCount = providerGroups.reduce(
+    (total, group) => total + group.metric_cohorts.filter((metric) => metric.status === "comparable").length,
+    0,
+  );
 
   function runTargetName(run: Run) {
     const remoteId = run.request?.agent_id;
@@ -959,7 +1037,8 @@ export default function Home() {
     ["database", "Database Assessment", "06"],
     ["web", "Web & API Assessment", "07"],
     ["scenarios", "Workload Suitability", "08"],
-    ["history", "History", "09"],
+    ["providers", "Provider Comparison", "09"],
+    ["history", "History", "10"],
   ];
 
   const executionTargetPanel = (
@@ -1382,6 +1461,55 @@ export default function Home() {
               <div className="provider-readiness-body"><div><strong>{suitabilityTarget?.provider_assessment.same_product_targets || 0}</strong><small>same-product targets</small></div><div><strong>{suitabilityTarget?.provider_assessment.measurement_windows || 0}</strong><small>measurement windows</small></div><div className="provider-criteria">{suitabilityTarget?.provider_assessment.criteria.map((criterion) => <p key={criterion.label} className={criterion.satisfied ? "met" : "missing"}><i>{criterion.satisfied ? "✓" : "—"}</i><span>{criterion.label}</span></p>)}</div></div>
               <p className="method-note">CloudMark will not publish a provider-wide score from one machine or one time window. Security, reliability, control-plane, cost, repeated-window, and same-SKU evidence remain independent gates.</p>
             </section>
+          </div>
+        )}
+
+        {activeView === "providers" && (
+          <div className="view providers-view">
+            <section className="section-intro">
+              <div><span className="section-kicker">REPEATED-WINDOW OBSERVATIONS</span><h2>Compare like with like without inventing a provider score.</h2><p>CloudMark separates cohorts by provider, SKU, region, operating system, profile, and methodology. Descriptive statistics become comparable only after the minimum target, window, and sample contract is met.</p></div>
+              <div className="runner-actions provider-contract-selector">
+                <label><span>METRIC CONTRACT</span><select value={activeProviderContract?.contract_id || ""} onChange={(event) => setSelectedProviderContract(event.target.value)} disabled={!providerContracts.length}>
+                  {!providerContracts.length && <option value="">No repeated evidence</option>}
+                  {providerContracts.map((metric) => <option key={metric.contract_id} value={metric.contract_id}>{metric.label} · {metric.profile} · {metric.methodology_version}</option>)}
+                </select></label>
+              </div>
+            </section>
+            <section className="provider-summary-grid">
+              <article className="panel"><span>EXACT COHORTS</span><strong>{providerGroups.length}</strong><small>provider + SKU + region + OS</small></article>
+              <article className="panel"><span>COMPARABLE METRICS</span><strong>{comparableMetricCount}</strong><small>minimum sampling contract satisfied</small></article>
+              <article className="panel"><span>EXCLUDED TARGETS</span><strong>{providerObservations?.excluded_targets.length || 0}</strong><small>missing identity, SKU, or fresh evidence</small></article>
+              <article className="panel caution"><span>PROVIDER RATING</span><strong>Not rated</strong><small>operational and cost gates remain unavailable</small></article>
+            </section>
+            <section className="panel comparison-contract-panel">
+              <div className="panel-head"><div><span className="section-kicker">COMPARISON CONTRACT</span><h3>{activeProviderContract?.label || "No compatible metric evidence yet"}</h3></div><span className="run-id">{providerObservations?.version || "provider-observations-v1"}</span></div>
+              <div className="comparison-contract-grid">
+                <div><span>PROFILE</span><strong>{activeProviderContract?.profile || "Unavailable"}</strong></div>
+                <div><span>METHODOLOGY</span><strong>{activeProviderContract?.methodology_version || "Unavailable"}</strong></div>
+                <div><span>DIRECTION</span><strong>{activeProviderContract ? `${activeProviderContract.direction} is better` : "Unavailable"}</strong></div>
+                <div><span>MINIMUM SAMPLE</span><strong>{providerObservations ? `${providerObservations.minimum_comparable_sampling.samples} runs / ${providerObservations.minimum_comparable_sampling.targets} targets / ${providerObservations.minimum_comparable_sampling.windows} days` : "Unavailable"}</strong></div>
+              </div>
+              <p className="method-note">A measurement window is one UTC calendar day. P10, median, P90, actual best/worst, sample count, target count, and relative spread remain descriptive evidence; CloudMark does not rank providers.</p>
+            </section>
+            {providerGroups.length ? <section className="provider-comparison-grid" aria-label="Provider cohort observations">
+              {providerGroups.map((group) => {
+                const metric = group.metric_cohorts.find((item) => item.contract_id === activeProviderContract?.contract_id);
+                return <article className={`panel provider-comparison-card ${metric?.status || "missing"}`} key={group.id}>
+                  <header><div><span>{group.provider}</span><h3>{group.instance_type}</h3><small>{group.region} · {group.operating_system}</small></div><i>{metric?.status === "comparable" ? "Comparable" : metric ? "Observation only" : "No matching evidence"}</i></header>
+                  {metric ? <>
+                    <div className="provider-stat-grid">
+                      <div><span>MEDIAN</span><strong>{formatRequirementValue(metric.statistics.median, metric.unit)}</strong></div>
+                      <div><span>P10 / P90</span><strong>{formatRequirementValue(metric.statistics.p10, metric.unit)} / {formatRequirementValue(metric.statistics.p90, metric.unit)}</strong></div>
+                      <div><span>WORST</span><strong>{formatRequirementValue(metric.statistics.worst, metric.unit)}</strong></div>
+                      <div><span>STABILITY</span><strong>{metric.statistics.stability.replaceAll("-", " ")}</strong><small>{metric.statistics.relative_spread_percent == null ? "relative spread unavailable" : `${metric.statistics.relative_spread_percent.toFixed(2)}% P10–P90 spread`}</small></div>
+                    </div>
+                    <div className="provider-sample-row"><span>{metric.sample_count} samples</span><span>{metric.target_count} targets</span><span>{metric.window_count} UTC days</span></div>
+                    {metric.reasons.length ? <ul className="provider-comparison-reasons">{metric.reasons.map((reason) => <li key={reason}>{reason}</li>)}</ul> : <p className="provider-comparison-ready">Minimum descriptive comparison sampling is satisfied. Provider rating remains disabled.</p>}
+                    <footer><span>{group.comparison_status.replaceAll("-", " ")}</span><code>{metric.run_ids.length} traceable Run IDs</code></footer>
+                  </> : <div className="provider-metric-empty"><strong>No exact contract match</strong><p>This cohort may have another profile or methodology. CloudMark will not merge it into the selected comparison.</p></div>}
+                </article>;
+              })}
+            </section> : <section className="panel provider-empty-state"><strong>No provider cohort is eligible for aggregation yet.</strong><p>Fresh valid benchmark evidence and a provider/SKU identity are required before a cohort appears. Targets excluded from aggregation remain visible in Workload Suitability.</p></section>}
           </div>
         )}
 

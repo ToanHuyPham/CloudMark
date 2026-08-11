@@ -17,6 +17,7 @@ X-CloudMark-Token: <token printed by cloudmark serve>
 | GET | `/system?refresh=true` | Refresh inventory and metadata |
 | GET | `/dashboard` | Aggregated local dashboard payload |
 | GET | `/suitability` | Versioned target-scoped workload gates and provider-readiness evidence |
+| GET | `/provider-comparisons` | Exact-cohort repeated-window descriptive statistics |
 | GET | `/profiles` | Benchmark and scenario profiles |
 | GET | `/runs` | Run history |
 | GET | `/runs/{id}` | One run and raw result |
@@ -224,6 +225,24 @@ time, unit, quality, and staleness. Missing evidence remains `unavailable` or
 `stale`; it is never converted to zero. Provider status remains `not-rated`
 until the documented multi-target, multi-window, operational, and cost gates
 are satisfied.
+
+## Read provider observations
+
+```http
+GET /api/v1/provider-comparisons
+```
+
+The `provider-observations-v1` response groups fresh valid evidence only when
+provider, product/SKU, region, operating system, profile, methodology, metric,
+and unit match. A UTC calendar day is one measurement window. Each metric
+cohort exposes sample, target, window, and Run ID sets plus median, P10, P90,
+actual minimum/maximum, direction-aware best/worst, and P10-P90 relative
+spread.
+
+Statistics are `comparable` only with at least nine samples from three targets
+and three UTC-day windows and a verified provider identity. Smaller cohorts
+remain `observational`. The endpoint never merges incompatible profiles and
+never returns a provider ranking; `rating_status` remains `not-rated`.
 
 The complete machine-readable contract is in
 [`openapi/cloudmark-v1.yaml`](../openapi/cloudmark-v1.yaml).

@@ -92,10 +92,39 @@ A target verdict is not a provider verdict. CloudMark keeps provider status
 4. equivalent compute, memory, storage, and network profiles; and
 5. security, reliability, control-plane, and timestamped cost evidence.
 
-Future provider aggregation must expose sample count, median, P10/P90, worst
-observed value, zones, time windows, and methodology compatibility. SLA,
+Future provider-rating aggregation must preserve sample count, median, P10/P90,
+worst observed value, zones, time windows, and methodology compatibility. SLA,
 durability, availability, compliance, and managed-service claims require their
 own documents or controlled drills; VM performance cannot substitute for them.
+
+### Repeated-window descriptive observations
+
+`provider-observations-v1` implements the non-rating portion of that
+aggregation. It creates an exact cohort from provider, product/SKU, region, and
+operating system, then separates every metric again by profile, methodology,
+and unit. Cross-SKU, cross-region, cross-OS, and cross-methodology merging is
+forbidden. A paired network Run is one observation even when both endpoints
+belong to the same cohort.
+
+One UTC calendar day derived from the completed Run timestamp is one
+measurement window. A metric cohort is labelled `comparable` only when it has:
+
+- at least nine valid fresh samples;
+- at least three participating targets;
+- at least three UTC-day windows; and
+- independently verified provider identity.
+
+Smaller samples remain `observational`. Both states expose the complete Run ID
+set, sample/target/window counts, median, P10, P90, actual minimum and maximum,
+direction-aware best and worst values, and P10-P90 relative spread. Relative
+spread is labelled stable at no more than 10%, moderate at no more than 25%,
+and variable above 25%. Fewer than three samples are labelled
+`insufficient-sampling`; a zero median with non-zero spread is variable without
+an artificial relative percentage.
+
+These values describe an exact cohort and do not select a winner. Provider
+rating remains `not-rated` until the separate security, reliability,
+control-plane, cost, and product-claim gates are implemented.
 
 ## Interpretation discipline
 

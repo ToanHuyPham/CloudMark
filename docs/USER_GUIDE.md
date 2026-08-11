@@ -524,7 +524,24 @@ the same-SKU target count, measurement-window count, observed suites, and the
 missing security, reliability, control-plane, and cost gates. See
 [`SUITABILITY_METHODOLOGY.md`](SUITABILITY_METHODOLOGY.md).
 
-## 14. API quick reference
+## 14. Provider comparison
+
+Open **Provider Comparison** and select an exact metric contract. A contract is
+one metric, profile, methodology, and unit. The dashboard then shows each
+provider/SKU/region/OS cohort without merging incompatible evidence.
+
+Each cohort shows median, P10/P90, actual worst value, stability, Run count,
+target count, and UTC-day count. `Observation only` means the evidence remains
+useful but has not reached the minimum nine Runs, three targets, and three
+UTC-day windows. `Comparable` means only that the sampling contract is met; it
+does not mean the provider is recommended or ranked above another provider.
+
+Use the same official profile on three independent provider instances and
+repeat it on three different UTC dates. Do not create nested VMs on one target
+to inflate the target count. Network evidence must come from paired provider
+Agents, and CloudMark counts one paired Run once.
+
+## 15. API quick reference
 
 Health:
 
@@ -542,6 +559,12 @@ Suitability evidence:
 
 ```bash
 curl http://127.0.0.1:8787/api/v1/suitability
+```
+
+Repeated-window provider observations:
+
+```bash
+curl http://127.0.0.1:8787/api/v1/provider-comparisons
 ```
 
 Create an inventory run:

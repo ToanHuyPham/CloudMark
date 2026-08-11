@@ -131,6 +131,10 @@ systems.
 - Provider status remains `not-rated` until independent same-product targets,
   repeated windows, security, reliability, control-plane, and cost evidence are
   available.
+- Repeated-window comparison never merges SKU, region, operating-system,
+  profile, methodology, or unit boundaries.
+- Descriptive distributions remain observation-only below nine samples, three
+  targets, or three UTC-day windows, and never trigger a benchmark themselves.
 
 ## Secrets
 

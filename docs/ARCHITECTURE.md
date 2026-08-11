@@ -81,6 +81,14 @@ measurement windows, observed suites, and missing operational domains, but
 does not produce a provider rating until the complete aggregation contract is
 implemented.
 
+`provider-observations-v1` adds a second read-time projection for repeated
+measurements. Cohorts must match provider, SKU, region, operating system,
+profile, methodology, metric, and unit. It de-duplicates a paired network Run,
+uses UTC calendar days as windows, and reports descriptive distributions only.
+The minimum comparable cohort is nine samples across three targets and three
+windows. Smaller cohorts remain visible as observations; no relative provider
+ranking is computed.
+
 ## Local saturation executors
 
 CPU, memory, and storage share one exclusive Controller admission group. A

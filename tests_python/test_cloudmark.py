@@ -273,6 +273,123 @@ class CloudMarkTests(unittest.TestCase):
         )
         self.assertFalse(identity["satisfied"])
 
+    def test_provider_observations_require_exact_repeated_sampling_contract(self) -> None:
+        now = datetime.now(timezone.utc)
+        agents: dict[str, dict[str, object]] = {}
+        runs: list[dict[str, object]] = []
+        rates = iter(range(1000, 1900, 100))
+        for target_index in range(3):
+            agent_id = f"agent_{target_index}"
+            system = self._suitability_system(f"target-{target_index}")
+            system["provider"]["region"] = "region-a"
+            agents[agent_id] = {"last_seen_at": now.isoformat(), "system": system}
+            for day_index in range(3):
+                observed_at = (now - timedelta(days=day_index)).isoformat()
+                runs.append({
+                    "id": f"run_compute_{target_index}_{day_index}",
+                    "suite": "compute",
+                    "profile": "compute-standard",
+                    "status": "completed",
+                    "finished_at": observed_at,
+                    "methodology_version": "compute-v1",
+                    "request": {"agent_id": agent_id},
+                    "result": {
+                        "methodology_version": "compute-v1",
+                        "compute_jobs": [{
+                            "name": "integer-sustained",
+                            "metrics": {"events_per_second": next(rates)},
+                        }],
+                    },
+                })
+
+        report = evaluate_suitability(runs, self._suitability_system("controller"), agents.get)
+        observations = report["provider_observations"]
+        self.assertEqual(observations["version"], "provider-observations-v1")
+        self.assertFalse(observations["policy"]["provider_ranking"])
+        group = observations["groups"][0]
+        self.assertEqual(group["target_count"], 3)
+        self.assertEqual(group["window_count"], 3)
+        metric = next(item for item in group["metric_cohorts"] if item["key"] == "compute.sustained_eps")
+        self.assertEqual(metric["status"], "comparable")
+        self.assertEqual(metric["sample_count"], 9)
+        self.assertEqual(metric["target_count"], 3)
+        self.assertEqual(metric["window_count"], 3)
+        self.assertEqual(metric["statistics"]["median"], 1400)
+        self.assertEqual(metric["statistics"]["p10"], 1080)
+        self.assertEqual(metric["statistics"]["p90"], 1720)
+        self.assertEqual(metric["statistics"]["worst"], 1000)
+        self.assertEqual(group["rating_status"], "not-rated")
+
+    def test_provider_observations_do_not_merge_profiles_or_duplicate_peer_runs(self) -> None:
+        completed_at = datetime.now(timezone.utc).isoformat()
+        systems = {
+            "agent_a": {"last_seen_at": completed_at, "system": self._suitability_system("agent-a")},
+            "agent_b": {"last_seen_at": completed_at, "system": self._suitability_system("agent-b")},
+        }
+        runs = [
+            {
+                "id": "run_compute_quick",
+                "suite": "compute",
+                "profile": "compute-quick",
+                "status": "completed",
+                "finished_at": completed_at,
+                "methodology_version": "compute-v1",
+                "request": {"agent_id": "agent_a"},
+                "result": {
+                    "methodology_version": "compute-v1",
+                    "compute_jobs": [{"name": "integer-single", "metrics": {"events_per_second": 1000}}],
+                },
+            },
+            {
+                "id": "run_compute_standard",
+                "suite": "compute",
+                "profile": "compute-standard",
+                "status": "completed",
+                "finished_at": completed_at,
+                "methodology_version": "compute-v1",
+                "request": {"agent_id": "agent_a"},
+                "result": {
+                    "methodology_version": "compute-v1",
+                    "compute_jobs": [{"name": "integer-single", "metrics": {"events_per_second": 1100}}],
+                },
+            },
+            {
+                "id": "run_network_pair",
+                "suite": "network",
+                "profile": "network-peer-standard",
+                "status": "completed",
+                "finished_at": completed_at,
+                "methodology_version": "network-v2",
+                "request": {},
+                "result": {
+                    "methodology_version": "network-v2",
+                    "measurements": [
+                        {
+                            "direction": "a-to-b",
+                            "sender": {"id": "agent_a"},
+                            "receiver": {"id": "agent_b"},
+                            "metrics": {"received_bits_per_second": 500_000_000},
+                        },
+                        {
+                            "direction": "b-to-a",
+                            "sender": {"id": "agent_b"},
+                            "receiver": {"id": "agent_a"},
+                            "metrics": {"received_bits_per_second": 450_000_000},
+                        },
+                    ],
+                },
+            },
+        ]
+        report = evaluate_suitability(runs, self._suitability_system("controller"), systems.get)
+        group = report["provider_observations"]["groups"][0]
+        single_thread = [item for item in group["metric_cohorts"] if item["key"] == "compute.single_eps"]
+        self.assertEqual({item["profile"] for item in single_thread}, {"compute-quick", "compute-standard"})
+        self.assertTrue(all(item["sample_count"] == 1 for item in single_thread))
+        network = next(item for item in group["metric_cohorts"] if item["key"] == "network.directional_floor_bps")
+        self.assertEqual(network["sample_count"], 1)
+        self.assertEqual(network["target_count"], 2)
+        self.assertEqual(network["run_ids"], ["run_network_pair"])
+
     def test_storage_metrics_keep_tail_latency_percentiles(self) -> None:
         section = {
             "iops": 123,
@@ -1777,6 +1894,11 @@ max: 1.50
                 with urllib.request.urlopen(f"{base}/suitability", timeout=5) as response:
                     suitability = json.load(response)
                 self.assertEqual(suitability["requirements_version"], "workload-requirements-1.0")
+                with urllib.request.urlopen(f"{base}/provider-comparisons", timeout=5) as response:
+                    provider_observations = json.load(response)
+                self.assertEqual(provider_observations["version"], "provider-observations-v1")
+                self.assertEqual(provider_observations["rating_status"], "not-rated")
+                self.assertFalse(provider_observations["policy"]["provider_ranking"])
                 request = urllib.request.Request(
                     f"{base}/runs/run_http/cancel",
                     data=b"{}",

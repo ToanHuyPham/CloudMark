@@ -681,6 +681,13 @@ class Handler(BaseHTTPRequestHandler):
                         self.controller.database.get_agent,
                     ),
                 )
+            elif path == "/api/v1/provider-comparisons":
+                report = evaluate_suitability(
+                    self.controller.database.list_runs(2000),
+                    self.controller.system(),
+                    self.controller.database.get_agent,
+                )
+                self._send(200, report["provider_observations"])
             elif path == "/api/v1/profiles":
                 self._send(200, all_profiles())
             elif path == "/api/v1/runs":

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from datetime import datetime, timezone
 from typing import Any, Callable
 
@@ -16,11 +17,37 @@ from .profiles import (
 
 SUITABILITY_ENGINE_VERSION = "suitability-v1"
 REQUIREMENTS_VERSION = "workload-requirements-1.0"
+PROVIDER_OBSERVATION_VERSION = "provider-observations-v1"
 EVIDENCE_MAX_AGE_DAYS = 30
 EVIDENCE_FUTURE_SKEW_SECONDS = 86_400
+COMPARISON_MIN_SAMPLES = 9
+COMPARISON_MIN_TARGETS = 3
+COMPARISON_MIN_WINDOWS = 3
 
 MIB = 1024**2
 GIB = 1024**3
+
+COMPARISON_METRICS: dict[str, dict[str, Any]] = {
+    "compute.single_eps": {"label": "Single-thread integer rate", "direction": "higher"},
+    "compute.sustained_eps": {"label": "Sustained all-core integer rate", "direction": "higher"},
+    "compute.scaling_efficiency_pct": {"label": "Compute scaling efficiency", "direction": "higher"},
+    "memory.triad_bps": {"label": "All-core memory triad bandwidth", "direction": "higher"},
+    "storage.sequential_read_bps": {"label": "Sequential storage read", "direction": "higher"},
+    "storage.sequential_write_bps": {"label": "Sequential storage write", "direction": "higher"},
+    "storage.random_read_qd1_iops": {"label": "Low-queue random read", "direction": "higher"},
+    "storage.sync_write_iops": {"label": "Durable synchronous write", "direction": "higher"},
+    "network.directional_floor_bps": {"label": "Peer TCP directional floor", "direction": "higher"},
+    "network.idle_latency_ms": {"label": "Worst peer idle latency", "direction": "lower"},
+    "network.idle_loss_pct": {"label": "Worst idle packet loss", "direction": "lower"},
+    "network.udp_loss_pct": {"label": "Worst adaptive UDP loss", "direction": "lower"},
+    "network.udp_jitter_ms": {"label": "Worst adaptive UDP jitter", "direction": "lower"},
+    "database.tpcb_c4_tps": {"label": "Durable TPC-B-like throughput at C4", "direction": "higher"},
+    "database.tpcb_c4_latency_ms": {"label": "Durable TPC-B-like average latency", "direction": "lower"},
+    "database.tpcb_c4_failed": {"label": "Failed database transactions", "direction": "lower"},
+    "web.https_api_c16_rps": {"label": "HTTPS API throughput at C16", "direction": "higher"},
+    "web.https_api_c16_p95_ms": {"label": "HTTPS API P95 at C16", "direction": "lower"},
+    "web.https_api_c16_success_pct": {"label": "HTTPS API success rate", "direction": "higher"},
+}
 
 REQUIREMENT_LEVELS: dict[str, dict[str, str]] = {
     "essential": {
@@ -174,7 +201,8 @@ def _number(value: Any) -> float | None:
     if isinstance(value, bool):
         return float(value)
     if isinstance(value, (int, float)):
-        return float(value)
+        numeric = float(value)
+        return numeric if math.isfinite(numeric) else None
     return None
 
 
@@ -513,6 +541,222 @@ def _target_metadata(target_id: str, system: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _provider_identity_verified(provider: dict[str, Any]) -> bool:
+    source = str(provider.get("source") or "").lower()
+    return (
+        provider.get("name") != "Unknown"
+        and float(provider.get("confidence") or 0) >= 0.5
+        and "unverified" not in source
+        and "declared" not in source
+    )
+
+
+def _percentile(values: list[float], fraction: float) -> float:
+    ordered = sorted(values)
+    if len(ordered) == 1:
+        return ordered[0]
+    position = (len(ordered) - 1) * fraction
+    lower = int(position)
+    upper = min(lower + 1, len(ordered) - 1)
+    weight = position - lower
+    return ordered[lower] * (1 - weight) + ordered[upper] * weight
+
+
+def _stability(values: list[float], median: float, p10: float, p90: float) -> tuple[float | None, str]:
+    if len(values) < 3:
+        return None, "insufficient-sampling"
+    spread = abs(p90 - p10)
+    if abs(median) < 1e-12:
+        if spread == 0:
+            return 0.0, "stable"
+        return None, "variable"
+    relative_spread = round(spread * 100 / abs(median), 2)
+    if relative_spread <= 10:
+        return relative_spread, "stable"
+    if relative_spread <= 25:
+        return relative_spread, "moderate"
+    return relative_spread, "variable"
+
+
+def _provider_observations(targets: list[dict[str, Any]]) -> dict[str, Any]:
+    grouped: dict[tuple[str, str, str, str], list[dict[str, Any]]] = {}
+    excluded_targets: list[dict[str, str]] = []
+    for target in targets:
+        provider = target["provider"]
+        if not any(_run_is_fresh(run) for run in target["_runs"]):
+            excluded_targets.append({"target_id": target["id"], "reason": "No fresh valid benchmark evidence is available."})
+            continue
+        provider_name = str(provider.get("name") or "").strip()
+        instance_type = str(provider.get("instance_type") or "").strip()
+        if not provider_name or provider_name == "Unknown":
+            excluded_targets.append({"target_id": target["id"], "reason": "Provider identity is unavailable."})
+            continue
+        if not instance_type:
+            excluded_targets.append({"target_id": target["id"], "reason": "Product or SKU identity is unavailable."})
+            continue
+        region = str(provider.get("region") or "unspecified-region")
+        operating_system = str(target["system"].get("os") or "unspecified-os")
+        grouped.setdefault((provider_name, instance_type, region, operating_system), []).append(target)
+
+    groups: list[dict[str, Any]] = []
+    for index, (cohort_key, peers) in enumerate(sorted(grouped.items()), start=1):
+        provider_name, instance_type, region, operating_system = cohort_key
+        peer_ids = {peer["id"] for peer in peers}
+        identity_verified = all(_provider_identity_verified(peer["provider"]) for peer in peers)
+        runs_by_id: dict[str, dict[str, Any]] = {}
+        metric_builders: dict[tuple[str, str, str, str], dict[str, Any]] = {}
+        for peer in peers:
+            for run in peer["_runs"]:
+                if not _run_is_fresh(run):
+                    continue
+                run_id = str(run.get("id") or "")
+                if not run_id:
+                    continue
+                run_targets = _run_targets(run)
+                if run.get("suite") == "network" and not run_targets.issubset(peer_ids):
+                    continue
+                runs_by_id[run_id] = run
+                participating_targets = sorted(run_targets & peer_ids)
+                if not participating_targets:
+                    continue
+                run_evidence: dict[str, dict[str, Any]] = {}
+                _extract_run_evidence(run_evidence, run)
+                for metric_key, item in run_evidence.items():
+                    metric_definition = COMPARISON_METRICS.get(metric_key)
+                    if metric_definition is None or item.get("stale"):
+                        continue
+                    profile = str(item.get("profile") or "")
+                    methodology = str(item.get("methodology_version") or "")
+                    unit = str(item.get("unit") or "")
+                    contract_key = (metric_key, profile, methodology, unit)
+                    builder = metric_builders.setdefault(contract_key, {
+                        "values": [],
+                        "run_ids": [],
+                        "target_ids": set(),
+                        "windows": set(),
+                        "observed_at": [],
+                        "_seen_runs": set(),
+                    })
+                    if run_id in builder["_seen_runs"]:
+                        builder["target_ids"].update(participating_targets)
+                        continue
+                    builder["_seen_runs"].add(run_id)
+                    builder["values"].append(float(item["value"]))
+                    builder["run_ids"].append(run_id)
+                    builder["target_ids"].update(participating_targets)
+                    observed_at = str(item.get("observed_at") or "")
+                    if observed_at:
+                        builder["observed_at"].append(observed_at)
+                        builder["windows"].add(observed_at[:10])
+
+        metric_cohorts: list[dict[str, Any]] = []
+        for contract_key, builder in sorted(metric_builders.items()):
+            metric_key, profile, methodology, unit = contract_key
+            values = builder["values"]
+            median = _percentile(values, 0.5)
+            p10 = _percentile(values, 0.1)
+            p90 = _percentile(values, 0.9)
+            direction = COMPARISON_METRICS[metric_key]["direction"]
+            target_count = len(builder["target_ids"])
+            window_count = len(builder["windows"])
+            reasons: list[str] = []
+            if not identity_verified:
+                reasons.append("Provider identity is not independently verified.")
+            if len(values) < COMPARISON_MIN_SAMPLES:
+                reasons.append(f"At least {COMPARISON_MIN_SAMPLES} samples are required.")
+            if target_count < COMPARISON_MIN_TARGETS:
+                reasons.append(f"At least {COMPARISON_MIN_TARGETS} targets are required.")
+            if window_count < COMPARISON_MIN_WINDOWS:
+                reasons.append(f"At least {COMPARISON_MIN_WINDOWS} UTC-day windows are required.")
+            relative_spread, stability = _stability(values, median, p10, p90)
+            metric_cohorts.append({
+                "contract_id": "|".join(contract_key),
+                "key": metric_key,
+                "label": COMPARISON_METRICS[metric_key]["label"],
+                "suite": metric_key.split(".", 1)[0],
+                "direction": direction,
+                "unit": unit,
+                "profile": profile,
+                "methodology_version": methodology,
+                "status": "comparable" if not reasons else "observational",
+                "reasons": reasons,
+                "sample_count": len(values),
+                "target_count": target_count,
+                "window_count": window_count,
+                "windows": sorted(builder["windows"]),
+                "run_ids": sorted(builder["run_ids"]),
+                "latest_observed_at": max(builder["observed_at"]) if builder["observed_at"] else None,
+                "statistics": {
+                    "median": median,
+                    "p10": p10,
+                    "p90": p90,
+                    "minimum": min(values),
+                    "maximum": max(values),
+                    "best": max(values) if direction == "higher" else min(values),
+                    "worst": min(values) if direction == "higher" else max(values),
+                    "relative_spread_percent": relative_spread,
+                    "stability": stability,
+                },
+            })
+
+        windows = sorted({str(run.get("finished_at") or run.get("started_at"))[:10] for run in runs_by_id.values()})
+        comparable_suites = {item["suite"] for item in metric_cohorts if item["status"] == "comparable"}
+        criteria = [
+            {"label": "Verified provider identity", "satisfied": identity_verified},
+            {"label": "At least three same-cohort targets", "satisfied": len(peer_ids) >= COMPARISON_MIN_TARGETS},
+            {"label": "At least three UTC-day windows", "satisfied": len(windows) >= COMPARISON_MIN_WINDOWS},
+            {
+                "label": "Comparable compute, memory, storage, and network cohorts",
+                "satisfied": {"compute", "memory", "storage", "network"}.issubset(comparable_suites),
+            },
+            {"label": "Security, reliability, control-plane, and cost evidence", "satisfied": False},
+        ]
+        if {"compute", "memory", "storage", "network"}.issubset(comparable_suites):
+            comparison_status = "sampling-ready"
+        elif comparable_suites:
+            comparison_status = "partial"
+        else:
+            comparison_status = "observational"
+        groups.append({
+            "id": f"cohort-{index:03d}",
+            "provider": provider_name,
+            "instance_type": instance_type,
+            "region": region,
+            "operating_system": operating_system,
+            "scope": "exact-provider-sku-region-os",
+            "comparison_status": comparison_status,
+            "rating_status": "not-rated",
+            "target_ids": sorted(peer_ids),
+            "target_count": len(peer_ids),
+            "windows": windows,
+            "window_count": len(windows),
+            "observed_suites": sorted({str(run.get("suite")) for run in runs_by_id.values()}),
+            "criteria": criteria,
+            "gaps": [item["label"] for item in criteria if not item["satisfied"]],
+            "metric_cohorts": metric_cohorts,
+        })
+
+    return {
+        "version": PROVIDER_OBSERVATION_VERSION,
+        "rating_status": "not-rated",
+        "window_definition": "UTC calendar day derived from the completed run timestamp",
+        "minimum_comparable_sampling": {
+            "samples": COMPARISON_MIN_SAMPLES,
+            "targets": COMPARISON_MIN_TARGETS,
+            "windows": COMPARISON_MIN_WINDOWS,
+        },
+        "policy": {
+            "exact_profile_and_methodology": True,
+            "cross_sku_aggregation": False,
+            "cross_region_aggregation": False,
+            "cross_os_aggregation": False,
+            "provider_ranking": False,
+        },
+        "groups": groups,
+        "excluded_targets": excluded_targets,
+    }
+
+
 def evaluate_suitability(
     runs: list[dict[str, Any]],
     local_system: dict[str, Any],
@@ -567,41 +811,37 @@ def evaluate_suitability(
         })
         targets.append(metadata)
 
+    provider_observations = _provider_observations(targets)
+    group_by_target = {
+        target_id: group
+        for group in provider_observations["groups"]
+        for target_id in group["target_ids"]
+    }
     for target in targets:
-        provider = target["provider"]
-        provider_key = (provider["name"], provider.get("instance_type"))
-        peers = (
-            [item for item in targets if (item["provider"]["name"], item["provider"].get("instance_type")) == provider_key]
-            if provider["name"] != "Unknown" and provider.get("instance_type")
-            else [target]
-        )
-        fresh_peer_runs = [run for peer in peers for run in peer["_runs"] if _run_is_fresh(run)]
-        windows = {
-            str(run.get("finished_at", ""))[:10]
-            for run in fresh_peer_runs
-            if run.get("finished_at")
-        }
-        suites = {str(run.get("suite")) for run in fresh_peer_runs}
-        provider_source = str(provider.get("source") or "").lower()
-        identity_verified = (
-            provider["name"] != "Unknown"
-            and provider["confidence"] >= 0.5
-            and "unverified" not in provider_source
-            and "declared" not in provider_source
-        )
-        criteria = [
-            {"label": "Verified provider identity", "satisfied": identity_verified},
-            {"label": "At least three same-product targets", "satisfied": len(peers) >= 3},
-            {"label": "At least three measurement windows", "satisfied": len(windows) >= 3},
-            {"label": "Compute, memory, storage, and network evidence", "satisfied": {"compute", "memory", "storage", "network"}.issubset(suites)},
-            {"label": "Security, reliability, control-plane, and cost evidence", "satisfied": False},
-        ]
+        group = group_by_target.get(target["id"])
+        if group is None:
+            criteria = [
+                {"label": "Verified provider identity", "satisfied": False},
+                {"label": "At least three same-cohort targets", "satisfied": False},
+                {"label": "At least three UTC-day windows", "satisfied": False},
+                {"label": "Comparable compute, memory, storage, and network cohorts", "satisfied": False},
+                {"label": "Security, reliability, control-plane, and cost evidence", "satisfied": False},
+            ]
+            same_product_targets = 0
+            measurement_windows = 0
+            observed_suites: list[str] = []
+        else:
+            criteria = group["criteria"]
+            same_product_targets = group["target_count"]
+            measurement_windows = group["window_count"]
+            observed_suites = group["observed_suites"]
         target["provider_assessment"] = {
             "status": "not-rated",
             "claim": "Instance observation only; this is not a provider-wide rating.",
-            "same_product_targets": len(peers),
-            "measurement_windows": len(windows),
-            "observed_suites": sorted(suites),
+            "cohort_id": group["id"] if group else None,
+            "same_product_targets": same_product_targets,
+            "measurement_windows": measurement_windows,
+            "observed_suites": observed_suites,
             "criteria": criteria,
             "gaps": [item["label"] for item in criteria if not item["satisfied"]],
         }
@@ -621,4 +861,5 @@ def evaluate_suitability(
         },
         "levels": REQUIREMENT_LEVELS,
         "targets": targets,
+        "provider_observations": provider_observations,
     }

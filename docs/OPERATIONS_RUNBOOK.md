@@ -226,6 +226,19 @@ Nginx directory, or a directory while its process is still active.
   target;
 - remember that provider status remains `not-rated` after one target passes.
 
+### Provider Comparison reports observation only
+
+- confirm every target has the same verified provider, product/SKU, region,
+  and operating-system cohort;
+- confirm the selected metric uses the exact same profile, methodology, and
+  unit on every Run;
+- collect at least nine valid fresh samples across three targets and three UTC
+  calendar days;
+- use the displayed Run ID count and UTC-day count to find gaps;
+- do not rename a SKU, edit timestamps, or duplicate Runs to satisfy sampling;
+- remember that `comparable` describes sampling compatibility, not a provider
+  rating or a winner.
+
 ## 12. Optional Codex local environment
 
 In the ChatGPT desktop app, open the local-project environment settings and

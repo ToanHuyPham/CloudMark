@@ -163,6 +163,12 @@ Demanding hard gates to all 12 use cases, preserves per-check run provenance,
 and reports missing/stale evidence, blockers, limitations, and next actions.
 It deliberately does not publish a provider rating.
 
+`provider-observations-v1` is also available at development head. It reports
+exact provider/SKU/region/OS and profile/methodology cohorts with descriptive
+median, P10/P90, actual best/worst, and spread. Nine samples across three
+targets and three UTC-day windows are required before a metric is marked
+comparable; this remains distinct from a provider rating.
+
 Each use case defines:
 
 1. hard gates — missing evidence makes the system ineligible;
@@ -200,5 +206,5 @@ matching control-plane drills.
 5. Add provider adapters and M5 drills.
 6. Calibrate and version the available requirement thresholds across regional
    clouds, global clouds, and self-operated bare-metal systems before treating
-   them as stable policy; then implement provider aggregation without weakening
-   the multi-target and multi-window gates.
+   them as stable policy; then implement provider ratings without weakening the
+   multi-target and multi-window gates.
