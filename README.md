@@ -93,6 +93,11 @@ pnpm run dev
 Open the local URL printed by the dashboard. Enter the token printed by the
 Controller under **Controller key** before starting write operations.
 
+On Windows, `.\scripts\start-local.ps1` starts both local processes and records
+their PIDs and logs under `.tmp/local`. Runtime evidence and secrets remain
+outside Git in `.cloudmark`; follow [`docs/RECOVERY.md`](docs/RECOVERY.md) to
+create a consistent protected snapshot before moving to another machine.
+
 ## Assessment commands
 
 ```bash

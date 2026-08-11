@@ -98,6 +98,21 @@ pnpm install
 
 ## 4. Start CloudMark locally
 
+On Windows, the recoverable launcher starts both processes, selects an available
+dashboard port from 3000 through 3010, writes logs under `.tmp/local`, and does
+not print the Controller token:
+
+```powershell
+.\scripts\start-local.ps1
+```
+
+Use `.\scripts\stop-local.ps1` to stop only the processes recorded by that
+launcher. See [`OPERATIONS_RUNBOOK.md`](OPERATIONS_RUNBOOK.md) and
+[`RECOVERY.md`](RECOVERY.md) for backup, restoration, and transfer to another
+machine or Codex installation.
+
+The manual two-terminal procedure remains available below.
+
 Open the first terminal:
 
 ```bash
