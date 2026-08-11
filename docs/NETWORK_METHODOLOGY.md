@@ -1,59 +1,81 @@
 # Network methodology
 
-CloudMark does not benchmark from provider machines back to the operator's
-Controller. Performance traffic is direct between authenticated agents in the
-provider environment; the Controller carries scheduling and result traffic
+CloudMark never uses the Controller as a provider-throughput endpoint. Network
+performance traffic flows directly between an authenticated target Agent and
+generator Agent. The Controller carries orchestration, progress, and evidence
 only.
 
-## Version 0.3 topology
+## Topology and evidence identity
 
-- Target agent: provider VM A.
-- Generator agent: provider VM B.
-- Controller: orchestration and evidence storage only.
+- Agent A: the assessed target in the provider environment.
+- Agent B: the workload generator in the same declared test topology.
+- Controller: coordination and evidence storage only.
 
-Both agents run persistent workers. Each worker receives an independent random
-credential after joining a 30-minute session. Credentials are stored by the
-Controller only as SHA-256 hashes. Remote control connections require HTTPS by
-default; `--allow-http` is an explicit exception for an isolated management
-network or trusted VPN.
+Each result identifies the profile and methodology version, both Agents, each
+advertised peer address, direction, tool version, duration, and raw tool output.
+The operator must record whether the pair is same-host, same-zone, cross-zone,
+or cross-region. CloudMark does not infer fabric scope from throughput alone.
 
-## Available TCP profiles
+## Profiles
 
-| Profile | Direction | Streams | Duration per measurement |
-|---|---|---:|---:|
-| `network-peer-quick` | A→B and B→A | 1, 4 | 10 seconds |
-| `network-peer-standard` | A→B and B→A | 1, 4, 8, 16 | 15 seconds |
+| Profile | Methodology | Measurements |
+|---|---|---|
+| `network-peer-quick` | `network-v1` | TCP A→B and B→A, 1 and 4 streams, 10 seconds each |
+| `network-peer-standard` | `network-v2` | Idle latency, TCP scaling, adaptive UDP sweeps, and simultaneous bidirectional TCP |
 
-Each direction and stream count is stored independently. CloudMark records
-sender and receiver throughput, transferred bytes, retransmissions, and local
-and remote CPU values when the installed iperf3 version exposes them. Raw
-iperf3 JSON is retained with normalized metrics.
+The standard profile contains 17 measurements:
 
-CloudMark starts an iperf3 one-shot server immediately before each measurement
-and collects it immediately afterward. The agent watchdog stops abandoned
-servers. TCP ports are restricted to `5201–5210`, duration is capped at 60
-seconds, parallel streams are restricted to `1`, `4`, `8`, or `16`, arbitrary
-shell commands are never accepted, and the peer address comes only from the
-paired agent record.
+1. bounded idle ICMP latency in both directions: 20 probes at 100 ms intervals;
+2. TCP A→B and B→A at 1, 4, 8, and 16 streams for 15 seconds;
+3. UDP A→B and B→A at 25%, 50%, and 90% of that direction's measured peak TCP receiver rate for 15 seconds; and
+4. one simultaneous bidirectional TCP test with four streams for 15 seconds.
 
-## Not yet available
+UDP targets are rounded to 1 Mbit/s and clamped between 1 Mbit/s and 1 Gbit/s.
+The per-Agent executor has an independent absolute UDP allow-list of 100 kbit/s
+to 1 Gbit/s, so a modified Controller cannot request an unbounded rate.
 
-The network domain remains `Partial`. Version 0.3 does not yet claim:
+## Metrics
 
-- UDP rate sweeps, loss, jitter, or reorder;
-- idle-versus-loaded latency and bufferbloat;
-- simultaneous bidirectional iperf3 mode;
-- MTU/route evidence or generator-saturation validity checks;
-- mTLS agent identity or relay-based enrollment;
-- public-Internet security for an HTTP Controller endpoint.
+TCP measurements preserve sender and receiver throughput, transferred bytes,
+retransmissions, CPU utilization when exposed by iperf3, and TCP_INFO RTT from
+sender stream data. UDP measurements preserve requested and achieved rate,
+jitter, packet count, loss count and percentage, and out-of-order packets when
+the installed iperf3 exposes them. Simultaneous bidirectional results preserve
+the forward and reverse receiver rates separately.
 
-These missing measurements do not receive a zero and do not influence provider
-or workload scoring.
+The latency analysis compares idle ICMP average latency with the TCP_INFO mean
+RTT observed during the highest-stream throughput measurement. These are
+different protocols and sampling mechanisms. CloudMark reports the absolute and
+percentage change as diagnostic evidence but deliberately does not assign a
+bufferbloat score.
 
-## Validity
+## Safety gates
 
-Two VMs on the same physical host are valid for virtual-switch and hypervisor
-tests, not for provider-fabric claims. Provider-grade results should use
-anti-affinity or placement evidence, identical instance shapes, matching tool
-versions, fresh instances, and repeated time windows. A complete comparison
-must preserve each direction rather than averaging A→B and B→A.
+- peer destinations come only from the paired Agent records;
+- loopback, unspecified, multicast, and link-local destinations are rejected;
+- iperf3 ports are restricted to `5201–5210`;
+- durations are clamped to 1–60 seconds;
+- stream counts are restricted to `1`, `4`, `8`, or `16`;
+- guarded UDP uses exactly one stream and a capped numeric bit rate;
+- ping count, interval, and timeout are bounded;
+- iperf3 servers are one-shot and have watchdog deadlines;
+- arbitrary commands and raw shell input are never accepted; and
+- only one saturation suite may target an Agent at a time.
+
+The standard profile can saturate a provider link. It requires explicit
+`confirm_network_load` authorization and may incur provider egress or traffic
+charges, particularly across zones or regions.
+
+## Validity and remaining limitations
+
+Two VMs on the same physical host measure the virtual switch and hypervisor,
+not necessarily the provider fabric. Provider-grade comparisons should use
+identical shapes, placement or anti-affinity evidence, matching tool versions,
+fresh instances, several time windows, and preserved directional results.
+
+The network domain remains `Partial`. CloudMark does not yet provide automatic
+route/MTU/offload capture, generator-saturation rejection, DNS/IPv6 coverage
+classification, repeated-window aggregation, topology verification, or mTLS
+Agent identity. Windows latency parsing currently supports English `ping`
+output; other localized summaries are rejected instead of guessed. Missing
+evidence is never converted to a zero score.

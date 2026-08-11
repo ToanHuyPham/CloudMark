@@ -27,6 +27,10 @@ baseline is still the repository head.
 - persistent authenticated Agents and explicit remote CPU/memory/storage
   dispatch;
 - guarded, bidirectional TCP measurements between paired Agents;
+- simulation-verified `network-v2` standard orchestration for bounded idle
+  latency, loaded TCP RTT, adaptive UDP loss/jitter sweeps, and simultaneous
+  bidirectional TCP; provider-pair validation is intentionally deferred until
+  the complete project is ready for operator testing;
 - responsive dashboard navigation and execution-target selection;
 - repository-level Codex guidance, durable handoff documentation, consistent
   SQLite runtime snapshots, guarded secret backup, recoverable restore, and
@@ -92,8 +96,10 @@ Controller run: `run_1c572100e8704843`.
 
 ## Known limitations
 
-- network coverage is Partial: TCP direction and concurrency exist, while UDP,
-  loaded latency, jitter/loss sweeps, and simultaneous bidirectional behavior
+- network coverage is Partial: `network-v2` now implements idle latency,
+  directional TCP scaling, adaptive UDP jitter/loss sweeps, loaded TCP RTT, and
+  simultaneous bidirectional throughput; route/MTU evidence,
+  generator-saturation rejection, repeated topology-aware windows, and mTLS
   remain unimplemented;
 - database and web/application executors are not yet a complete provider-grade
   assessment suite;
@@ -105,13 +111,15 @@ Controller run: `run_1c572100e8704843`.
 
 ## Next priorities
 
-1. Let the operator run Disk Throughput and Disk Sustained from the dashboard;
-   monitor and review each run before starting the next.
-2. Provision a second same-provider Agent for direct same-zone network tests.
-3. Add repeated time-window evidence and comparison views.
-4. Complete latency, UDP, jitter/loss, and loaded-network methodology.
-5. Implement guarded database and web client/server executors.
-6. Build evidence-gated workload suitability and provider evaluation.
+1. Implement guarded database and web client/server executors.
+2. Build evidence-gated workload suitability and provider evaluation.
+3. Add repeated time-window evidence and provider comparison views.
+4. Add route/MTU evidence, generator-saturation checks, and repeated network
+   windows before promoting the network domain from Partial.
+5. Complete remaining compute, memory/NUMA, GPU, security, reliability,
+   observability, container, and control-plane executors.
+6. Run provider-machine validation only after the development milestones are
+   complete and the operator explicitly starts acceptance testing.
 
 ## Operational reminder
 

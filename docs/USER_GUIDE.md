@@ -159,8 +159,9 @@ In the dashboard:
 - **Storage Assessment** provides Quick, Standard, Database, Throughput, and
   Sustained profiles with live progress and cancellation.
 - **Distributed Testing** creates an authenticated multi-agent topology and
-  runs guarded TCP profiles. Network remains `Partial` because UDP,
-  loaded-latency, and mTLS enrollment are not included yet.
+  runs guarded TCP, UDP, idle-latency, and simultaneous bidirectional profiles.
+  Network remains `Partial` because route/MTU capture, generator-saturation
+  validation, repeated-window aggregation, and mTLS enrollment are incomplete.
 - **Workload Suitability** maps technical evidence to 12 use cases. Missing
   required metrics return `Insufficient evidence`, not zero.
 - **History** retains raw results so conclusions can be recalculated when the
@@ -408,14 +409,17 @@ Internet.
 When both workers are online and report `iperf3`, select `Provider Peer Quick`
 or `Provider Internal Network`, then select **Run network assessment**. The
 quick profile runs 1- and 4-stream TCP in both directions. The standard profile
-runs 1, 4, 8, and 16 streams in both directions. The Controller never becomes
-an iperf3 endpoint.
+runs bounded idle latency, 1/4/8/16-stream TCP in both directions, adaptive UDP
+loss and jitter sweeps at 25/50/90% of the measured directional TCP peak, and a
+simultaneous bidirectional TCP measurement. The Controller never becomes a
+performance endpoint.
 
 The executor accepts only paired-agent addresses, ports 5201–5210, durations up
-to 60 seconds, and an allow-list of stream counts. Each server is one-shot and
-has an independent watchdog deadline. UDP, loaded latency, and simultaneous
-bidirectional mode are still excluded, so overall network coverage remains
-`Partial`.
+to 60 seconds, an allow-list of stream counts, capped UDP rates, and bounded
+ping parameters. Each server is one-shot and has an independent watchdog
+deadline. Overall network coverage remains `Partial` because automatic
+route/MTU capture, generator-saturation rejection, repeated-window aggregation,
+and mTLS Agent enrollment are not complete.
 
 ### Dispatch a single-system profile to an Agent
 
@@ -542,7 +546,8 @@ credentials and requires HTTPS for remote control connections by default.
 - keep both `cloudmark agent` processes running;
 - verify the dashboard shows one online target and one online generator;
 - install `iperf3` on both VMs;
-- allow TCP 5201–5210 between the two provider VMs only;
+- allow TCP and UDP 5201–5210 between the two provider VMs only, plus ICMP when
+  the standard profile's idle-latency evidence is required;
 - verify `--advertise-address` is reachable from the peer, not a loopback or
   management address hidden behind NAT;
 - do not expose the iperf3 port range to the public Internet.

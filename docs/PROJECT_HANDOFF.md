@@ -63,7 +63,9 @@ Provider environment
 
 The Controller may dispatch single-system CPU, memory, and storage suites to an
 explicitly selected authenticated Agent. Provider network benchmark traffic
-must not traverse the operator system.
+must not traverse the operator system. The standard `network-v2` profile
+orchestrates bounded idle latency, directional TCP scaling, adaptive UDP
+loss/jitter sweeps, and simultaneous bidirectional TCP between the two Agents.
 
 ## Repository map
 

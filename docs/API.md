@@ -128,9 +128,12 @@ Supported storage profiles are `disk-quick`, `disk-standard`, `disk-database`,
 
 The session must contain an online `target` and `generator`. Both must advertise
 a peer-reachable IP and report `iperf3`. `confirm_network_load` is mandatory.
-Supported profiles are `network-peer-quick` and `network-peer-standard`.
-Version 0.5 executes TCP A→B and B→A only; it does not execute UDP or send data
-to the Controller.
+Supported profiles are `network-peer-quick` (`network-v1`) and
+`network-peer-standard` (`network-v2`). Quick executes directional TCP only.
+Standard executes 17 bounded peer measurements: idle latency, directional TCP
+scaling, UDP rate sweeps derived from each direction's TCP baseline, and one
+simultaneous bidirectional TCP measurement. No performance traffic is sent to
+the Controller.
 
 ## Cancel a run
 

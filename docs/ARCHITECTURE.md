@@ -107,6 +107,13 @@ Agent A    ══ benchmark data ══ Agent B
 The controller may coordinate sessions but cloud agents do not benchmark toward
 the operator's home machine.
 
+`network-peer-quick` preserves the `network-v1` directional TCP baseline.
+`network-peer-standard` uses `network-v2`: bounded idle ICMP, directional TCP
+scaling, capped UDP sweeps derived from each direction's measured TCP peak, and
+simultaneous bidirectional TCP. The Agent independently validates every peer
+address, port, duration, stream count, protocol, rate, and ping bound before it
+starts a child process.
+
 ## Persistence
 
 SQLite tables:

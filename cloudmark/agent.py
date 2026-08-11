@@ -21,7 +21,21 @@ from . import __version__
 from .benchmarks import run_storage
 from .compute import run_system_benchmark
 from .inventory import collect_inventory
-from .network import ALLOWED_PORT_MAX, ALLOWED_PORT_MIN, ALLOWED_STREAMS, NetworkError, parse_iperf_json
+from .network import (
+    ALLOWED_LATENCY_COUNT_MAX,
+    ALLOWED_LATENCY_INTERVAL_MS_MAX,
+    ALLOWED_LATENCY_INTERVAL_MS_MIN,
+    ALLOWED_LATENCY_TIMEOUT_MS_MAX,
+    ALLOWED_LATENCY_TIMEOUT_MS_MIN,
+    ALLOWED_PORT_MAX,
+    ALLOWED_PORT_MIN,
+    ALLOWED_STREAMS,
+    ALLOWED_UDP_RATE_MAX,
+    ALLOWED_UDP_RATE_MIN,
+    NetworkError,
+    parse_iperf_json,
+    parse_ping_output,
+)
 from .profiles import COMPUTE_PROFILES, MEMORY_PROFILES, STORAGE_PROFILES
 from .provider import detect_provider
 from .remote import REMOTE_METHODOLOGY_VERSION
@@ -192,19 +206,38 @@ class AgentWorker:
         self.active_servers[task_id] = ActiveServer(process, time.monotonic() + deadline_seconds)
         return {"ready": True, "port": port, "pid": process.pid}
 
-    def _run_client(self, payload: dict[str, Any]) -> dict[str, Any]:
-        address = str(payload.get("target_address", ""))
+    @staticmethod
+    def _peer_address(value: Any) -> ipaddress.IPv4Address | ipaddress.IPv6Address:
+        address = str(value or "")
         try:
             parsed = ipaddress.ip_address(address)
         except ValueError as exc:
             raise NetworkError("Task target_address is not an IP address.") from exc
         if parsed.is_loopback or parsed.is_unspecified or parsed.is_multicast or parsed.is_link_local:
             raise NetworkError("Task target_address is not a peer-reachable unicast address.")
+        return parsed
+
+    def _run_client(self, payload: dict[str, Any]) -> dict[str, Any]:
+        address = str(payload.get("target_address", ""))
+        parsed = self._peer_address(address)
         port = self._port(payload.get("port"))
         duration = max(1, min(int(payload.get("duration_seconds", 10)), 60))
         streams = int(payload.get("streams", 1))
         if streams not in ALLOWED_STREAMS:
             raise NetworkError("Task stream count is outside the CloudMark allow-list.")
+        protocol = str(payload.get("protocol", "tcp"))
+        if protocol not in {"tcp", "udp"}:
+            raise NetworkError("Task protocol is outside the CloudMark allow-list.")
+        bidirectional = payload.get("bidirectional") is True
+        if bidirectional and protocol != "tcp":
+            raise NetworkError("Agent refused bidirectional mode for a non-TCP task.")
+        target_rate_bps: int | None = None
+        if protocol == "udp":
+            if streams != 1:
+                raise NetworkError("Agent requires exactly one stream for guarded UDP tasks.")
+            target_rate_bps = int(payload.get("target_rate_bps", 0))
+            if not ALLOWED_UDP_RATE_MIN <= target_rate_bps <= ALLOWED_UDP_RATE_MAX:
+                raise NetworkError("Task UDP rate is outside the CloudMark allow-list.")
         command = [
             self._iperf(),
             "--client",
@@ -218,6 +251,10 @@ class AgentWorker:
             str(streams),
             "--json",
         ]
+        if protocol == "udp":
+            command.extend(["--udp", "--bitrate", str(target_rate_bps)])
+        if bidirectional:
+            command.append("--bidir")
         try:
             result = subprocess.run(
                 command,
@@ -232,7 +269,83 @@ class AgentWorker:
             raise NetworkError("iperf3 client exceeded its guarded task timeout.") from exc
         if result.returncode != 0:
             raise NetworkError(result.stderr.strip() or result.stdout.strip() or "iperf3 client failed.")
-        return {"iperf": parse_iperf_json(result.stdout), "command": {"duration_seconds": duration, "streams": streams}}
+        return {
+            "iperf": parse_iperf_json(result.stdout),
+            "command": {
+                "duration_seconds": duration,
+                "streams": streams,
+                "protocol": protocol,
+                "target_rate_bps": target_rate_bps,
+                "bidirectional": bidirectional,
+            },
+        }
+
+    def _run_latency(self, payload: dict[str, Any]) -> dict[str, Any]:
+        address = str(payload.get("target_address", ""))
+        parsed = self._peer_address(address)
+        count = int(payload.get("count", 20))
+        interval_ms = int(payload.get("interval_ms", 100))
+        timeout_ms = int(payload.get("timeout_ms", 1000))
+        if not 1 <= count <= ALLOWED_LATENCY_COUNT_MAX:
+            raise NetworkError("Task ping count is outside the CloudMark allow-list.")
+        if not ALLOWED_LATENCY_INTERVAL_MS_MIN <= interval_ms <= ALLOWED_LATENCY_INTERVAL_MS_MAX:
+            raise NetworkError("Task ping interval is outside the CloudMark allow-list.")
+        if not ALLOWED_LATENCY_TIMEOUT_MS_MIN <= timeout_ms <= ALLOWED_LATENCY_TIMEOUT_MS_MAX:
+            raise NetworkError("Task ping timeout is outside the CloudMark allow-list.")
+        executable = shutil.which("ping")
+        if not executable:
+            raise NetworkError("ping is not installed or is not on PATH.")
+        if os.name == "nt":
+            command = [
+                executable,
+                "-n",
+                str(count),
+                "-w",
+                str(timeout_ms),
+                "-6" if parsed.version == 6 else "-4",
+                address,
+            ]
+        else:
+            command = [
+                executable,
+                "-n",
+                "-c",
+                str(count),
+                "-i",
+                f"{interval_ms / 1000:.3f}",
+                "-W",
+                str(max(1, (timeout_ms + 999) // 1000)),
+                "-6" if parsed.version == 6 else "-4",
+                address,
+            ]
+        environment = os.environ.copy()
+        if os.name != "nt":
+            environment["LC_ALL"] = "C"
+        guarded_timeout = min(120, count * (interval_ms + timeout_ms) / 1000 + 10)
+        try:
+            result = subprocess.run(
+                command,
+                capture_output=True,
+                text=True,
+                timeout=guarded_timeout,
+                check=False,
+                shell=False,
+                env=environment,
+                creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise NetworkError("ping exceeded its guarded task timeout.") from exc
+        if result.returncode not in {0, 1}:
+            raise NetworkError(result.stderr.strip() or result.stdout.strip() or "ping failed.")
+        metrics = parse_ping_output(result.stdout)
+        if metrics["received"] <= 0:
+            raise NetworkError("Peer latency task received no replies.")
+        return {
+            "latency": metrics,
+            "tool": {"name": "ping", "version": None},
+            "raw": {"stdout": result.stdout},
+            "command": {"count": count, "interval_ms": interval_ms, "timeout_ms": timeout_ms},
+        }
 
     def _collect_server(self, payload: dict[str, Any]) -> dict[str, Any]:
         server_task_id = str(payload.get("server_task_id", ""))
@@ -379,6 +492,8 @@ class AgentWorker:
             return self._start_server(str(task["id"]), payload)
         if kind == "network-client":
             return self._run_client(payload)
+        if kind == "network-latency":
+            return self._run_latency(payload)
         if kind == "network-server-collect":
             return self._collect_server(payload)
         if kind in {"benchmark-compute", "benchmark-memory", "benchmark-storage"}:

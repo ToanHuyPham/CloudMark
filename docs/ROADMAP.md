@@ -94,9 +94,10 @@ Required topology: Controller + Agent A + Agent B.
 - TCP A→B and B→A using 1/4/8/16 streams — available;
 - authenticated agent heartbeat and durable allow-listed task queues — available;
 - fixed port range, duration/stream caps, one-shot servers, watchdog, and cleanup — available;
-- simultaneous bidirectional mode — planned;
-- UDP rate sweep, loss, jitter, reorder, and practical ceiling;
-- idle RTT, loaded RTT, and bufferbloat;
+- simultaneous bidirectional TCP mode — available in `network-v2`;
+- adaptive UDP rate sweep, loss, jitter, and reorder — available in `network-v2`;
+- idle ICMP RTT and loaded TCP_INFO RTT comparison — available and explicitly unscored;
+- topology-aware practical ceiling and bufferbloat classification — planned;
 - retransmissions, congestion control, MTU, route, and NIC-offload evidence;
 - sender/receiver CPU to detect generator bottlenecks;
 - separate same-zone, cross-zone, and cross-region labels;
@@ -181,7 +182,7 @@ matching control-plane drills.
 ## Recommended implementation order
 
 1. Complete M1 and the time-series schema because storage is the most mature executor.
-2. Complete M2 with mTLS, UDP, loaded latency, and generator-saturation guards.
+2. Complete M2 with mTLS, route/MTU capture, repeated windows, and generator-saturation guards.
 3. Complete M3 beyond the available integer CPU and memory-bandwidth subsets.
 4. Build M4 on the stable runner.
 5. Add provider adapters and M5 drills.

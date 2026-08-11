@@ -71,6 +71,49 @@ type MemoryMetric = {
   host: { utilization_percent?: number; steal_percent?: number };
 };
 
+type NetworkEndpoint = { id: string; name: string; role: string; address?: string };
+
+type NetworkTcpMeasurement = {
+  direction: string;
+  sender: NetworkEndpoint;
+  receiver: NetworkEndpoint;
+  streams: number;
+  duration_seconds: number;
+  metrics: {
+    sent_bits_per_second?: number;
+    received_bits_per_second?: number;
+    retransmits?: number;
+    tcp_rtt_mean_ms?: number;
+  };
+};
+
+type NetworkLatencyMeasurement = {
+  direction: string;
+  sender: NetworkEndpoint;
+  receiver: NetworkEndpoint;
+  metrics: { average_ms?: number; maximum_ms?: number; loss_percent?: number };
+};
+
+type NetworkUdpMeasurement = {
+  direction: string;
+  sender: NetworkEndpoint;
+  receiver: NetworkEndpoint;
+  target_rate_bps: number;
+  rate_fraction_of_tcp_peak: number;
+  metrics: { received_bits_per_second?: number; jitter_ms?: number; lost_percent?: number };
+};
+
+type NetworkBidirectionalMeasurement = {
+  direction: string;
+  sender: NetworkEndpoint;
+  receiver: NetworkEndpoint;
+  streams: number;
+  metrics: {
+    forward: { received_bits_per_second?: number };
+    reverse: { received_bits_per_second?: number };
+  };
+};
+
 type Run = {
   id: string;
   suite: string;
@@ -105,14 +148,26 @@ type Run = {
       agent_version: string;
       agent: { id: string; name: string; role: string; session_id: string };
     };
-    measurements?: {
-      direction: string;
-      sender: { id: string; name: string; role: string };
-      receiver: { id: string; name: string; role: string; address: string };
-      streams: number;
-      duration_seconds: number;
-      metrics: { sent_bits_per_second?: number; received_bits_per_second?: number; retransmits?: number };
-    }[];
+    measurements?: NetworkTcpMeasurement[];
+    latency_measurements?: NetworkLatencyMeasurement[];
+    udp_measurements?: NetworkUdpMeasurement[];
+    bidirectional_measurements?: NetworkBidirectionalMeasurement[];
+    analysis?: {
+      scored: boolean;
+      latency_comparison: string;
+      directions: {
+        direction: string;
+        idle_icmp_average_ms?: number;
+        idle_icmp_loss_percent?: number;
+        loaded_tcp_rtt_mean_ms?: number;
+        latency_inflation_ms?: number;
+        latency_inflation_percent?: number;
+        peak_tcp_received_bits_per_second?: number;
+        highest_udp_target_bits_per_second?: number;
+        highest_udp_loss_percent?: number;
+        highest_udp_jitter_ms?: number;
+      }[];
+    };
   };
 };
 
@@ -147,7 +202,17 @@ type Dashboard = {
     compute: Record<string, { label: string; description: string; estimated_minutes: number; profile_version: string; methodology_version: string; jobs: { name: string }[] }>;
     memory: Record<string, { label: string; description: string; estimated_minutes: number; profile_version: string; methodology_version: string; jobs: { name: string }[] }>;
     storage: Record<string, { label: string; description: string; estimated_minutes: number; profile_version: string; methodology_version: string; jobs: { name: string }[] }>;
-    network: Record<string, { label: string; description: string; requires_agents: number; tcp_streams: number[]; duration_seconds: number }>;
+    network: Record<string, {
+      label: string;
+      description: string;
+      requires_agents: number;
+      tcp_streams: number[];
+      duration_seconds: number;
+      profile_version: string;
+      methodology_version: string;
+      udp_rate_fractions?: number[];
+      bidirectional_streams?: number;
+    }>;
     domains: AssessmentDomain[];
     scenarios: Scenario[];
   };
@@ -275,6 +340,10 @@ export default function Home() {
     || readySessions[0]
     || dashboard?.sessions[0];
   const networkMeasurements = latestNetwork?.result?.measurements || [];
+  const latencyMeasurements = latestNetwork?.result?.latency_measurements || [];
+  const udpMeasurements = latestNetwork?.result?.udp_measurements || [];
+  const bidirectionalMeasurements = latestNetwork?.result?.bidirectional_measurements || [];
+  const networkAnalysis = latestNetwork?.result?.analysis?.directions || [];
   const maxNetworkRate = Math.max(1, ...networkMeasurements.map((item) => item.metrics.received_bits_per_second || 0));
   const latestStorage = dashboard?.runs.find(
     (run) => run.suite === "storage" && run.status === "completed" && run.result?.jobs?.length
@@ -508,7 +577,7 @@ export default function Home() {
       });
       const payload = await response.json();
       if (!response.ok) throw new Error(payload.error || "Unable to start the network assessment");
-      setNotice(`Created ${payload.id}. TCP traffic will flow only between the paired agents.`);
+      setNotice(`Created ${payload.id}. Guarded network traffic will flow only between the paired agents.`);
       await loadDashboard();
     } catch (error) {
       setNotice(error instanceof Error ? error.message : "Network assessment failed");
@@ -803,14 +872,14 @@ export default function Home() {
 
         {activeView === "network" && (
           <div className="view network-view">
-            <section className="section-intro"><div><span className="section-kicker">DISTRIBUTED ASSESSMENT</span><h2>Keep the control path separate from benchmark data traffic.</h2><p>The Controller schedules guarded tasks and stores evidence; iperf3 traffic flows directly between one target and one generator in the provider network.</p></div><div className="runner-actions"><label><span>PROFILE</span><select value={selectedNetworkProfile} onChange={(event) => setSelectedNetworkProfile(event.target.value)} disabled={Boolean(activeNetwork)}>{Object.entries(dashboard?.profiles.network || {}).map(([id, profile]) => <option key={id} value={id}>{profile.label}</option>)}</select></label><button className="button primary" onClick={createPairing} disabled={busy}>New session</button></div></section>
+            <section className="section-intro"><div><span className="section-kicker">DISTRIBUTED ASSESSMENT</span><h2>Keep the control path separate from benchmark data traffic.</h2><p>The Controller schedules guarded tasks and stores evidence. TCP, adaptive-rate UDP, and ICMP measurements flow directly between the two provider Agents.</p></div><div className="runner-actions"><label><span>PROFILE</span><select value={selectedNetworkProfile} onChange={(event) => setSelectedNetworkProfile(event.target.value)} disabled={Boolean(activeNetwork)}>{Object.entries(dashboard?.profiles.network || {}).map(([id, profile]) => <option key={id} value={id}>{profile.label}</option>)}</select></label><button className="button primary" onClick={createPairing} disabled={busy}>New session</button></div></section>
             <section className="topology-panel panel">
               <div className="topology-node controller"><span>LOCAL</span><strong>Controller</strong><small>Dashboard + API</small></div>
               <div className="control-line"><span>HTTPS / VPN control</span></div>
               <div className="cloud-boundary">
                 <span className="boundary-label">PROVIDER NETWORK</span>
                 <div className="topology-node target"><span>VM A</span><strong>Target</strong><small>web · db · storage</small></div>
-                <div className="data-line"><i /><span>A ↔ B direct TCP traffic</span></div>
+                <div className="data-line"><i /><span>A ↔ B direct guarded traffic</span></div>
                 <div className="topology-node generator"><span>VM B</span><strong>Generator</strong><small>iperf3 · guarded load</small></div>
               </div>
               <div className="blocked-line"><span>×</span><p><strong>Cloud → controller measurement</strong><small>Disabled by project policy</small></p></div>
@@ -820,12 +889,32 @@ export default function Home() {
             <section className="panel session-panel">
               <div className="panel-head"><div><span className="section-kicker">AGENT CONTROL PLANE</span><h3>Pairing readiness</h3></div><label className="compact-select"><span>SESSION</span><select value={selectedSession?.id || ""} onChange={(event) => setSelectedSessionId(event.target.value)}>{dashboard?.sessions.map((session) => <option key={session.id} value={session.id}>{session.label} · {session.status}</option>)}</select></label></div>
               {selectedSession ? <div className="agent-roster">{["target", "generator"].map((role) => { const agent = selectedSession.agents.find((item) => item.role === role); return <article key={role} className={agent ? "connected" : "waiting"}><span>{role.toUpperCase()}</span><strong>{agent?.name || `Waiting for ${role}`}</strong><small>{agent ? `${agent.endpoint.address || "No advertised IP"} · ${agent.system.inventory?.capabilities?.iperf3 ? "iperf3 ready" : "iperf3 missing"}` : "Join command has not connected"}</small></article>; })}</div> : <div className="empty-row">Create a session, then connect both provider agents.</div>}
-              <div className="session-actions"><p><strong>{selectedSession?.status === "ready" ? "Ready to measure" : "Two agents required"}</strong><small>Only allow-listed TCP tasks on ports 5201–5210 can be dispatched.</small></p><button className="button primary" onClick={startNetwork} disabled={busy || Boolean(activeNetwork) || selectedSession?.status !== "ready"}>Run network assessment</button></div>
+              <div className="session-actions"><p><strong>{selectedSession?.status === "ready" ? "Ready to measure" : "Two agents required"}</strong><small>Only allow-listed iperf3 ports, capped UDP rates, and bounded peer ping tasks can be dispatched.</small></p><button className="button primary" onClick={startNetwork} disabled={busy || Boolean(activeNetwork) || selectedSession?.status !== "ready"}>Run network assessment</button></div>
             </section>
             {activeNetwork && <section className="panel run-progress" aria-live="polite"><div><span className="section-kicker">ACTIVE NETWORK RUN / {activeNetwork.id}</span><strong>{activeNetwork.current_job || activeNetwork.phase || "Waiting for agents"}</strong><small>{activeNetwork.completed_steps || 0} of {activeNetwork.total_steps || 1} measurements · {Math.round((activeNetwork.progress || 0) * 100)}%</small></div><div className="progress-track"><i style={{ width: `${Math.max(2, (activeNetwork.progress || 0) * 100)}%` }} /></div><button className="button danger" onClick={cancelNetwork} disabled={busy || activeNetwork.cancel_requested}>{activeNetwork.cancel_requested ? "Cancelling" : "Cancel run"}</button></section>}
-            <section className="panel network-results"><div className="panel-head"><div><span className="section-kicker">LATEST VERIFIED RUN</span><h3>Peer TCP throughput</h3></div><span className="run-id">{latestNetwork?.id || "NO RUN YET"}</span></div>{networkMeasurements.length ? <div className="bar-chart">{networkMeasurements.map((measurement, index) => { const rate = measurement.metrics.received_bits_per_second || 0; return <div className="bar-row" key={`${measurement.direction}-${measurement.streams}-${index}`}><span>{measurement.sender.name} → {measurement.receiver.name} · P{measurement.streams}</span><div><i style={{ width: `${Math.max(3, (rate / maxNetworkRate) * 100)}%` }} /></div><strong>{(rate / 1_000_000).toFixed(1)} Mb/s</strong></div>; })}</div> : <div className="empty-chart"><div className="chart-grid" /><strong>No peer result yet</strong><p>Connect two agents and run the quick profile to establish a directional baseline.</p></div>}</section>
+            <section className="panel network-results">
+              <div className="panel-head"><div><span className="section-kicker">LATEST VERIFIED RUN</span><h3>Peer TCP throughput</h3></div><span className="run-id">{latestNetwork?.id || "NO RUN YET"}</span></div>
+              {networkMeasurements.length ? <div className="bar-chart">{networkMeasurements.map((measurement, index) => { const rate = measurement.metrics.received_bits_per_second || 0; return <div className="bar-row" key={`${measurement.direction}-${measurement.streams}-${index}`}><span>{measurement.sender.name} → {measurement.receiver.name} · P{measurement.streams}</span><div><i style={{ width: `${Math.max(3, (rate / maxNetworkRate) * 100)}%` }} /></div><strong>{(rate / 1_000_000).toFixed(1)} Mb/s</strong></div>; })}</div> : <div className="empty-chart"><div className="chart-grid" /><strong>No peer result yet</strong><p>Connect two agents and run a profile to establish a directional baseline.</p></div>}
+            </section>
+            {(latencyMeasurements.length > 0 || udpMeasurements.length > 0 || bidirectionalMeasurements.length > 0) && (
+              <section className="network-evidence-grid">
+                <article className="panel network-evidence-card">
+                  <div className="panel-head"><div><span className="section-kicker">LATENCY UNDER LOAD</span><h3>Idle versus TCP RTT</h3></div><span className="run-id">UNSCORED</span></div>
+                  <div className="evidence-rows">{networkAnalysis.map((item) => <div key={item.direction}><span>{item.direction}</span><strong>{item.idle_icmp_average_ms?.toFixed(2) ?? "—"} ms idle</strong><small>{item.loaded_tcp_rtt_mean_ms?.toFixed(2) ?? "—"} ms loaded · {item.latency_inflation_percent?.toFixed(1) ?? "—"}% change</small></div>)}</div>
+                  <p className="method-note">ICMP idle latency and TCP_INFO RTT use different protocols, so CloudMark records the comparison without assigning a bufferbloat score.</p>
+                </article>
+                <article className="panel network-evidence-card">
+                  <div className="panel-head"><div><span className="section-kicker">ADAPTIVE UDP</span><h3>Loss and jitter sweep</h3></div><span className="run-id">{udpMeasurements.length} SAMPLES</span></div>
+                  <div className="evidence-rows">{udpMeasurements.map((item, index) => <div key={`${item.direction}-${item.target_rate_bps}-${index}`}><span>{item.sender.name} → {item.receiver.name} · {Math.round(item.rate_fraction_of_tcp_peak * 100)}%</span><strong>{((item.metrics.received_bits_per_second || 0) / 1_000_000).toFixed(1)} Mb/s</strong><small>{item.metrics.lost_percent?.toFixed(2) ?? "—"}% loss · {item.metrics.jitter_ms?.toFixed(3) ?? "—"} ms jitter</small></div>)}</div>
+                </article>
+                <article className="panel network-evidence-card bidirectional-card">
+                  <div className="panel-head"><div><span className="section-kicker">SIMULTANEOUS BIDIRECTIONAL</span><h3>Duplex pressure</h3></div><span className="run-id">TCP</span></div>
+                  <div className="evidence-rows">{bidirectionalMeasurements.map((item, index) => <div key={`${item.direction}-${index}`}><span>{item.sender.name} ↔ {item.receiver.name} · P{item.streams}</span><strong>{((item.metrics.forward.received_bits_per_second || 0) / 1_000_000).toFixed(1)} / {((item.metrics.reverse.received_bits_per_second || 0) / 1_000_000).toFixed(1)} Mb/s</strong><small>forward / reverse receiver throughput</small></div>)}</div>
+                </article>
+              </section>
+            )}
             <section className="network-checks">
-              {[["TCP", "1 / 4 / 8 / 16 streams", "AVAILABLE"], ["UDP", "jitter · loss · rate sweep", "PLANNED"], ["LATENCY", "idle · loaded · bufferbloat", "PLANNED"], ["DIRECTION", "A→B · B→A", "AVAILABLE"]].map(([name, detail, state]) => <article key={name}><span>{name}</span><strong>{detail}</strong><small>{state}</small></article>)}
+              {[["TCP", "1 / 4 / 8 / 16 streams", "AVAILABLE"], ["UDP", "25 / 50 / 90% adaptive sweep", "AVAILABLE IN STANDARD"], ["LATENCY", "idle ICMP · loaded TCP RTT", "AVAILABLE IN STANDARD"], ["DIRECTION", "A→B · B→A · simultaneous", "AVAILABLE"]].map(([name, detail, state]) => <article key={name}><span>{name}</span><strong>{detail}</strong><small>{state}</small></article>)}
             </section>
           </div>
         )}

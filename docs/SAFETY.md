@@ -43,8 +43,14 @@ systems.
 - There is no arbitrary target-IP load endpoint.
 - The project policy disables cloud-to-controller measurements.
 - Provider throughput runs only between paired, authenticated agents.
-- Agent tasks are restricted to exact iperf3 argument lists, ports 5201–5210,
-  stream counts 1/4/8/16, and a 60-second per-measurement duration cap.
+- Agent tasks are restricted to exact iperf3 and ping argument lists, ports
+  5201–5210, stream counts 1/4/8/16, and a 60-second per-measurement duration
+  cap.
+- UDP uses one stream and an Agent-enforced 100 kbit/s–1 Gbit/s absolute rate
+  range. The standard Controller profile applies the tighter 1 Mbit/s–1 Gbit/s
+  range after deriving targets from measured directional TCP throughput.
+- Ping count, interval, and timeout are bounded. Loopback, unspecified,
+  multicast, and link-local peer addresses are rejected.
 - Servers use one-shot mode and an independent watchdog deadline.
 - Cancelling a run prevents queued work from starting; active child processes
   retain bounded task and watchdog timeouts.

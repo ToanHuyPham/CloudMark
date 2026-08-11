@@ -18,7 +18,13 @@ from .benchmarks import BenchmarkError, run_storage, storage_preflight
 from .compute import ComputeError, run_system_benchmark, system_preflight
 from .database import Database
 from .inventory import collect_inventory
-from .network import NetworkError, run_network, validate_network_run
+from .network import (
+    NetworkError,
+    network_default_timeout,
+    network_total_steps,
+    run_network,
+    validate_network_run,
+)
 from .profiles import COMPUTE_PROFILES, MEMORY_PROFILES, NETWORK_PROFILES, STORAGE_PROFILES, all_profiles
 from .provider import detect_provider
 from .remote import RemoteError, remote_default_timeout, remote_total_steps, run_remote_benchmark, validate_remote_agent
@@ -160,10 +166,10 @@ class CloudMarkController:
             if conflicting_remote:
                 raise ValueError("A selected Agent in this session already has an active single-system assessment.")
             profile_config = NETWORK_PROFILES[profile]
-            total_steps = len(profile_config["tcp_streams"]) * 2
+            total_steps = network_total_steps(profile)
             methodology_version = str(profile_config["methodology_version"])
-            tool_version = "iperf3-agent"
-            default_timeout = total_steps * (int(profile_config["duration_seconds"]) + 60) + 120
+            tool_version = "iperf3/ping-agent" if methodology_version == "network-v2" else "iperf3-agent"
+            default_timeout = network_default_timeout(profile)
         else:
             total_steps = 1
             methodology_version = "inventory-v1"

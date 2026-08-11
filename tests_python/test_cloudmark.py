@@ -9,6 +9,7 @@ import unittest
 import urllib.error
 import urllib.request
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from cloudmark.agent import AgentWorker, join_session
@@ -17,7 +18,16 @@ from cloudmark.bootstrap import create_plan
 from cloudmark.compute import ComputeError, parse_sysbench_cpu, run_system_benchmark, system_preflight
 from cloudmark.database import Database
 from cloudmark.inventory import collect_inventory
-from cloudmark.network import NetworkError, run_network, validate_network_run
+from cloudmark.network import (
+    ALLOWED_UDP_RATE_MAX,
+    NetworkError,
+    _iperf_metrics,
+    _udp_metrics,
+    network_total_steps,
+    parse_ping_output,
+    run_network,
+    validate_network_run,
+)
 from cloudmark.profiles import (
     ASSESSMENT_DOMAINS,
     COMPUTE_PROFILES,
@@ -266,6 +276,106 @@ class CloudMarkTests(unittest.TestCase):
         with self.assertRaises(NetworkError):
             worker._run_client({"target_address": "127.0.0.1", "port": 5201, "duration_seconds": 1, "streams": 1})
 
+    def test_ping_parser_supports_linux_and_english_windows_summaries(self) -> None:
+        linux = parse_ping_output(
+            "20 packets transmitted, 19 received, 5% packet loss, time 1918ms\n"
+            "rtt min/avg/max/mdev = 0.410/0.522/0.710/0.081 ms\n"
+        )
+        windows = parse_ping_output(
+            "Packets: Sent = 20, Received = 18, Lost = 2 (10% loss),\n"
+            "Minimum = 1ms, Maximum = 4ms, Average = 2ms\n"
+        )
+        self.assertEqual(linux["received"], 19)
+        self.assertEqual(linux["average_ms"], 0.522)
+        self.assertEqual(windows["loss_percent"], 10.0)
+        self.assertEqual(windows["average_ms"], 2.0)
+
+    def test_agent_builds_guarded_udp_and_bidirectional_commands(self) -> None:
+        worker = AgentWorker("http://127.0.0.1:8787", "agent", "token")
+        completed = SimpleNamespace(
+            returncode=0,
+            stdout=json.dumps({"start": {"version": "iperf 3.17"}, "end": {}}),
+            stderr="",
+        )
+        with patch.object(worker, "_iperf", return_value="iperf3"), patch(
+            "cloudmark.agent.subprocess.run", return_value=completed
+        ) as run:
+            worker._run_client(
+                {
+                    "target_address": "10.0.0.11",
+                    "port": 5201,
+                    "duration_seconds": 15,
+                    "streams": 1,
+                    "protocol": "udp",
+                    "target_rate_bps": 250_000_000,
+                }
+            )
+            udp_command = run.call_args.args[0]
+            self.assertIn("--udp", udp_command)
+            self.assertEqual(udp_command[udp_command.index("--bitrate") + 1], "250000000")
+            worker._run_client(
+                {
+                    "target_address": "10.0.0.11",
+                    "port": 5202,
+                    "duration_seconds": 15,
+                    "streams": 4,
+                    "protocol": "tcp",
+                    "bidirectional": True,
+                }
+            )
+            self.assertIn("--bidir", run.call_args.args[0])
+        with self.assertRaisesRegex(NetworkError, "UDP rate"):
+            worker._run_client(
+                {
+                    "target_address": "10.0.0.11",
+                    "port": 5201,
+                    "streams": 1,
+                    "protocol": "udp",
+                    "target_rate_bps": ALLOWED_UDP_RATE_MAX + 1,
+                }
+            )
+
+    def test_agent_builds_guarded_latency_command_and_parses_result(self) -> None:
+        worker = AgentWorker("http://127.0.0.1:8787", "agent", "token")
+        completed = SimpleNamespace(
+            returncode=0,
+            stdout=(
+                "20 packets transmitted, 20 received, 0% packet loss, time 1911ms\n"
+                "rtt min/avg/max/mdev = 0.300/0.450/0.800/0.100 ms\n"
+            ),
+            stderr="",
+        )
+        with patch("cloudmark.agent.shutil.which", return_value="ping"), patch(
+            "cloudmark.agent.subprocess.run", return_value=completed
+        ) as run:
+            result = worker._run_latency(
+                {"target_address": "10.0.0.11", "count": 20, "interval_ms": 100, "timeout_ms": 1000}
+            )
+        self.assertEqual(result["latency"]["average_ms"], 0.45)
+        self.assertIn("10.0.0.11", run.call_args.args[0])
+
+    def test_network_metric_normalization_keeps_tcp_rtt_udp_and_bidirectional_fields(self) -> None:
+        payload = {
+            "end": {
+                "sum_sent": {"bits_per_second": 900, "bytes": 9000, "retransmits": 2},
+                "sum_received": {
+                    "bits_per_second": 850,
+                    "bytes": 8500,
+                    "jitter_ms": 0.35,
+                    "lost_packets": 2,
+                    "packets": 100,
+                    "lost_percent": 2.0,
+                    "out_of_order": 0,
+                },
+                "sum_sent_bidir_reverse": {"bits_per_second": 700, "bytes": 7000},
+                "sum_received_bidir_reverse": {"bits_per_second": 650, "bytes": 6500},
+                "streams": [{"sender": {"mean_rtt": 1250, "min_rtt": 900, "max_rtt": 1800}}],
+            }
+        }
+        self.assertEqual(_iperf_metrics(payload)["tcp_rtt_mean_ms"], 1.25)
+        self.assertEqual(_iperf_metrics(payload, reverse=True)["received_bits_per_second"], 650)
+        self.assertEqual(_udp_metrics(payload, 1_000)["lost_percent"], 2.0)
+
     def test_network_orchestrator_records_both_directions_without_controller_traffic(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             database = Database(Path(directory) / "test.sqlite3")
@@ -315,6 +425,92 @@ class CloudMarkTests(unittest.TestCase):
             self.assertFalse(result["policy"]["controller_in_data_path"])
             self.assertEqual(result["tool"]["version"], "iperf 3.17")
 
+    def test_standard_network_orchestrator_captures_all_v2_measurement_classes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            database = Database(Path(directory) / "test.sqlite3")
+            database.create_session("session_test", "pair", "hash", "2099-01-01T00:00:00+00:00")
+            system = {"inventory": {"capabilities": {"iperf3": True}}}
+            database.add_agent("agent_a", "session_test", "target", "target", system, endpoint={"address": "10.0.0.10"})
+            database.add_agent("agent_b", "session_test", "generator", "generator", system, endpoint={"address": "10.0.0.11"})
+            total_steps = network_total_steps("network-peer-standard")
+            database.create_run(
+                "run_network_v2",
+                "network",
+                "network-peer-standard",
+                {"suite": "network"},
+                total_steps=total_steps,
+            )
+            done = threading.Event()
+
+            def complete_tasks() -> None:
+                while not done.is_set():
+                    handled = False
+                    for agent_id in ("agent_a", "agent_b"):
+                        task = database.claim_agent_task(agent_id)
+                        if not task:
+                            continue
+                        handled = True
+                        payload = task["payload"]
+                        if task["kind"] == "network-server-start":
+                            result = {"ready": True}
+                        elif task["kind"] == "network-latency":
+                            result = {
+                                "latency": {
+                                    "transmitted": 20,
+                                    "received": 20,
+                                    "loss_percent": 0.0,
+                                    "minimum_ms": 0.3,
+                                    "average_ms": 0.5,
+                                    "maximum_ms": 0.9,
+                                    "deviation_ms": 0.1,
+                                },
+                                "tool": {"name": "ping", "version": None},
+                            }
+                        else:
+                            end = {
+                                "sum_sent": {"bits_per_second": 1_100_000_000, "bytes": 1_000_000, "retransmits": 2},
+                                "sum_received": {"bits_per_second": 1_000_000_000, "bytes": 990_000},
+                                "streams": [{"sender": {"mean_rtt": 1000, "min_rtt": 700, "max_rtt": 1600}}],
+                            }
+                            if payload.get("protocol") == "udp":
+                                end["sum_received"].update(
+                                    {"jitter_ms": 0.4, "lost_packets": 1, "packets": 1000, "lost_percent": 0.1}
+                                )
+                            if payload.get("bidirectional"):
+                                end.update(
+                                    {
+                                        "sum_sent_bidir_reverse": {"bits_per_second": 800_000_000, "bytes": 800_000},
+                                        "sum_received_bidir_reverse": {"bits_per_second": 750_000_000, "bytes": 750_000},
+                                    }
+                                )
+                            result = {"iperf": {"start": {"version": "iperf 3.17"}, "end": end}}
+                        database.finish_agent_task(task["id"], agent_id, status="completed", result=result)
+                    if not handled:
+                        time.sleep(0.005)
+
+            worker = threading.Thread(target=complete_tasks, daemon=True)
+            worker.start()
+            try:
+                context = JobContext("run_network_v2", total_steps=total_steps, timeout_seconds=60)
+                result = run_network(
+                    database,
+                    "run_network_v2",
+                    "session_test",
+                    "network-peer-standard",
+                    context=context,
+                )
+            finally:
+                done.set()
+                worker.join(timeout=2)
+            self.assertEqual(total_steps, 17)
+            self.assertEqual(len(result["latency_measurements"]), 2)
+            self.assertEqual(len(result["measurements"]), 8)
+            self.assertEqual(len(result["udp_measurements"]), 6)
+            self.assertEqual(len(result["bidirectional_measurements"]), 1)
+            self.assertTrue(all(item["target_rate_bps"] <= ALLOWED_UDP_RATE_MAX for item in result["udp_measurements"]))
+            self.assertFalse(result["policy"]["controller_in_data_path"])
+            self.assertFalse(result["analysis"]["scored"])
+
     def test_profiles_enforce_network_direction_policy(self) -> None:
         self.assertIn("compute-quick", COMPUTE_PROFILES)
         self.assertIn("compute-standard", COMPUTE_PROFILES)
@@ -330,6 +526,9 @@ class CloudMarkTests(unittest.TestCase):
         profile = NETWORK_PROFILES["network-peer-standard"]
         self.assertFalse(profile["cloud_to_controller"])
         self.assertEqual(profile["requires_agents"], 2)
+        self.assertEqual(profile["methodology_version"], "network-v2")
+        self.assertEqual(network_total_steps("network-peer-quick"), 4)
+        self.assertEqual(network_total_steps("network-peer-standard"), 17)
 
     def test_scenario_coverage_does_not_overstate_executors(self) -> None:
         statuses = {scenario["id"]: scenario["status"] for scenario in SCENARIOS}

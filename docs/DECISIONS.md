@@ -71,3 +71,16 @@ protected runtime snapshot.
 
 **Reason:** The repository is public and Git history is not an appropriate
 secret store.
+
+## D-009: Adaptive peer-network methodology
+
+**Decision:** Preserve the quick directional TCP profile as `network-v1` and
+use `network-v2` for bounded idle latency, directional TCP scaling, UDP targets
+derived from each direction's measured TCP peak, and simultaneous
+bidirectional TCP. Idle ICMP and loaded TCP_INFO RTT are reported together but
+remain unscored because their protocols and sampling differ.
+
+**Reason:** A fixed UDP rate can overload small VPS products or underexercise
+large instances, while treating ICMP and TCP RTT as interchangeable would
+create false precision. Independent Agent-side caps remain necessary even when
+the Controller derives a guarded target.

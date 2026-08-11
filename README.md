@@ -26,8 +26,8 @@ timestamp, and raw result.
 | Available | Local Controller API, SQLite history, and responsive dashboard |
 | Available | Authenticated persistent agents, heartbeat, and durable task queues |
 | Available | Explicit remote Agent dispatch for CPU, memory, and storage with live progress, cancellation, and result attribution |
-| Partial | Guarded direct TCP network executor in both directions between paired agents |
-| Roadmap | UDP, loaded latency, mTLS enrollment, and remaining network validity checks |
+| Partial | Guarded peer network executor: directional TCP scaling, idle latency, loaded TCP RTT, adaptive UDP loss/jitter sweeps, and simultaneous bidirectional TCP |
+| Roadmap | Route/MTU evidence, generator-saturation validation, repeated network windows, mTLS enrollment, and remaining network validity checks |
 | Roadmap | Remaining CPU, memory/NUMA, GPU, application, platform, operations, and provider executors |
 | Roadmap | Final workload suitability and provider scoring engine |
 
@@ -158,12 +158,13 @@ Controller is never an iperf3 endpoint.
 
 Version `0.5.0` adds authenticated remote dispatch of CPU, memory, and storage
 profiles, per-task heartbeat and cancellation, same-target load exclusion,
-provider/Agent attribution, and strict result-version validation. Compute and
-memory remain `Partial` until floating-point, crypto, compilation, latency,
-NUMA, and broader architecture coverage are implemented. Network remains
-partial until UDP, loaded latency, generator-validity checks, and mTLS
-enrollment are implemented. Application and control-plane executors remain
-explicitly unavailable.
+provider/Agent attribution, and strict result-version validation. The current
+development head also implements the versioned `network-v2` standard profile.
+Compute and memory remain `Partial` until floating-point, crypto, compilation,
+latency, NUMA, and broader architecture coverage are implemented. Network
+remains partial until route/MTU capture, generator-validity checks, repeated
+topology-aware windows, and mTLS enrollment are implemented. Application and
+control-plane executors remain explicitly unavailable.
 
 ## License
 
