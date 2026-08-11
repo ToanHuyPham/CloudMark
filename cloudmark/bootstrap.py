@@ -20,9 +20,9 @@ PACKAGES = {
         "zypper": ["fio", "smartmontools", "nvme-cli"],
     },
     "network": {
-        "apt": ["iperf3", "ethtool", "mtr-tiny", "dnsutils"],
-        "dnf": ["iperf3", "ethtool", "mtr", "bind-utils"],
-        "zypper": ["iperf3", "ethtool", "mtr", "bind-utils"],
+        "apt": ["iperf3", "iproute2", "iputils-ping", "iputils-tracepath", "ethtool", "mtr-tiny", "dnsutils"],
+        "dnf": ["iperf3", "iproute", "iputils", "ethtool", "mtr", "bind-utils"],
+        "zypper": ["iperf3", "iproute2", "iputils", "ethtool", "mtr", "bind-utils"],
     },
     "compute": {
         "apt": ["sysbench"],

@@ -27,10 +27,13 @@ baseline is still the repository head.
 - persistent authenticated Agents and explicit remote CPU/memory/storage
   dispatch;
 - guarded, bidirectional TCP measurements between paired Agents;
-- simulation-verified `network-v2` standard orchestration for bounded idle
-  latency, loaded TCP RTT, adaptive UDP loss/jitter sweeps, and simultaneous
-  bidirectional TCP; provider-pair validation is intentionally deferred until
-  the complete project is ready for operator testing;
+- simulation-verified `network-v3` standard orchestration for allow-listed
+  route/interface/MTU evidence, bounded idle latency, loaded TCP RTT, adaptive
+  UDP loss/jitter sweeps, simultaneous bidirectional TCP, and Generator CPU/
+  scaling headroom validity; provider-pair validation is intentionally deferred
+  until the complete project is ready for operator testing; the milestone
+  passes 78 Python tests, 3 rendered-dashboard tests, dashboard lint, and the
+  production build without running a real load;
 - simulation-verified `database-postgresql-v1` paired executor with isolated
   Target clusters, Generator-side built-in pgbench workloads, durable settings,
   progress/control heartbeat, fixed safety limits, and verified cleanup; the
@@ -120,11 +123,12 @@ Controller run: `run_1c572100e8704843`.
 
 ## Known limitations
 
-- network coverage is Partial: `network-v2` now implements idle latency,
-  directional TCP scaling, adaptive UDP jitter/loss sweeps, loaded TCP RTT, and
-  simultaneous bidirectional throughput; route/MTU evidence,
-  generator-saturation rejection, repeated topology-aware windows, and mTLS
-  remain unimplemented;
+- network coverage is Partial: `network-v3` now implements Linux route,
+  egress-interface, interface-MTU and optional path-MTU evidence, idle latency,
+  directional TCP scaling, adaptive UDP jitter/loss sweeps, loaded TCP RTT,
+  simultaneous bidirectional throughput, and Generator headroom rejection;
+  repeated topology-aware windows, NIC-offload evidence, public-path
+  classification, Windows route parity, and mTLS remain unimplemented;
 - PostgreSQL database coverage is Partial: read-only, durable read/write,
   concurrency, and connection churn are implemented; transaction tail
   percentiles, replication, recovery, MySQL/MariaDB, Redis, and managed-service
@@ -147,8 +151,9 @@ Controller run: `run_1c572100e8704843`.
 
 ## Next priorities
 
-1. Add route/MTU evidence, generator-saturation checks, and repeated network
-   windows before promoting the network domain from Partial.
+1. Add repeated network windows, topology verification, NIC-offload evidence,
+   public-path classification, and Windows route parity before promoting the
+   network domain from Partial.
 2. Add Web generator-saturation validation and dynamic application,
    HTTP/2/3, reverse-proxy, CDN, WAF, and autoscaling evidence.
 3. Extend database coverage with transaction tail latency, MySQL/MariaDB,

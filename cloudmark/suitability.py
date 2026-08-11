@@ -125,8 +125,8 @@ SCENARIO_REQUIREMENTS: dict[str, dict[str, Any]] = {
             ("network.udp_loss_pct", "Worst adaptive UDP loss", "<=", _threshold(2.0, 1.0, 0.25), "%"),
             ("network.udp_jitter_ms", "Worst adaptive UDP jitter", "<=", _threshold(10, 3, 1), "ms"),
         ],
-        "limitations": ["Route, MTU, DNS, IPv6, public path, cross-zone/region, repeated windows, and generator saturation are not fully validated."],
-        "next_actions": ["Run Provider Internal Network (network-v2) between equivalent provider instances."],
+        "limitations": ["DNS, public path, cross-zone/region topology, offload behavior, and repeated windows are not fully validated."],
+        "next_actions": ["Run Provider Internal Network (network-v3) between equivalent provider instances."],
     },
     "big-data": {
         "rules": [
@@ -186,6 +186,9 @@ EXPECTED_METHODOLOGIES = {
     "database": {str(profile["methodology_version"]) for profile in DATABASE_PROFILES.values()},
     "web": {str(profile["methodology_version"]) for profile in WEB_PROFILES.values()},
 }
+# Completed network-v2 evidence remains readable after the standard profile
+# moves to network-v3. Only v3 adds the stricter comparison-validity gate.
+EXPECTED_METHODOLOGIES["network"].add("network-v2")
 
 
 def _nested(value: Any, *path: str) -> Any:
@@ -269,6 +272,9 @@ def _run_valid(run: dict[str, Any]) -> tuple[bool, str | None]:
         return False, "Storage cleanup is not verified."
     if suite in {"database", "web"} and _nested(result, "cleanup", "cleanup_verified") is not True:
         return False, "Ephemeral service cleanup is not verified."
+    if suite == "network" and str(result.get("methodology_version", "")) == "network-v3":
+        if _nested(result, "analysis", "validity", "comparison_eligible") is not True:
+            return False, "Network route evidence or generator headroom is insufficient for comparison."
     return True, None
 
 

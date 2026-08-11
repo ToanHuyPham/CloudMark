@@ -138,3 +138,19 @@ descriptive; CloudMark does not rank providers.
 **Reason:** Mixing regions, operating systems, profiles, or methodology
 versions creates false precision. A small sample can still aid diagnosis but
 must not look statistically equivalent to repeated independent evidence.
+
+## D-014: Network path identity and Generator validity
+
+**Decision:** Advance the standard peer profile to `network-v3`. Before load,
+each Agent records its route, egress interface, interface MTU, and optional
+bounded `tracepath` path MTU toward the exact paired address. After TCP scaling,
+CloudMark evaluates the CPU headroom of the endpoint assigned the Generator
+role in each direction. Incomplete route evidence, unavailable Generator CPU,
+CPU at or above 90%, or stalled stream scaling near the CPU limit makes the run
+ineligible for suitability and provider comparison. Legacy network-v2 results
+remain readable but do not gain v3 validity claims retroactively.
+
+**Reason:** Throughput without path identity can combine materially different
+topologies, while a saturated load generator can understate provider capacity.
+Separating interface MTU from observed path MTU and failing closed on missing
+validity evidence prevents false precision.

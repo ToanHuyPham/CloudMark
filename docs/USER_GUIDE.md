@@ -159,9 +159,10 @@ In the dashboard:
 - **Storage Assessment** provides Quick, Standard, Database, Throughput, and
   Sustained profiles with live progress and cancellation.
 - **Distributed Testing** creates an authenticated multi-agent topology and
-  runs guarded TCP, UDP, idle-latency, and simultaneous bidirectional profiles.
-  Network remains `Partial` because route/MTU capture, generator-saturation
-  validation, repeated-window aggregation, and mTLS enrollment are incomplete.
+  runs guarded path evidence, TCP, UDP, idle-latency, and simultaneous
+  bidirectional profiles. Network remains `Partial` because repeated-window
+  aggregation, topology verification, NIC-offload evidence, public-path
+  classification, and mTLS enrollment are incomplete.
 - **Database Assessment** uses the same paired Agents for an isolated
   PostgreSQL service and guarded pgbench workloads. PostgreSQL remains
   `Partial` until tail-percentile, replication, recovery, MySQL, and Redis
@@ -425,9 +426,13 @@ performance endpoint.
 The executor accepts only paired-agent addresses, ports 5201–5210, durations up
 to 60 seconds, an allow-list of stream counts, capped UDP rates, and bounded
 ping parameters. Each server is one-shot and has an independent watchdog
-deadline. Overall network coverage remains `Partial` because automatic
-route/MTU capture, generator-saturation rejection, repeated-window aggregation,
-and mTLS Agent enrollment are not complete.
+deadline. Linux network-v3 runs capture route, egress-interface and
+interface-MTU evidence; optional path MTU requires `tracepath`. CloudMark
+rejects v3 comparison evidence when Generator CPU or scaling headroom is
+insufficient. Overall network coverage remains `Partial` because
+repeated-window aggregation, topology verification, NIC-offload evidence,
+public-path classification, Windows route parity, and mTLS Agent enrollment are
+not complete.
 
 ## 11. Run a PostgreSQL peer assessment
 

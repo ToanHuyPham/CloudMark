@@ -164,7 +164,7 @@ NETWORK_PROFILES: dict[str, dict[str, Any]] = {
     },
     "network-peer-standard": {
         "label": "Provider Internal Network",
-        "description": "Peer TCP scaling, idle latency, loaded TCP RTT, adaptive UDP loss/jitter sweeps, and simultaneous bidirectional throughput.",
+        "description": "Peer path evidence, TCP scaling, idle latency, loaded TCP RTT, adaptive UDP loss/jitter sweeps, simultaneous bidirectional throughput, and generator-headroom validation.",
         "requires_agents": 2,
         "directions": ["generator-to-target", "target-to-generator"],
         "tcp_streams": [1, 4, 8, 16],
@@ -176,9 +176,13 @@ NETWORK_PROFILES: dict[str, dict[str, Any]] = {
         "udp_duration_seconds": 15,
         "bidirectional_streams": 4,
         "bidirectional_duration_seconds": 15,
+        "path_probe": True,
+        "generator_cpu_limit_percent": 90,
+        "generator_scaling_cpu_floor_percent": 85,
+        "generator_scaling_gain_floor_percent": 5,
         "cloud_to_controller": False,
-        "profile_version": "2.0",
-        "methodology_version": "network-v2",
+        "profile_version": "3.0",
+        "methodology_version": "network-v3",
     }
 }
 

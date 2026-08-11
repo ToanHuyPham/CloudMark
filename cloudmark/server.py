@@ -201,7 +201,7 @@ class CloudMarkController:
             profile_config = NETWORK_PROFILES[profile]
             total_steps = network_total_steps(profile)
             methodology_version = str(profile_config["methodology_version"])
-            tool_version = "iperf3/ping-agent" if methodology_version == "network-v2" else "iperf3-agent"
+            tool_version = "iperf3/ping/iproute2-agent" if methodology_version == "network-v3" else "iperf3-agent"
             default_timeout = network_default_timeout(profile)
         elif suite == "database":
             if request.get("confirm_database_load") is not True:

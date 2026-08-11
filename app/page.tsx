@@ -84,6 +84,21 @@ type NetworkTcpMeasurement = {
     received_bits_per_second?: number;
     retransmits?: number;
     tcp_rtt_mean_ms?: number;
+    sender_cpu_percent?: number;
+    receiver_cpu_percent?: number;
+  };
+};
+
+type NetworkPathMeasurement = {
+  direction: string;
+  sender: NetworkEndpoint;
+  receiver: NetworkEndpoint;
+  evidence: {
+    status: "complete" | "partial" | "unavailable";
+    reason?: string;
+    route?: { destination?: string; gateway?: string; source?: string; interface?: string };
+    interface?: { name?: string; mtu_bytes?: number; state?: string; link_type?: string };
+    path_mtu?: { status: "observed" | "unavailable"; value_bytes?: number; source?: string };
   };
 };
 
@@ -192,6 +207,7 @@ type Run = {
       agent: { id: string; name: string; role: string; session_id: string };
     };
     measurements?: NetworkTcpMeasurement[];
+    path_measurements?: NetworkPathMeasurement[];
     latency_measurements?: NetworkLatencyMeasurement[];
     udp_measurements?: NetworkUdpMeasurement[];
     bidirectional_measurements?: NetworkBidirectionalMeasurement[];
@@ -223,7 +239,19 @@ type Run = {
         highest_udp_target_bits_per_second?: number;
         highest_udp_loss_percent?: number;
         highest_udp_jitter_ms?: number;
+        generator_headroom?: {
+          status: "adequate" | "constrained" | "unknown";
+          peak_cpu_percent?: number;
+          stream_scaling_gain_percent?: number;
+          reason_codes: string[];
+        };
       }[];
+      validity?: {
+        route_evidence_status: "complete" | "partial" | "unavailable";
+        generator_headroom_status: "adequate" | "constrained" | "unknown";
+        comparison_eligible: boolean;
+        reason_codes: string[];
+      };
     };
   };
 };
@@ -597,7 +625,9 @@ export default function Home() {
   const latencyMeasurements = latestNetwork?.result?.latency_measurements || [];
   const udpMeasurements = latestNetwork?.result?.udp_measurements || [];
   const bidirectionalMeasurements = latestNetwork?.result?.bidirectional_measurements || [];
+  const pathMeasurements = latestNetwork?.result?.path_measurements || [];
   const networkAnalysis = latestNetwork?.result?.analysis?.directions || [];
+  const networkValidity = latestNetwork?.result?.analysis?.validity;
   const maxNetworkRate = Math.max(1, ...networkMeasurements.map((item) => item.metrics.received_bits_per_second || 0));
   const activeDatabase = dashboard?.runs.find(
     (run) => run.suite === "database" && ["queued", "running"].includes(run.status),
@@ -1314,8 +1344,17 @@ export default function Home() {
               <div className="panel-head"><div><span className="section-kicker">LATEST VERIFIED RUN</span><h3>Peer TCP throughput</h3></div><span className="run-id">{latestNetwork?.id || "NO RUN YET"}</span></div>
               {networkMeasurements.length ? <div className="bar-chart">{networkMeasurements.map((measurement, index) => { const rate = measurement.metrics.received_bits_per_second || 0; return <div className="bar-row" key={`${measurement.direction}-${measurement.streams}-${index}`}><span>{measurement.sender.name} → {measurement.receiver.name} · P{measurement.streams}</span><div><i style={{ width: `${Math.max(3, (rate / maxNetworkRate) * 100)}%` }} /></div><strong>{(rate / 1_000_000).toFixed(1)} Mb/s</strong></div>; })}</div> : <div className="empty-chart"><div className="chart-grid" /><strong>No peer result yet</strong><p>Connect two agents and run a profile to establish a directional baseline.</p></div>}
             </section>
-            {(latencyMeasurements.length > 0 || udpMeasurements.length > 0 || bidirectionalMeasurements.length > 0) && (
+            {(pathMeasurements.length > 0 || latencyMeasurements.length > 0 || udpMeasurements.length > 0 || bidirectionalMeasurements.length > 0) && (
               <section className="network-evidence-grid">
+                {pathMeasurements.length > 0 && <article className="panel network-evidence-card">
+                  <div className="panel-head"><div><span className="section-kicker">PATH IDENTITY</span><h3>Route and MTU evidence</h3></div><span className="run-id">{networkValidity?.route_evidence_status?.toUpperCase() || "UNKNOWN"}</span></div>
+                  <div className="evidence-rows">{pathMeasurements.map((item) => <div key={item.direction}><span>{item.sender.name} → {item.receiver.name}</span><strong>{item.evidence.interface?.name || "Interface unavailable"} · MTU {item.evidence.interface?.mtu_bytes ?? "—"}</strong><small>{item.evidence.path_mtu?.value_bytes ? `Path MTU ${item.evidence.path_mtu.value_bytes} bytes` : item.evidence.reason || "Path MTU not observed"}</small></div>)}</div>
+                </article>}
+                {networkAnalysis.length > 0 && <article className="panel network-evidence-card">
+                  <div className="panel-head"><div><span className="section-kicker">MEASUREMENT VALIDITY</span><h3>Generator headroom</h3></div><span className="run-id">{networkValidity?.comparison_eligible ? "COMPARABLE" : "NOT COMPARABLE"}</span></div>
+                  <div className="evidence-rows">{networkAnalysis.map((item) => <div key={item.direction}><span>{item.direction}</span><strong>{item.generator_headroom?.status || "unknown"}</strong><small>{item.generator_headroom?.peak_cpu_percent?.toFixed(1) ?? "—"}% peak Generator CPU · {item.generator_headroom?.stream_scaling_gain_percent?.toFixed(1) ?? "—"}% P1→P16 gain</small></div>)}</div>
+                  <p className="method-note">CloudMark excludes network-v3 evidence from suitability and provider comparison when route identity is incomplete or the Generator is constrained.</p>
+                </article>}
                 <article className="panel network-evidence-card">
                   <div className="panel-head"><div><span className="section-kicker">LATENCY UNDER LOAD</span><h3>Idle versus TCP RTT</h3></div><span className="run-id">UNSCORED</span></div>
                   <div className="evidence-rows">{networkAnalysis.map((item) => <div key={item.direction}><span>{item.direction}</span><strong>{item.idle_icmp_average_ms?.toFixed(2) ?? "—"} ms idle</strong><small>{item.loaded_tcp_rtt_mean_ms?.toFixed(2) ?? "—"} ms loaded · {item.latency_inflation_percent?.toFixed(1) ?? "—"}% change</small></div>)}</div>
@@ -1332,7 +1371,7 @@ export default function Home() {
               </section>
             )}
             <section className="network-checks">
-              {[["TCP", "1 / 4 / 8 / 16 streams", "AVAILABLE"], ["UDP", "25 / 50 / 90% adaptive sweep", "AVAILABLE IN STANDARD"], ["LATENCY", "idle ICMP · loaded TCP RTT", "AVAILABLE IN STANDARD"], ["DIRECTION", "A→B · B→A · simultaneous", "AVAILABLE"]].map(([name, detail, state]) => <article key={name}><span>{name}</span><strong>{detail}</strong><small>{state}</small></article>)}
+              {[["TCP", "1 / 4 / 8 / 16 streams", "AVAILABLE"], ["UDP", "25 / 50 / 90% adaptive sweep", "AVAILABLE IN STANDARD"], ["PATH", "route · interface · MTU", "AVAILABLE IN STANDARD"], ["VALIDITY", "Generator CPU · scaling headroom", "ENFORCED IN NETWORK-V3"]].map(([name, detail, state]) => <article key={name}><span>{name}</span><strong>{detail}</strong><small>{state}</small></article>)}
             </section>
           </div>
         )}

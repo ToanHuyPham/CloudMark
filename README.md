@@ -31,7 +31,7 @@ timestamp, and raw result.
 | Partial | Guarded two-Agent Nginx/ApacheBench HTTP, API, TLS, connection-churn, tail-latency, and static-transfer profiles |
 | Available | Target-scoped, versioned Essential/Standard/Demanding workload gates with per-check run provenance and explicit unknown evidence |
 | Available | Exact-cohort repeated-window provider observations with median, P10/P90, best/worst, spread, and guarded comparison eligibility |
-| Roadmap | Route/MTU evidence, generator-saturation validation, repeated network windows, mTLS enrollment, and remaining network validity checks |
+| Roadmap | Repeated network windows, topology verification, NIC-offload evidence, public-path classification, and mTLS enrollment |
 | Roadmap | Remaining CPU, memory/NUMA, GPU, application, platform, operations, and provider executors |
 | Roadmap | Sampling campaigns, cross-zone analysis, timestamped cost, operations, and final provider ratings |
 
@@ -166,12 +166,12 @@ Controller is never an iperf3 endpoint.
 Version `0.5.0` adds authenticated remote dispatch of CPU, memory, and storage
 profiles, per-task heartbeat and cancellation, same-target load exclusion,
 provider/Agent attribution, and strict result-version validation. The current
-development head also implements the versioned `network-v2` standard profile
+development head also implements the versioned `network-v3` standard profile
 and the first `database-postgresql-v1` and `web-http-v1` client/server profiles.
 Compute and memory remain `Partial` until floating-point, crypto, compilation,
 latency, NUMA, and broader architecture coverage are implemented. Network
-remains partial until route/MTU capture, generator-validity checks, repeated
-topology-aware windows, and mTLS enrollment are implemented. PostgreSQL remains
+remains partial until offload evidence, repeated topology-aware windows, public
+path classification, and mTLS enrollment are implemented. PostgreSQL remains
 partial until tail latency, replication, and recovery evidence are available.
 Web/API/TLS remains partial until generator-saturation validation, dynamic
 application, HTTP/2/3, CDN, WAF, and autoscaling evidence are available.

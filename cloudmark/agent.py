@@ -4,6 +4,7 @@ import hashlib
 import ipaddress
 import json
 import os
+import re
 import shutil
 import socket
 import subprocess
@@ -66,6 +67,7 @@ from .web_benchmark import (
 
 
 SERVICE_CONTROLLER_CONTACT_TIMEOUT_SECONDS = 20
+PATH_PROBE_MAX_HOPS = 8
 
 
 def _validate_controller(controller: str, allow_http: bool) -> str:
@@ -406,6 +408,182 @@ class AgentWorker:
             "tool": {"name": "ping", "version": None},
             "raw": {"stdout": result.stdout},
             "command": {"count": count, "interval_ms": interval_ms, "timeout_ms": timeout_ms},
+        }
+
+    def _run_path_probe(self, payload: dict[str, Any]) -> dict[str, Any]:
+        address = str(payload.get("target_address", ""))
+        parsed = self._peer_address(address)
+        policy = {
+            "passive_route_lookup": True,
+            "path_probe_max_hops": PATH_PROBE_MAX_HOPS,
+            "arbitrary_arguments_allowed": False,
+        }
+        if os.name == "nt":
+            return {
+                "status": "unavailable",
+                "reason": "Route and MTU evidence is not implemented for Windows Agents.",
+                "address_family": f"ipv{parsed.version}",
+                "policy": policy,
+            }
+        ip_tool = shutil.which("ip")
+        if not ip_tool:
+            return {
+                "status": "unavailable",
+                "reason": "The ip route tool is not installed or is not on PATH.",
+                "address_family": f"ipv{parsed.version}",
+                "policy": policy,
+            }
+        environment = os.environ.copy()
+        environment["LC_ALL"] = "C"
+        route_command = [ip_tool, f"-{parsed.version}", "-j", "route", "get", address]
+        try:
+            route_result = subprocess.run(
+                route_command,
+                capture_output=True,
+                text=True,
+                timeout=10,
+                check=False,
+                shell=False,
+                env=environment,
+            )
+        except subprocess.TimeoutExpired:
+            return {
+                "status": "unavailable",
+                "reason": "The bounded route lookup timed out.",
+                "address_family": f"ipv{parsed.version}",
+                "policy": policy,
+            }
+        route: dict[str, Any] | None = None
+        try:
+            route_items = json.loads(route_result.stdout) if route_result.returncode == 0 else None
+        except json.JSONDecodeError:
+            route_items = None
+        if isinstance(route_items, list) and route_items and isinstance(route_items[0], dict):
+            route = route_items[0]
+        if route is None:
+            plain_route_command = [ip_tool, f"-{parsed.version}", "route", "get", address]
+            try:
+                plain_route_result = subprocess.run(
+                    plain_route_command,
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                    check=False,
+                    shell=False,
+                    env=environment,
+                )
+            except subprocess.TimeoutExpired:
+                plain_route_result = None
+            if plain_route_result is not None and plain_route_result.returncode == 0:
+                tokens = plain_route_result.stdout.split()
+
+                def token_after(name: str) -> str | None:
+                    try:
+                        return tokens[tokens.index(name) + 1]
+                    except (ValueError, IndexError):
+                        return None
+
+                route = {
+                    "dst": tokens[0] if tokens else address,
+                    "gateway": token_after("via"),
+                    "dev": token_after("dev"),
+                    "prefsrc": token_after("src"),
+                }
+        interface_name = str((route or {}).get("dev", "")).strip()
+        if not route or not interface_name:
+            return {
+                "status": "unavailable",
+                "reason": route_result.stderr.strip() or "The route lookup did not identify an egress interface.",
+                "address_family": f"ipv{parsed.version}",
+                "policy": policy,
+            }
+        link_command = [ip_tool, "-j", "link", "show", "dev", interface_name]
+        link_result: subprocess.CompletedProcess[str] | None = None
+        try:
+            link_result = subprocess.run(
+                link_command,
+                capture_output=True,
+                text=True,
+                timeout=10,
+                check=False,
+                shell=False,
+                env=environment,
+            )
+        except subprocess.TimeoutExpired:
+            pass
+        link: dict[str, Any] | None = None
+        if link_result is not None and link_result.returncode == 0:
+            try:
+                link_items = json.loads(link_result.stdout)
+                if isinstance(link_items, list) and link_items and isinstance(link_items[0], dict):
+                    link = link_items[0]
+            except json.JSONDecodeError:
+                link = None
+        if link is None:
+            plain_link_command = [ip_tool, "link", "show", "dev", interface_name]
+            try:
+                plain_link_result = subprocess.run(
+                    plain_link_command,
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                    check=False,
+                    shell=False,
+                    env=environment,
+                )
+            except subprocess.TimeoutExpired:
+                plain_link_result = None
+            if plain_link_result is not None and plain_link_result.returncode == 0:
+                mtu_match = re.search(r"\bmtu\s+(\d+)\b", plain_link_result.stdout)
+                state_match = re.search(r"\bstate\s+(\S+)", plain_link_result.stdout)
+                link = {
+                    "ifname": interface_name,
+                    "mtu": int(mtu_match.group(1)) if mtu_match else None,
+                    "operstate": state_match.group(1) if state_match else None,
+                }
+        path_mtu: dict[str, Any] = {"status": "unavailable", "value_bytes": None, "source": None}
+        trace_tool = shutil.which("tracepath")
+        if trace_tool:
+            trace_command = [trace_tool, "-n", "-m", str(PATH_PROBE_MAX_HOPS), address]
+            try:
+                trace_result = subprocess.run(
+                    trace_command,
+                    capture_output=True,
+                    text=True,
+                    timeout=15,
+                    check=False,
+                    shell=False,
+                    env=environment,
+                )
+                match = re.search(r"\bpmtu\s+(\d+)\b", trace_result.stdout, re.IGNORECASE)
+                if match:
+                    path_mtu = {
+                        "status": "observed",
+                        "value_bytes": int(match.group(1)),
+                        "source": "tracepath",
+                    }
+            except subprocess.TimeoutExpired:
+                pass
+        interface_mtu = (link or {}).get("mtu")
+        status = "complete" if isinstance(interface_mtu, int) else "partial"
+        return {
+            "status": status,
+            "address_family": f"ipv{parsed.version}",
+            "route": {
+                "destination": route.get("dst"),
+                "gateway": route.get("gateway"),
+                "source": route.get("prefsrc") or route.get("src"),
+                "interface": interface_name,
+            },
+            "interface": {
+                "name": interface_name,
+                "mtu_bytes": interface_mtu,
+                "state": (link or {}).get("operstate"),
+                "link_type": (link or {}).get("link_type"),
+            },
+            "path_mtu": path_mtu,
+            "tool": {"route": "iproute2", "path_mtu": "tracepath" if trace_tool else None},
+            "policy": policy,
         }
 
     def _collect_server(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -1449,6 +1627,8 @@ class AgentWorker:
             return self._run_client(payload)
         if kind == "network-latency":
             return self._run_latency(payload)
+        if kind == "network-path-probe":
+            return self._run_path_probe(payload)
         if kind == "network-server-collect":
             return self._collect_server(payload)
         if kind == "database-server-start":

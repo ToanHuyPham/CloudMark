@@ -32,6 +32,7 @@ from cloudmark.network import (
     ALLOWED_UDP_RATE_MAX,
     NetworkError,
     _iperf_metrics,
+    _network_analysis,
     _udp_metrics,
     network_total_steps,
     parse_ping_output,
@@ -51,7 +52,7 @@ from cloudmark.profiles import (
 from cloudmark.provider import _declared_manifest
 from cloudmark.runner import CancellationToken, JobContext, ProcessResult, RunCancelled, RunTimedOut
 from cloudmark.server import CloudMarkController, Server
-from cloudmark.suitability import SCENARIO_REQUIREMENTS, evaluate_suitability
+from cloudmark.suitability import SCENARIO_REQUIREMENTS, _run_valid, evaluate_suitability
 from cloudmark.web_benchmark import (
     WebBenchmarkError,
     parse_ab_output,
@@ -272,6 +273,27 @@ class CloudMarkTests(unittest.TestCase):
             if item["label"] == "Verified provider identity"
         )
         self.assertFalse(identity["satisfied"])
+
+    def test_suitability_rejects_network_v3_without_comparison_validity(self) -> None:
+        run = {
+            "suite": "network",
+            "profile": "network-peer-standard",
+            "status": "completed",
+            "methodology_version": "network-v3",
+            "result": {
+                "methodology_version": "network-v3",
+                "analysis": {
+                    "validity": {
+                        "route_evidence_status": "complete",
+                        "generator_headroom_status": "constrained",
+                        "comparison_eligible": False,
+                    }
+                },
+            },
+        }
+        valid, reason = _run_valid(run)
+        self.assertFalse(valid)
+        self.assertIn("generator headroom", reason.lower())
 
     def test_provider_observations_require_exact_repeated_sampling_contract(self) -> None:
         now = datetime.now(timezone.utc)
@@ -702,6 +724,62 @@ class CloudMarkTests(unittest.TestCase):
         self.assertEqual(result["latency"]["average_ms"], 0.45)
         self.assertIn("10.0.0.11", run.call_args.args[0])
 
+    def test_agent_collects_allow_listed_route_interface_and_path_mtu_evidence(self) -> None:
+        worker = AgentWorker("http://127.0.0.1:8787", "agent", "token")
+        responses = [
+            SimpleNamespace(
+                returncode=0,
+                stdout=json.dumps([{
+                    "dst": "10.0.0.11",
+                    "gateway": "10.0.0.1",
+                    "dev": "ens4",
+                    "prefsrc": "10.0.0.10",
+                }]),
+                stderr="",
+            ),
+            SimpleNamespace(
+                returncode=0,
+                stdout=json.dumps([{"ifname": "ens4", "mtu": 1460, "operstate": "UP", "link_type": "ether"}]),
+                stderr="",
+            ),
+            SimpleNamespace(returncode=0, stdout=" 1?: [LOCALHOST] pmtu 1460\n 1: 10.0.0.11 0.250ms reached\n", stderr=""),
+        ]
+        with patch("cloudmark.agent.os.name", "posix"), patch(
+            "cloudmark.agent.shutil.which", side_effect=lambda name: name
+        ), patch("cloudmark.agent.subprocess.run", side_effect=responses) as run:
+            result = worker._run_path_probe({"target_address": "10.0.0.11"})
+        self.assertEqual(result["status"], "complete")
+        self.assertEqual(result["route"]["interface"], "ens4")
+        self.assertEqual(result["interface"]["mtu_bytes"], 1460)
+        self.assertEqual(result["path_mtu"]["value_bytes"], 1460)
+        self.assertEqual(run.call_args_list[0].args[0], ["ip", "-4", "-j", "route", "get", "10.0.0.11"])
+        self.assertEqual(run.call_args_list[1].args[0], ["ip", "-j", "link", "show", "dev", "ens4"])
+        self.assertEqual(run.call_args_list[2].args[0], ["tracepath", "-n", "-m", "8", "10.0.0.11"])
+
+    def test_agent_reports_path_evidence_unavailable_without_iproute2(self) -> None:
+        worker = AgentWorker("http://127.0.0.1:8787", "agent", "token")
+        with patch("cloudmark.agent.os.name", "posix"), patch("cloudmark.agent.shutil.which", return_value=None):
+            result = worker._run_path_probe({"target_address": "10.0.0.11"})
+        self.assertEqual(result["status"], "unavailable")
+        self.assertIn("ip route", result["reason"])
+
+    def test_agent_path_probe_falls_back_for_older_iproute2_without_json(self) -> None:
+        worker = AgentWorker("http://127.0.0.1:8787", "agent", "token")
+        responses = [
+            SimpleNamespace(returncode=1, stdout="", stderr="Option -j is unknown"),
+            SimpleNamespace(returncode=0, stdout="10.0.0.11 via 10.0.0.1 dev eth0 src 10.0.0.10\n", stderr=""),
+            SimpleNamespace(returncode=1, stdout="", stderr="Option -j is unknown"),
+            SimpleNamespace(returncode=0, stdout="2: eth0: <UP> mtu 1500 state UP mode DEFAULT\n", stderr=""),
+            SimpleNamespace(returncode=0, stdout=" 1?: [LOCALHOST] pmtu 1500\n", stderr=""),
+        ]
+        with patch("cloudmark.agent.os.name", "posix"), patch(
+            "cloudmark.agent.shutil.which", side_effect=lambda name: name
+        ), patch("cloudmark.agent.subprocess.run", side_effect=responses):
+            result = worker._run_path_probe({"target_address": "10.0.0.11"})
+        self.assertEqual(result["status"], "complete")
+        self.assertEqual(result["route"]["interface"], "eth0")
+        self.assertEqual(result["interface"]["mtu_bytes"], 1500)
+
     def test_network_metric_normalization_keeps_tcp_rtt_udp_and_bidirectional_fields(self) -> None:
         payload = {
             "end": {
@@ -723,6 +801,40 @@ class CloudMarkTests(unittest.TestCase):
         self.assertEqual(_iperf_metrics(payload)["tcp_rtt_mean_ms"], 1.25)
         self.assertEqual(_iperf_metrics(payload, reverse=True)["received_bits_per_second"], 650)
         self.assertEqual(_udp_metrics(payload, 1_000)["lost_percent"], 2.0)
+
+    def test_network_analysis_rejects_generator_cpu_saturation(self) -> None:
+        result = {
+            "path_measurements": [
+                {"evidence": {"status": "complete"}},
+                {"evidence": {"status": "complete"}},
+            ],
+            "latency_measurements": [],
+            "udp_measurements": [],
+            "validity_policy": {
+                "generator_cpu_limit_percent": 90,
+                "generator_scaling_cpu_floor_percent": 85,
+                "generator_scaling_gain_floor_percent": 5,
+            },
+            "measurements": [
+                {
+                    "direction": "generator-to-target",
+                    "streams": 1,
+                    "sender": {"role": "generator"},
+                    "receiver": {"role": "target"},
+                    "metrics": {"received_bits_per_second": 900, "sender_cpu_percent": 95},
+                },
+                {
+                    "direction": "generator-to-target",
+                    "streams": 16,
+                    "sender": {"role": "generator"},
+                    "receiver": {"role": "target"},
+                    "metrics": {"received_bits_per_second": 920, "sender_cpu_percent": 96},
+                },
+            ],
+        }
+        analysis = _network_analysis(result)
+        self.assertEqual(analysis["validity"]["generator_headroom_status"], "constrained")
+        self.assertFalse(analysis["validity"]["comparison_eligible"])
 
     def test_network_orchestrator_records_both_directions_without_controller_traffic(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -773,7 +885,7 @@ class CloudMarkTests(unittest.TestCase):
             self.assertFalse(result["policy"]["controller_in_data_path"])
             self.assertEqual(result["tool"]["version"], "iperf 3.17")
 
-    def test_standard_network_orchestrator_captures_all_v2_measurement_classes(self) -> None:
+    def test_standard_network_orchestrator_captures_all_v3_measurement_classes(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             database = Database(Path(directory) / "test.sqlite3")
             database.create_session("session_test", "pair", "hash", "2099-01-01T00:00:00+00:00")
@@ -782,7 +894,7 @@ class CloudMarkTests(unittest.TestCase):
             database.add_agent("agent_b", "session_test", "generator", "generator", system, endpoint={"address": "10.0.0.11"})
             total_steps = network_total_steps("network-peer-standard")
             database.create_run(
-                "run_network_v2",
+                "run_network_v3",
                 "network",
                 "network-peer-standard",
                 {"suite": "network"},
@@ -801,6 +913,13 @@ class CloudMarkTests(unittest.TestCase):
                         payload = task["payload"]
                         if task["kind"] == "network-server-start":
                             result = {"ready": True}
+                        elif task["kind"] == "network-path-probe":
+                            result = {
+                                "status": "complete",
+                                "route": {"destination": payload["target_address"], "interface": "ens4"},
+                                "interface": {"name": "ens4", "mtu_bytes": 1460, "state": "UP"},
+                                "path_mtu": {"status": "observed", "value_bytes": 1460, "source": "tracepath"},
+                            }
                         elif task["kind"] == "network-latency":
                             result = {
                                 "latency": {
@@ -819,6 +938,7 @@ class CloudMarkTests(unittest.TestCase):
                                 "sum_sent": {"bits_per_second": 1_100_000_000, "bytes": 1_000_000, "retransmits": 2},
                                 "sum_received": {"bits_per_second": 1_000_000_000, "bytes": 990_000},
                                 "streams": [{"sender": {"mean_rtt": 1000, "min_rtt": 700, "max_rtt": 1600}}],
+                                "cpu_utilization_percent": {"host_total": 45.0, "remote_total": 40.0},
                             }
                             if payload.get("protocol") == "udp":
                                 end["sum_received"].update(
@@ -839,10 +959,10 @@ class CloudMarkTests(unittest.TestCase):
             worker = threading.Thread(target=complete_tasks, daemon=True)
             worker.start()
             try:
-                context = JobContext("run_network_v2", total_steps=total_steps, timeout_seconds=60)
+                context = JobContext("run_network_v3", total_steps=total_steps, timeout_seconds=60)
                 result = run_network(
                     database,
-                    "run_network_v2",
+                    "run_network_v3",
                     "session_test",
                     "network-peer-standard",
                     context=context,
@@ -850,7 +970,8 @@ class CloudMarkTests(unittest.TestCase):
             finally:
                 done.set()
                 worker.join(timeout=2)
-            self.assertEqual(total_steps, 17)
+            self.assertEqual(total_steps, 19)
+            self.assertEqual(len(result["path_measurements"]), 2)
             self.assertEqual(len(result["latency_measurements"]), 2)
             self.assertEqual(len(result["measurements"]), 8)
             self.assertEqual(len(result["udp_measurements"]), 6)
@@ -858,6 +979,8 @@ class CloudMarkTests(unittest.TestCase):
             self.assertTrue(all(item["target_rate_bps"] <= ALLOWED_UDP_RATE_MAX for item in result["udp_measurements"]))
             self.assertFalse(result["policy"]["controller_in_data_path"])
             self.assertFalse(result["analysis"]["scored"])
+            self.assertTrue(result["analysis"]["validity"]["comparison_eligible"])
+            self.assertEqual(result["analysis"]["validity"]["generator_headroom_status"], "adequate")
 
     def test_profiles_enforce_network_direction_policy(self) -> None:
         self.assertIn("compute-quick", COMPUTE_PROFILES)
@@ -874,9 +997,9 @@ class CloudMarkTests(unittest.TestCase):
         profile = NETWORK_PROFILES["network-peer-standard"]
         self.assertFalse(profile["cloud_to_controller"])
         self.assertEqual(profile["requires_agents"], 2)
-        self.assertEqual(profile["methodology_version"], "network-v2")
+        self.assertEqual(profile["methodology_version"], "network-v3")
         self.assertEqual(network_total_steps("network-peer-quick"), 4)
-        self.assertEqual(network_total_steps("network-peer-standard"), 17)
+        self.assertEqual(network_total_steps("network-peer-standard"), 19)
 
     def test_pgbench_parser_preserves_transactions_latency_failures_and_progress(self) -> None:
         stdout = """
@@ -1559,6 +1682,14 @@ Percentage of the requests served within a certain time (ms)
         plan = create_plan(["storage"])
         self.assertEqual(plan.packs[0], "base")
         self.assertIn("storage", plan.packs)
+
+    def test_bootstrap_network_pack_includes_route_ping_and_path_mtu_tools(self) -> None:
+        with patch("cloudmark.bootstrap.detect_manager", return_value="apt"):
+            plan = create_plan(["network"])
+        self.assertIn("iperf3", plan.packages)
+        self.assertIn("iproute2", plan.packages)
+        self.assertIn("iputils-ping", plan.packages)
+        self.assertIn("iputils-tracepath", plan.packages)
 
     def test_bootstrap_compute_and_memory_packs_include_required_tools(self) -> None:
         with patch("cloudmark.bootstrap.detect_manager", return_value="apt"):

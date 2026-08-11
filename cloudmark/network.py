@@ -218,6 +218,8 @@ def network_total_steps(profile_name: str) -> int:
     total = directions * len(profile["tcp_streams"])
     if profile.get("latency"):
         total += directions
+    if profile.get("path_probe"):
+        total += directions
     total += directions * len(profile.get("udp_rate_fractions") or [])
     if profile.get("bidirectional_streams"):
         total += 1
@@ -244,7 +246,45 @@ def network_default_timeout(profile_name: str) -> int:
             // 1000
             + 20,
         )
-    return tcp_seconds + udp_seconds + bidirectional_seconds + latency_seconds + 120
+    path_seconds = directions * 30 if profile.get("path_probe") else 0
+    return tcp_seconds + udp_seconds + bidirectional_seconds + latency_seconds + path_seconds + 120
+
+
+def _path_measurement(
+    database: Database,
+    context: JobContext,
+    *,
+    run_id: str,
+    session_id: str,
+    sender: dict[str, Any],
+    receiver: dict[str, Any],
+) -> dict[str, Any]:
+    receiver_address = _address(receiver)
+    label = f"{sender['name']} to {receiver['name']} - route and MTU evidence"
+    context.report("collecting-network-path", label)
+    task_id = _task(
+        database,
+        run_id,
+        session_id,
+        sender["id"],
+        "network-path-probe",
+        {"target_address": receiver_address},
+    )
+    task = _wait_task(database, task_id, context, 35)
+    evidence = task.get("result") or {}
+    if not isinstance(evidence, dict):
+        raise NetworkError("Peer path probe returned an invalid result.")
+    return {
+        "direction": f"{sender['id']}-to-{receiver['id']}",
+        "sender": {"id": sender["id"], "name": sender["name"], "role": sender["role"]},
+        "receiver": {
+            "id": receiver["id"],
+            "name": receiver["name"],
+            "role": receiver["role"],
+            "address": receiver_address,
+        },
+        "evidence": evidence,
+    }
 
 
 def _latency_measurement(
@@ -425,7 +465,11 @@ def _network_analysis(result: dict[str, Any]) -> dict[str, Any]:
     for item in result["udp_measurements"]:
         udp_by_direction.setdefault(item["direction"], []).append(item)
 
+    cpu_limit = float((result.get("validity_policy") or {}).get("generator_cpu_limit_percent", 90))
+    scaling_cpu_floor = float((result.get("validity_policy") or {}).get("generator_scaling_cpu_floor_percent", 85))
+    scaling_gain_floor = float((result.get("validity_policy") or {}).get("generator_scaling_gain_floor_percent", 5))
     directions: list[dict[str, Any]] = []
+    headroom_statuses: list[str] = []
     for direction in sorted(set(latency_by_direction) | set(tcp_by_direction) | set(udp_by_direction)):
         idle = (latency_by_direction.get(direction) or {}).get("metrics") or {}
         tcp_items = tcp_by_direction.get(direction) or []
@@ -445,6 +489,43 @@ def _network_analysis(result: dict[str, Any]) -> dict[str, Any]:
                 inflation_percent = round((float(loaded_rtt) / float(idle_rtt) - 1) * 100, 3)
         udp_items = udp_by_direction.get(direction) or []
         highest_udp = max(udp_items, key=lambda item: int(item.get("target_rate_bps", 0)), default=None)
+        generator_cpu_values: list[float] = []
+        for item in tcp_items:
+            metrics = item.get("metrics") or {}
+            generator_cpu = (
+                metrics.get("sender_cpu_percent")
+                if (item.get("sender") or {}).get("role") == "generator"
+                else metrics.get("receiver_cpu_percent")
+                if (item.get("receiver") or {}).get("role") == "generator"
+                else None
+            )
+            if isinstance(generator_cpu, (int, float)):
+                generator_cpu_values.append(float(generator_cpu))
+        peak_generator_cpu = max(generator_cpu_values, default=None)
+        ordered_tcp = sorted(tcp_items, key=lambda item: int(item.get("streams", 0)))
+        scaling_gain_percent = None
+        if len(ordered_tcp) >= 2:
+            low_rate = float((ordered_tcp[0].get("metrics") or {}).get("received_bits_per_second") or 0)
+            high_rate = float((ordered_tcp[-1].get("metrics") or {}).get("received_bits_per_second") or 0)
+            if low_rate > 0:
+                scaling_gain_percent = round((high_rate / low_rate - 1) * 100, 3)
+        headroom_reasons: list[str] = []
+        if peak_generator_cpu is None:
+            headroom_status = "unknown"
+            headroom_reasons.append("generator-cpu-unavailable")
+        elif peak_generator_cpu >= cpu_limit:
+            headroom_status = "constrained"
+            headroom_reasons.append("generator-cpu-at-or-above-limit")
+        elif (
+            peak_generator_cpu >= scaling_cpu_floor
+            and scaling_gain_percent is not None
+            and scaling_gain_percent < scaling_gain_floor
+        ):
+            headroom_status = "constrained"
+            headroom_reasons.append("stream-scaling-stalled-near-generator-cpu-limit")
+        else:
+            headroom_status = "adequate"
+        headroom_statuses.append(headroom_status)
         directions.append(
             {
                 "direction": direction,
@@ -461,11 +542,43 @@ def _network_analysis(result: dict[str, Any]) -> dict[str, Any]:
                 "highest_udp_target_bits_per_second": (highest_udp or {}).get("target_rate_bps"),
                 "highest_udp_loss_percent": (highest_udp or {}).get("metrics", {}).get("lost_percent"),
                 "highest_udp_jitter_ms": (highest_udp or {}).get("metrics", {}).get("jitter_ms"),
+                "generator_headroom": {
+                    "status": headroom_status,
+                    "peak_cpu_percent": peak_generator_cpu,
+                    "stream_scaling_gain_percent": scaling_gain_percent,
+                    "reason_codes": headroom_reasons,
+                },
             }
         )
+    path_items = result.get("path_measurements") or []
+    path_statuses = [str((item.get("evidence") or {}).get("status", "unavailable")) for item in path_items]
+    if len(path_statuses) >= 2 and all(status == "complete" for status in path_statuses):
+        route_status = "complete"
+    elif any(status in {"complete", "partial"} for status in path_statuses):
+        route_status = "partial"
+    else:
+        route_status = "unavailable"
+    if len(headroom_statuses) >= 2 and all(status == "adequate" for status in headroom_statuses):
+        generator_status = "adequate"
+    elif "constrained" in headroom_statuses:
+        generator_status = "constrained"
+    else:
+        generator_status = "unknown"
+    validity_reasons: list[str] = []
+    if route_status != "complete":
+        validity_reasons.append("route-interface-mtu-evidence-incomplete")
+    if generator_status != "adequate":
+        validity_reasons.append(f"generator-headroom-{generator_status}")
+    comparison_eligible = route_status == "complete" and generator_status == "adequate"
     return {
         "directions": directions,
         "latency_comparison": "Idle ICMP average versus iperf3 TCP_INFO mean RTT under throughput load; protocols differ.",
+        "validity": {
+            "route_evidence_status": route_status,
+            "generator_headroom_status": generator_status,
+            "comparison_eligible": comparison_eligible,
+            "reason_codes": validity_reasons,
+        },
         "scored": False,
     }
 
@@ -485,6 +598,7 @@ def run_network(
     udp_fractions = [float(value) for value in profile.get("udp_rate_fractions") or []]
     latency = profile.get("latency")
     bidirectional_streams = profile.get("bidirectional_streams")
+    path_probe = profile.get("path_probe") is True
     result: dict[str, Any] = {
         "suite": "network",
         "profile": profile_name,
@@ -497,8 +611,15 @@ def run_network(
             "tcp_only": not bool(udp_fractions),
             "udp_rate_cap_bits_per_second": ALLOWED_UDP_RATE_MAX,
             "simultaneous_bidirectional": bool(bidirectional_streams),
+            "route_interface_mtu_evidence": path_probe,
             "port_range": [ALLOWED_PORT_MIN, ALLOWED_PORT_MAX],
         },
+        "validity_policy": {
+            "generator_cpu_limit_percent": profile.get("generator_cpu_limit_percent", 90),
+            "generator_scaling_cpu_floor_percent": profile.get("generator_scaling_cpu_floor_percent", 85),
+            "generator_scaling_gain_floor_percent": profile.get("generator_scaling_gain_floor_percent", 5),
+        },
+        "path_measurements": [],
         "latency_measurements": [],
         "measurements": [],
         "udp_measurements": [],
@@ -507,6 +628,20 @@ def run_network(
     directions = [(generator, target), (target, generator)]
     index = 0
     try:
+        if path_probe:
+            for sender, receiver in directions:
+                measurement = _path_measurement(
+                    database,
+                    context,
+                    run_id=run_id,
+                    session_id=session_id,
+                    sender=sender,
+                    receiver=receiver,
+                )
+                result["path_measurements"].append(measurement)
+                result["analysis"] = _network_analysis(result)
+                context.complete_step("network-path-evidence-complete", None, partial_result=result)
+
         if latency:
             for sender, receiver in directions:
                 measurement = _latency_measurement(
