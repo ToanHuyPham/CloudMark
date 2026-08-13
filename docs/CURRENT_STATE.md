@@ -66,6 +66,11 @@ baseline is still the repository head.
   safe Windows local-process launch/stop scripts;
 - terminal Run states are published only after durable task cleanup, preventing
   callers from observing completion while the worker still holds SQLite state.
+- dashboard polling uses non-mutating Run summaries, compact JSON, no raw tool
+  output, and a 90-point presentation timeline while `/runs/{id}` and SQLite
+  preserve complete evidence; expected client disconnects no longer produce
+  misleading server tracebacks; the complete development head passes 86 Python
+  tests, 3 rendered-dashboard tests, dashboard lint, and the production build.
 
 ## Last verified provider target
 

@@ -174,8 +174,10 @@ In the dashboard:
   transfer, and cleanup evidence while rejecting arbitrary URLs and DDoS load.
 - **Workload Suitability** maps technical evidence to 12 use cases. Missing
   required metrics return `Insufficient evidence`, not zero.
-- **History** retains raw results so conclusions can be recalculated when the
-  methodology changes.
+- **History** lists locally retained Runs. Dashboard polling uses compact
+  presentation summaries; complete raw evidence and full-resolution time
+  series remain in SQLite and are available from `/api/v1/runs/{id}` so
+  conclusions can be recalculated when the methodology changes.
 
 See [`ASSESSMENT_CATALOG.md`](ASSESSMENT_CATALOG.md) for the complete metric and
 minimum-topology matrix.

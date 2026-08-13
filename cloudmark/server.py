@@ -6,6 +6,7 @@ import os
 import secrets
 import threading
 import uuid
+from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -57,10 +58,59 @@ from .web_benchmark import (
 
 
 CLIENT_DISCONNECT_ERRORS = (BrokenPipeError, ConnectionAbortedError, ConnectionResetError)
+DASHBOARD_TIMELINE_POINT_LIMIT = 90
 
 
 def _json_bytes(value: Any) -> bytes:
-    return json.dumps(value, ensure_ascii=False, indent=2).encode("utf-8")
+    return json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+
+
+def _without_raw_evidence(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {key: _without_raw_evidence(item) for key, item in value.items() if key != "raw"}
+    if isinstance(value, list):
+        return [_without_raw_evidence(item) for item in value]
+    return value
+
+
+def _dashboard_run_summaries(runs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    summaries = deepcopy(runs)
+    completed_scopes: set[tuple[str, str]] = set()
+    target_scoped_suites = {"compute", "memory", "storage"}
+    for run in summaries:
+        suite = str(run.get("suite", ""))
+        request = run.get("request") or {}
+        scope = str(request.get("agent_id") or "controller") if suite in target_scoped_suites else "global"
+        key = (suite, scope)
+        status = str(run.get("status", ""))
+        retain_result = status in {"queued", "running"} or (status == "completed" and key not in completed_scopes)
+        if status == "completed":
+            completed_scopes.add(key)
+        if not retain_result:
+            run.pop("result", None)
+            continue
+        if "result" in run:
+            run["result"] = _without_raw_evidence(run["result"])
+        jobs = (run.get("result") or {}).get("jobs") or []
+        if not isinstance(jobs, list) or not jobs:
+            continue
+        for job in jobs[:-1]:
+            if isinstance(job, dict):
+                job.pop("time_series", None)
+        final_job = jobs[-1] if isinstance(jobs[-1], dict) else {}
+        time_series = final_job.get("time_series") or {}
+        if not isinstance(time_series, dict):
+            continue
+        for name, points in list(time_series.items()):
+            if not isinstance(points, list) or len(points) <= DASHBOARD_TIMELINE_POINT_LIMIT:
+                continue
+            last_index = len(points) - 1
+            indexes = [
+                round(index * last_index / (DASHBOARD_TIMELINE_POINT_LIMIT - 1))
+                for index in range(DASHBOARD_TIMELINE_POINT_LIMIT)
+            ]
+            time_series[name] = [points[index] for index in indexes]
+    return summaries
 
 
 class CloudMarkController:
@@ -95,10 +145,11 @@ class CloudMarkController:
 
     def dashboard(self) -> dict[str, Any]:
         system = self.system()
+        runs = self.database.list_runs(10)
         return {
             "version": __version__,
             "system": system,
-            "runs": self.database.list_runs(10),
+            "runs": _dashboard_run_summaries(runs),
             "sessions": [enrich_pairing_session(session) for session in self.database.list_sessions(10)],
             "profiles": all_profiles(),
             "suitability": evaluate_suitability(
@@ -110,6 +161,8 @@ class CloudMarkController:
                 "cloud_to_controller_network_test": False,
                 "provider_internal_peer_test": True,
                 "raw_device_test": False,
+                "dashboard_results_are_summaries": True,
+                "full_run_evidence_endpoint": "/api/v1/runs/{id}",
             },
         }
 

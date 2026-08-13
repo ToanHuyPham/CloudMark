@@ -202,3 +202,17 @@ NIC driver, checksum/segmentation/aggregation state, and congestion-control
 algorithm. Capturing those facts makes repeated provider cohorts more
 reproducible without changing the assessed machine or letting the Controller
 select an arbitrary interface or command.
+
+## D-018: Dashboard polling is a presentation boundary, not evidence storage
+
+**Decision:** The frequently polled `/dashboard` endpoint returns compact JSON,
+keeps active results and the newest completed result per suite/target, omits raw
+tool blocks, and bounds the storage chart series to 90 points. Older Runs remain
+listed as lifecycle summaries. The transformation uses copies and cannot mutate
+persistence objects. `/runs/{id}` and SQLite remain the authoritative complete
+Run evidence, including raw tool output and full-resolution time series.
+
+**Reason:** Re-sending every raw tool block and historical time-series point
+every five seconds made the UI pay evidence-export costs for data it does not
+render. A documented presentation boundary improves local responsiveness while
+preserving reproducibility and auditability at the Run endpoint.

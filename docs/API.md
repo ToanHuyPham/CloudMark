@@ -15,12 +15,12 @@ X-CloudMark-Token: <token printed by cloudmark serve>
 | GET | `/health` | API status and version |
 | GET | `/system` | Inventory and provider evidence |
 | GET | `/system?refresh=true` | Refresh inventory and metadata |
-| GET | `/dashboard` | Aggregated local dashboard payload |
+| GET | `/dashboard` | Compact aggregated local dashboard payload |
 | GET | `/suitability` | Versioned target-scoped workload gates and provider-readiness evidence |
 | GET | `/provider-comparisons` | Exact-cohort repeated-window descriptive statistics |
 | GET | `/profiles` | Benchmark and scenario profiles |
 | GET | `/runs` | Run history |
-| GET | `/runs/{id}` | One run and raw result |
+| GET | `/runs/{id}` | One run and its complete raw evidence |
 | POST | `/runs` | Submit an asynchronous run |
 | POST | `/runs/{id}/cancel` | Cancel a queued or running benchmark |
 | POST | `/sessions` | Create a 30-minute pairing session |
@@ -43,6 +43,15 @@ X-CloudMark-Token: ...
 
 The response is `202 Accepted`. Poll `/runs/{id}` until the state is
 `completed`, `failed`, or `cancelled`.
+
+`/dashboard` is a presentation endpoint polled by the local UI. It retains the
+latest completed result for each system suite/target and each paired suite,
+plus all active Runs. Older history entries retain lifecycle metadata but omit
+their result from this payload. Raw tool output is omitted, and only the last
+storage job retains a presentation timeline capped at 90 points. These changes
+do not modify SQLite evidence. Use `/runs/{id}` for the complete immutable Run,
+raw tool output, and full-resolution time series. API JSON is transmitted in a
+compact UTF-8 representation; field values and Unicode are unchanged.
 
 While running, the response includes `progress`, `phase`, `current_job`,
 `completed_steps`, `total_steps`, `heartbeat_at`, and version fields for the

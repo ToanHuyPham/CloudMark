@@ -179,6 +179,11 @@ SQLite tables:
 - `agent_tasks`: durable per-agent task lifecycle, payload, result, and error.
 
 WAL mode permits dashboard reads while a benchmark updates its job state.
+The frequently polled dashboard endpoint returns presentation summaries: only
+the newest completed result per suite/target, active partial results, no raw
+tool output, and a bounded storage chart series. SQLite and `/runs/{id}` retain
+the complete immutable evidence. Presentation compaction never mutates the
+objects returned by the persistence layer.
 Indexes exist only for current query patterns: run status/start time and agents
 by session.
 

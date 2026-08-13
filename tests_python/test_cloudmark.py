@@ -58,7 +58,7 @@ from cloudmark.profiles import (
 )
 from cloudmark.provider import _declared_manifest
 from cloudmark.runner import CancellationToken, JobContext, ProcessResult, RunCancelled, RunTimedOut
-from cloudmark.server import CloudMarkController, Handler, Server
+from cloudmark.server import CloudMarkController, Handler, Server, _dashboard_run_summaries, _json_bytes
 from cloudmark.suitability import SCENARIO_REQUIREMENTS, _run_valid, evaluate_suitability
 from cloudmark.topology import assess_pairing_topology
 from cloudmark.web_benchmark import (
@@ -2383,6 +2383,52 @@ max: 1.50
         handler._send = MagicMock(side_effect=ConnectionAbortedError("client closed socket"))
         handler.do_GET()
         handler._send.assert_called_once()
+
+    def test_dashboard_summaries_preserve_latest_metrics_without_raw_evidence(self) -> None:
+        points = [{"elapsed_ms": index * 1000, "value": index, "direction": "read"} for index in range(240)]
+        runs = [
+            {
+                "id": "latest-storage",
+                "suite": "storage",
+                "status": "completed",
+                "request": {},
+                "result": {
+                    "jobs": [
+                        {"name": "first", "raw": {"stdout": "full"}, "time_series": {"bandwidth": points}},
+                        {"name": "last", "raw": {"stdout": "full"}, "time_series": {"bandwidth": points}},
+                    ]
+                },
+            },
+            {
+                "id": "older-storage",
+                "suite": "storage",
+                "status": "completed",
+                "request": {},
+                "result": {"jobs": [{"name": "old", "raw": {"stdout": "full"}}]},
+            },
+            {
+                "id": "remote-storage",
+                "suite": "storage",
+                "status": "completed",
+                "request": {"agent_id": "agent-a"},
+                "result": {"jobs": [{"name": "remote", "raw": {"stdout": "full"}}]},
+            },
+        ]
+        summaries = _dashboard_run_summaries(runs)
+        self.assertNotIn("time_series", summaries[0]["result"]["jobs"][0])
+        timeline = summaries[0]["result"]["jobs"][1]["time_series"]["bandwidth"]
+        self.assertEqual(len(timeline), 90)
+        self.assertEqual(timeline[0], points[0])
+        self.assertEqual(timeline[-1], points[-1])
+        self.assertNotIn("raw", summaries[0]["result"]["jobs"][1])
+        self.assertNotIn("result", summaries[1])
+        self.assertIn("result", summaries[2])
+        self.assertIn("raw", runs[0]["result"]["jobs"][0])
+
+    def test_api_json_is_compact_without_changing_unicode(self) -> None:
+        body = _json_bytes({"label": "Đà Nẵng", "status": "ok"})
+        self.assertEqual(json.loads(body), {"label": "Đà Nẵng", "status": "ok"})
+        self.assertNotIn(b"\n", body)
 
     def test_fio_time_series_parser_normalizes_units(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
