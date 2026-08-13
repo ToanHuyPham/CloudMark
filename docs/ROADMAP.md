@@ -94,19 +94,21 @@ Required topology: Controller + Agent A + Agent B.
 - TCP A→B and B→A using 1/4/8/16 streams — available;
 - authenticated agent heartbeat and durable allow-listed task queues — available;
 - fixed port range, duration/stream caps, one-shot servers, watchdog, and cleanup — available;
-- simultaneous bidirectional TCP mode — available in `network-v7`;
-- adaptive UDP rate sweep, loss, jitter, and reorder — available in `network-v7`;
+- simultaneous bidirectional TCP mode — available in `network-v8`;
+- adaptive UDP rate sweep, loss, jitter, and reorder — available in `network-v8`;
 - idle ICMP RTT and loaded TCP_INFO RTT comparison — available and explicitly unscored;
-- route, egress-interface, interface-MTU, and path-MTU evidence — available in `network-v7`;
-- bounded numeric trace hops, endpoint address class, and pre/post route-stability evidence — available in `network-v7`;
-- Generator CPU and stream-scaling validity gate — available in `network-v7`;
+- route, egress-interface, interface-MTU, and path-MTU evidence — available in `network-v8`;
+- bounded numeric trace hops, endpoint address class, and pre/post route-stability evidence — available in `network-v8`;
+- Generator CPU and stream-scaling validity gate — available in `network-v8`;
 - topology-aware practical ceiling and bufferbloat classification — planned;
-- read-only TCP congestion-control, NIC driver, and selected offload evidence — available in `network-v7`;
-- pre/post route-derived interface byte, packet, error, and drop deltas — available in `network-v7`;
+- read-only TCP congestion-control, NIC driver, and selected offload evidence — available in `network-v8`;
+- pre/post route-derived interface byte, packet, error, and drop deltas — available in `network-v8`;
 - immutable fixed-pair campaigns, manual per-window confirmation, and one
   comparison-eligible Run per UTC day — available in `network-campaign-v1`;
 - unattended campaign schedules and cross-pair orchestration — planned;
-- bounded read-only driver per-queue counter evidence — observational in `network-v7`;
+- bounded read-only driver per-queue counter evidence — observational in `network-v8`;
+- bounded Linux system-resolver configuration plus fixed A/AAAA diagnostic — observational in `network-v8`;
+- controlled authoritative DNS, cache-cold repetition, DNSSEC, TCP fallback, and Windows resolver parity — planned;
 - wider NIC counter-name normalization and interrupt/RSS/RPS/XPS affinity evidence — planned;
 - operator-declared same-host, same-zone, cross-zone, cross-region, and
   public-Internet labels — available;

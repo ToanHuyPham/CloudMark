@@ -54,6 +54,8 @@ test("keeps production metadata and project policy explicit", async () => {
   assert.match(page, /PROVIDER EVALUATION READINESS/);
   assert.match(page, /REPEATED-WINDOW OBSERVATIONS/);
   assert.match(page, /COMPARISON CONTRACT/);
+  assert.match(page, /SYSTEM RESOLVER/);
+  assert.match(page, /network-v8/i);
   assert.match(page, /Provider Comparison/);
   assert.match(page, /CloudMark does not rank providers/);
   assert.match(page, /profiles\.database\?\.\[selectedDatabaseProfile\]/);
@@ -62,7 +64,7 @@ test("keeps production metadata and project policy explicit", async () => {
   assert.match(page, /missing_evidence_is_zero/);
   assert.match(page, /Conditional fit/);
   assert.match(styles, /@media \(max-width: 900px\)/);
-  assert.match(styles, /grid-template-columns: repeat\(10, minmax\(0, 1fr\)\)/);
+  assert.match(styles, /\.sidebar nav[^}]*display: flex[^}]*overflow-x: auto/);
   assert.match(styles, /overflow-x: hidden/);
   assert.doesNotMatch(styles, /\.nav-item:not\(\.active\)\s*\{\s*font-size:\s*0/);
   assert.match(styles, /--type-micro:\s*10px/);

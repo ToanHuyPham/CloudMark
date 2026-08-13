@@ -171,16 +171,17 @@ The controller may coordinate sessions but cloud agents do not benchmark toward
 the operator's home machine.
 
 `network-peer-quick` preserves the `network-v1` directional TCP baseline.
-`network-peer-standard` uses `network-v7`: fixed pre/post route, bounded numeric
+`network-peer-standard` uses `network-v8`: fixed pre/post route, bounded numeric
 path-trace, structured aggregate interface counters, bounded driver per-queue
 counter snapshots, route/interface/MTU probes, read-only NIC
-driver/offload and TCP congestion-control capture, bounded idle ICMP,
+driver/offload and TCP congestion-control capture, fixed system-resolver
+configuration and A/AAAA diagnostics, bounded idle ICMP,
 directional TCP scaling, capped UDP sweeps derived from each direction's
 measured TCP peak, simultaneous bidirectional TCP, and Generator headroom
 validation. The Agent independently validates every peer address, port,
 duration, stream count, protocol, rate, ping bound, and path-probe argument
-before it starts a child process. Network-v2 through network-v6 results remain
-readable as legacy evidence but do not gain v7 per-queue claims.
+before it starts a child process. Network-v2 through network-v7 results remain
+readable as legacy evidence but do not gain v8 resolver claims.
 
 ## Persistence
 

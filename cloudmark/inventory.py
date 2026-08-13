@@ -203,6 +203,7 @@ def collect_inventory(workspace: Path | None = None) -> dict[str, Any]:
             "iperf3": shutil.which("iperf3") is not None,
             "iproute2": shutil.which("ip") is not None,
             "tracepath": shutil.which("tracepath") is not None,
+            "dig": shutil.which("dig") is not None,
             "ethtool": shutil.which("ethtool") is not None,
             "tcp_congestion_control": Path("/proc/sys/net/ipv4/tcp_congestion_control").is_file(),
             "postgres": find_postgres_binary("postgres") is not None,

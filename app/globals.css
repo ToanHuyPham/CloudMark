@@ -434,8 +434,11 @@ code, .eyebrow, .section-kicker, .metric-index, .version { font-family: var(--fo
   .brand-mark { width: 34px; height: 34px; }
   .brand strong { font-size: 15px; }
   .brand small { font-size: var(--type-micro); }
-  .sidebar nav { width: 100%; margin: 9px 0 0; display: grid; grid-template-columns: repeat(10, minmax(0, 1fr)); gap: 5px; }
-  .nav-item, .nav-item.active { min-width: 0; width: 100%; justify-content: center; gap: 0; padding: 10px 0; font-size: 0; }
+  .sidebar nav { width: 100%; margin: 9px 0 0; padding: 0 0 6px; display: flex; gap: 6px; overflow-x: auto; overscroll-behavior-x: contain; scrollbar-width: thin; scrollbar-color: #3b4a58 #0a1016; scroll-snap-type: x proximity; }
+  .sidebar nav::-webkit-scrollbar { height: 4px; }
+  .sidebar nav::-webkit-scrollbar-track { background: #0a1016; }
+  .sidebar nav::-webkit-scrollbar-thumb { background: #3b4a58; border-radius: 999px; }
+  .nav-item, .nav-item.active { flex: 0 0 auto; min-width: 128px; width: auto; justify-content: flex-start; gap: 8px; padding: 9px 10px; font-size: var(--type-small); line-height: 1.2; white-space: nowrap; scroll-snap-align: start; }
   .nav-item span { font-size: var(--type-label); }
   .workspace { padding: 0 24px; }
 }

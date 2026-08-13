@@ -28,13 +28,13 @@ physical provider fabric.
 | Profile | Methodology | Measurements |
 |---|---|---|
 | `network-peer-quick` | `network-v1` | TCP A→B and B→A, 1 and 4 streams, 10 seconds each |
-| `network-peer-standard` | `network-v7` | Pre/post route, bounded path-trace, aggregate interface-counter, and driver per-queue snapshots; route/interface/MTU, NIC driver/offload, and TCP congestion-control evidence; idle latency; TCP scaling; adaptive UDP sweeps; simultaneous bidirectional TCP; and Generator headroom validation |
+| `network-peer-standard` | `network-v8` | Pre/post route, bounded path-trace, aggregate interface-counter, and driver per-queue snapshots; route/interface/MTU, NIC driver/offload, TCP congestion-control, and system-resolver evidence; idle latency; TCP scaling; adaptive UDP sweeps; simultaneous bidirectional TCP; and Generator headroom validation |
 
 The standard profile contains 21 evidence steps:
 
 1. allow-listed pre-load route, egress-interface, structured aggregate and driver per-queue counter,
-   interface-MTU, path-MTU, bounded numeric path trace, NIC driver/offload, and active TCP
-   congestion-control probes in both directions;
+   interface-MTU, path-MTU, bounded numeric path trace, NIC driver/offload, active TCP
+   congestion-control, and fixed system-resolver diagnostics on both Agents;
 2. bounded idle ICMP latency in both directions: 20 probes at 100 ms intervals;
 3. TCP A→B and B→A at 1, 4, 8, and 16 streams for 15 seconds;
 4. UDP A→B and B→A at 25%, 50%, and 90% of that direction's measured peak TCP receiver rate for 15 seconds; and
@@ -62,12 +62,12 @@ different protocols and sampling mechanisms. CloudMark reports the absolute and
 percentage change as diagnostic evidence but deliberately does not assign a
 bufferbloat score.
 
-`network-v7` evaluates Generator headroom independently in each
+`network-v8` evaluates Generator headroom independently in each
 direction. The iperf3 client is the sender, so CloudMark selects local or
 remote CPU evidence according to which endpoint has the `generator` role. A
 direction is constrained when Generator CPU reaches 90%, or when throughput
 scaling stalls below 5% while Generator CPU is at least 85%. Missing CPU data
-produces `unknown`, not a passing result. Network-v7 evidence is eligible for
+produces `unknown`, not a passing result. Network-v8 evidence is eligible for
 suitability and provider comparison only when both route/interface/MTU probes,
 destination-reaching bounded traces, NIC driver/offload observations, and TCP
 congestion-control observations are complete, the route interface/gateway/source
@@ -92,8 +92,8 @@ and filter feature states. The active TCP congestion-control algorithm is read
 from Linux procfs. CloudMark does not enable or disable offloads, change the
 congestion-control algorithm, or accept an interface name from the Controller.
 Missing tools or unsupported virtual NIC features remain `unavailable`; they
-are not converted to zero. Network-v2 through network-v6 results remain
-readable under their original contracts and do not gain v7 claims.
+are not converted to zero. Network-v2 through network-v7 results remain
+readable under their original contracts and do not gain v8 claims.
 
 Each pre/post snapshot retains cumulative RX/TX bytes, packets, errors, and
 drops from structured `ip -s -j link` output. CloudMark computes a delta only
@@ -105,7 +105,7 @@ Agent control traffic when data and control share one NIC. Observed drops and
 errors remain comparable measured evidence; CloudMark never rejects a poor
 result merely because those values are non-zero.
 
-Network v7 also executes fixed read-only `ethtool -S` against that same
+Network v8 also executes fixed read-only `ethtool -S` against that same
 route-derived interface at both boundaries. Because driver statistic names are
 not standardized, CloudMark recognizes only a bounded set of common queue
 counter shapes, limits queue indexes to 0-127, and examines at most 4,096 lines
@@ -115,6 +115,24 @@ unclassified, queue-set or counter resets remain partial, and absent queue
 support remains unavailable. Per-queue evidence is observational and is not a
 comparison gate; making vendor-specific availability a hard requirement would
 systematically exclude otherwise valid NICs and clouds.
+
+At the pre-load boundary, Network v8 reads at most 64 KiB of Linux
+`/etc/resolv.conf`, persists configured nameserver address/family/class,
+redacts search-domain names while retaining their count, and accepts only a
+small allow-list of resolver options. When `dig` is installed, each Agent makes
+exactly one A and one AAAA query for the fixed IANA-reserved `example.com.`
+name, with one try, a two-second DNS timeout, and a five-second process
+watchdog. CloudMark retains the response status, elapsed wall time, answer
+count, and answer address classes but not returned addresses. The Controller
+cannot supply a query name or record type.
+
+This resolver evidence is diagnostic and observational. A system resolver may
+be a local stub backed by a cache, split-DNS policy, or an upstream resolver
+that CloudMark cannot identify. Therefore a single lookup never becomes a
+provider DNS latency or availability claim, never attributes the upstream
+service to the provider, and never gates network comparison eligibility.
+Missing `dig` produces configuration-only partial evidence rather than a zero
+or a rejected throughput Run. Windows resolver parity is not implemented.
 
 ## Safety gates
 
@@ -128,6 +146,8 @@ systematically exclude otherwise valid NICs and clouds.
 - iperf3 servers are one-shot and have watchdog deadlines;
 - route, MTU, bounded path-trace, NIC, aggregate/per-queue counter, and TCP-control probes use only the paired peer IP, the
   route-derived egress interface, fixed arguments, and read-only kernel state;
+- resolver queries use only the fixed `example.com.` name and A/AAAA record types,
+  and search-domain names and returned answer addresses are not persisted;
 - arbitrary commands and raw shell input are never accepted; and
 - only one saturation suite may target an Agent at a time.
 
@@ -135,15 +155,17 @@ The standard profile can saturate a provider link. It requires explicit
 `confirm_network_load` authorization and may incur provider egress or traffic
 charges, particularly across zones or regions.
 
-The Controller refuses to start Network v7 unless both Agents advertise
+The Controller refuses to start Network v8 unless both Agents advertise
 `iperf3`, `iproute2`, `tracepath`, `ethtool`, and Linux TCP congestion-control
 capabilities. This prevents an expensive load run that can never satisfy the
-v7 comparison contract.
+v8 comparison contract. `dig` is installed by the Network bootstrap pack and
+reported as a capability, but remains optional because resolver evidence is
+observational.
 
 ## Repeated campaign acquisition
 
 `network-campaign-v1` binds one fixed Target/Generator pair, topology evidence
-class, standard profile version, and Network v7 methodology for 3-30 distinct
+class, standard profile version, and Network v8 methodology for 3-30 distinct
 UTC-day windows. Creating the campaign does not generate traffic. The operator
 must explicitly confirm each window, and CloudMark counts at most one completed
 comparison-eligible Run per UTC day. Failed and cancelled attempts remain
@@ -161,8 +183,10 @@ identical shapes, placement or anti-affinity evidence, matching tool versions,
 fresh instances, several time windows, and preserved directional results.
 
 The network domain remains `Partial`. Driver-exposed per-queue NIC counters are
-observational and not yet normalized across every NIC family. CloudMark does
-not yet provide DNS coverage, administrative route-ownership verification,
+observational and not yet normalized across every NIC family. System-resolver
+diagnostics do not yet cover controlled authoritative DNS, repeated cache-cold
+resolution, DNSSEC, TCP fallback, or Windows. CloudMark does not yet provide
+administrative route-ownership verification,
 unattended campaign scheduling, cross-pair orchestration, physical-fabric
 verification, or mTLS Agent identity. Windows
 latency parsing currently supports English `ping` output, while Windows route

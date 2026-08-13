@@ -167,12 +167,12 @@ Controller is never an iperf3 endpoint.
 Version `0.5.0` adds authenticated remote dispatch of CPU, memory, and storage
 profiles, per-task heartbeat and cancellation, same-target load exclusion,
 provider/Agent attribution, and strict result-version validation. The current
-development head also implements the versioned `network-v7` standard profile
+development head also implements the versioned `network-v8` standard profile
 and the first `database-postgresql-v1` and `web-http-v1` client/server profiles.
 Compute and memory remain `Partial` until floating-point, crypto, compilation,
 latency, NUMA, and broader architecture coverage are implemented. Network
 remains partial until driver per-queue evidence is normalized across more NICs,
-cross-pair repeated windows, administrative path verification, and mTLS
+controlled DNS coverage, cross-pair repeated windows, administrative path verification, and mTLS
 enrollment are implemented. PostgreSQL remains
 partial until tail latency, replication, and recovery evidence are available.
 Web/API/TLS remains partial until generator-saturation validation, dynamic

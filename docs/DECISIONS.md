@@ -287,3 +287,22 @@ or queue-local drops, but `ethtool -S` names are driver-specific and not a
 portable completeness contract. Bounded observational normalization adds
 useful evidence without changing NIC configuration, penalizing providers whose
 drivers use different names, or rewriting an immutable sampling campaign.
+
+## D-023: Network v8 keeps system-resolver diagnostics bounded and observational
+
+**Decision:** Advance the standard peer profile to `network-v8`. At the
+pre-load boundary, each Linux Agent reads a bounded resolver configuration and,
+when `dig` is present, makes one A and one AAAA query for the fixed
+IANA-reserved `example.com.` name. Search-domain names and returned answer
+addresses are not persisted. The Controller cannot select another name,
+record type, retry count, or timeout. Cache state and upstream ownership are
+explicitly unknown, and incomplete resolver evidence does not invalidate an
+otherwise comparable Network v8 Run. Unfinished campaigns bound to older
+standard contracts become `superseded`.
+
+**Reason:** Resolver configuration and basic success/failure evidence are
+useful when evaluating VPS and smaller cloud providers, but one system lookup
+cannot isolate cache effects, split DNS, local stubs, authoritative service, or
+provider ownership. Keeping the probe fixed and observational adds diagnostic
+coverage without inventing a provider DNS benchmark or allowing arbitrary
+outbound queries.

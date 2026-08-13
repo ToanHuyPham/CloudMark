@@ -68,6 +68,10 @@ from .web_benchmark import (
 
 SERVICE_CONTROLLER_CONTACT_TIMEOUT_SECONDS = 20
 PATH_PROBE_MAX_HOPS = 8
+DNS_PROBE_NAME = "example.com."
+DNS_PROBE_RECORD_TYPES = ("A", "AAAA")
+DNS_PROBE_TIMEOUT_SECONDS = 5
+RESOLVER_CONFIG_MAX_BYTES = 65_536
 NETWORK_INTERFACE_PATTERN = re.compile(r"^[A-Za-z0-9_.:@-]{1,64}$")
 NETWORK_QUEUE_MAX_INDEX = 127
 NETWORK_QUEUE_MAX_STAT_LINES = 4096
@@ -110,6 +114,14 @@ NETWORK_OFFLOAD_FEATURES = {
     "tx-vlan-offload",
     "ntuple-filters",
     "receive-hashing",
+}
+RESOLVER_NUMERIC_OPTIONS = {"ndots", "timeout", "attempts"}
+RESOLVER_BOOLEAN_OPTIONS = {
+    "rotate",
+    "single-request",
+    "single-request-reopen",
+    "use-vc",
+    "trust-ad",
 }
 
 
@@ -198,6 +210,224 @@ def _parse_tracepath(stdout: str, destination: ipaddress.IPv4Address | ipaddress
         evidence["reason"] = "tracepath returned no parseable bounded hop observations."
     elif status == "partial":
         evidence["reason"] = "Bounded tracepath observations did not reach the paired destination."
+    return evidence
+
+
+def _parse_resolver_config(text: str, *, truncated: bool = False) -> dict[str, Any]:
+    """Normalize resolv.conf without persisting search-domain names."""
+    nameservers: list[dict[str, Any]] = []
+    search_domain_count = 0
+    options: dict[str, int | bool] = {}
+    invalid_nameservers = 0
+    for raw_line in text.splitlines():
+        line = raw_line.split("#", 1)[0].split(";", 1)[0].strip()
+        if not line:
+            continue
+        fields = line.split()
+        directive = fields[0].lower()
+        if directive == "nameserver" and len(fields) >= 2:
+            try:
+                address = ipaddress.ip_address(fields[1].split("%", 1)[0])
+            except ValueError:
+                invalid_nameservers += 1
+                continue
+            nameservers.append(
+                {
+                    "address": fields[1][:128],
+                    "address_family": f"ipv{address.version}",
+                    "address_class": _address_class(address),
+                }
+            )
+        elif directive in {"search", "domain"}:
+            search_domain_count += len(fields[1:])
+        elif directive == "options":
+            for token in fields[1:]:
+                name, separator, value = token.partition(":")
+                name = name.lower()
+                if name in RESOLVER_BOOLEAN_OPTIONS and not separator:
+                    options[name.replace("-", "_")] = True
+                elif name in RESOLVER_NUMERIC_OPTIONS and separator and value.isdigit():
+                    options[name] = min(int(value), 1_000_000)
+    status = "observed" if nameservers else "partial" if text.strip() else "unavailable"
+    result: dict[str, Any] = {
+        "status": status,
+        "source": "etc-resolv-conf",
+        "nameservers": nameservers[:16],
+        "nameserver_count": len(nameservers),
+        "search_domain_count": search_domain_count,
+        "options": options,
+        "invalid_nameserver_count": invalid_nameservers,
+        "truncated": truncated or len(nameservers) > 16,
+        "search_domain_names_persisted": False,
+    }
+    if status == "unavailable":
+        result["reason"] = "resolv.conf did not expose resolver configuration."
+    elif result["truncated"] or invalid_nameservers:
+        result["status"] = "partial"
+        result["reason"] = "Resolver configuration was truncated or contained an invalid nameserver entry."
+    return result
+
+
+def _parse_dig_response(
+    stdout: str,
+    stderr: str,
+    *,
+    record_type: str,
+    returncode: int,
+    elapsed_ms: float,
+) -> dict[str, Any]:
+    """Normalize one fixed dig query without retaining returned addresses."""
+    header = re.search(r"status:\s*([A-Z0-9_-]+)", stdout, re.IGNORECASE)
+    dns_status = header.group(1).upper() if header else None
+    address_classes: list[str] = []
+    answer_count = 0
+    for line in stdout.splitlines():
+        if not line or line.startswith(";"):
+            continue
+        fields = line.split()
+        if len(fields) < 5 or fields[-2].upper() != record_type:
+            continue
+        answer_count += 1
+        try:
+            answer = ipaddress.ip_address(fields[-1])
+        except ValueError:
+            continue
+        classification = _address_class(answer)
+        if classification not in address_classes:
+            address_classes.append(classification)
+    combined_error = f"{stderr}\n{stdout}".lower()
+    if returncode != 0:
+        status = (
+            "timeout"
+            if "timed out" in combined_error or "no servers could be reached" in combined_error
+            else "error"
+        )
+    elif dns_status == "NOERROR" and answer_count:
+        status = "resolved"
+    elif dns_status == "NOERROR":
+        status = "no-data"
+    elif dns_status == "NXDOMAIN":
+        status = "negative"
+    elif dns_status:
+        status = "response-error"
+    else:
+        status = "error"
+    result: dict[str, Any] = {
+        "record_type": record_type,
+        "status": status,
+        "dns_status": dns_status,
+        "elapsed_ms": round(elapsed_ms, 3),
+        "answer_count": answer_count,
+        "answer_address_classes": address_classes,
+        "answer_addresses_persisted": False,
+    }
+    if status in {"timeout", "error", "response-error"}:
+        result["reason"] = (
+            stderr.strip() or "The fixed resolver query did not return a successful DNS response."
+        )[:256]
+    return result
+
+
+def _resolver_evidence() -> dict[str, Any]:
+    """Collect one bounded diagnostic observation through the system resolver."""
+    observed_at = datetime.now(timezone.utc).isoformat()
+    try:
+        with Path("/etc/resolv.conf").open("r", encoding="utf-8", errors="replace") as handle:
+            config_text = handle.read(RESOLVER_CONFIG_MAX_BYTES + 1)
+        configuration = _parse_resolver_config(
+            config_text[:RESOLVER_CONFIG_MAX_BYTES],
+            truncated=len(config_text) > RESOLVER_CONFIG_MAX_BYTES,
+        )
+    except OSError:
+        configuration = {
+            "status": "unavailable",
+            "source": "etc-resolv-conf",
+            "nameservers": [],
+            "nameserver_count": 0,
+            "search_domain_count": 0,
+            "options": {},
+            "search_domain_names_persisted": False,
+            "reason": "resolv.conf could not be read.",
+        }
+    dig = shutil.which("dig")
+    queries: list[dict[str, Any]] = []
+    if dig:
+        environment = os.environ.copy()
+        environment["LC_ALL"] = "C"
+        for record_type in DNS_PROBE_RECORD_TYPES:
+            command = [
+                dig,
+                "+tries=1",
+                "+time=2",
+                "+nocmd",
+                "+noquestion",
+                "+noauthority",
+                "+noadditional",
+                "+comments",
+                "+answer",
+                DNS_PROBE_NAME,
+                record_type,
+            ]
+            started = time.monotonic()
+            try:
+                result = subprocess.run(
+                    command,
+                    capture_output=True,
+                    text=True,
+                    timeout=DNS_PROBE_TIMEOUT_SECONDS,
+                    check=False,
+                    shell=False,
+                    env=environment,
+                )
+                queries.append(
+                    _parse_dig_response(
+                        result.stdout,
+                        result.stderr,
+                        record_type=record_type,
+                        returncode=result.returncode,
+                        elapsed_ms=(time.monotonic() - started) * 1000,
+                    )
+                )
+            except subprocess.TimeoutExpired:
+                queries.append(
+                    {
+                        "record_type": record_type,
+                        "status": "timeout",
+                        "dns_status": None,
+                        "elapsed_ms": round((time.monotonic() - started) * 1000, 3),
+                        "answer_count": 0,
+                        "answer_address_classes": [],
+                        "answer_addresses_persisted": False,
+                        "reason": "The fixed resolver query exceeded its guarded timeout.",
+                    }
+                )
+    observed_queries = [item for item in queries if item["status"] in {"resolved", "no-data", "negative"}]
+    if configuration.get("status") == "observed" and len(observed_queries) == len(DNS_PROBE_RECORD_TYPES):
+        status = "complete"
+    elif configuration.get("status") in {"observed", "partial"} or observed_queries:
+        status = "partial"
+    else:
+        status = "unavailable"
+    evidence: dict[str, Any] = {
+        "status": status,
+        "scope": "agent-system-resolver-diagnostic",
+        "observed_at": observed_at,
+        "query_name": DNS_PROBE_NAME,
+        "query_name_policy": "fixed-iana-reserved-example-domain",
+        "configuration": configuration,
+        "queries": queries,
+        "tool": {"name": "dig" if dig else None, "timeout_seconds": DNS_PROBE_TIMEOUT_SECONDS},
+        "cache_state": "unknown",
+        "provider_dns_service_attributed": False,
+        "limitations": [
+            "The system resolver may use a local stub, cache, split DNS, or an upstream service not visible to CloudMark.",
+            "A single bounded lookup is diagnostic evidence, not a provider DNS latency or availability benchmark.",
+        ],
+    }
+    if not dig:
+        evidence["reason"] = "dig is not installed; only resolver configuration was observed."
+    elif status != "complete":
+        evidence["reason"] = "Resolver configuration or one of the fixed query outcomes was incomplete."
     return evidence
 
 
@@ -713,6 +943,7 @@ class AgentWorker:
     def _run_path_probe(self, payload: dict[str, Any]) -> dict[str, Any]:
         address = str(payload.get("target_address", ""))
         parsed = self._peer_address(address)
+        collect_resolver = payload.get("resolver_probe") is True
         policy = {
             "passive_route_lookup": True,
             "path_probe_max_hops": PATH_PROBE_MAX_HOPS,
@@ -720,6 +951,7 @@ class AgentWorker:
             "read_only_nic_evidence": True,
             "network_configuration_changed": False,
             "public_internet_traversal_inferred": False,
+            "fixed_resolver_diagnostic": collect_resolver,
         }
         if os.name == "nt":
             return {
@@ -959,7 +1191,7 @@ class AgentWorker:
                 queue_counter_evidence["reason"] = "The bounded ethtool statistics query timed out."
         interface_mtu = (link or {}).get("mtu")
         status = "complete" if isinstance(interface_mtu, int) else "partial"
-        return {
+        evidence = {
             "status": status,
             "address_family": f"ipv{parsed.version}",
             "route": {
@@ -989,6 +1221,9 @@ class AgentWorker:
             },
             "policy": policy,
         }
+        if collect_resolver:
+            evidence["resolver"] = _resolver_evidence()
+        return evidence
 
     def _collect_server(self, payload: dict[str, Any]) -> dict[str, Any]:
         server_task_id = str(payload.get("server_task_id", ""))

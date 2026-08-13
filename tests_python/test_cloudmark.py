@@ -13,7 +13,7 @@ import urllib.request
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, mock_open, patch
 
 from cloudmark.agent import (
     AgentBenchmarkFailure,
@@ -23,7 +23,10 @@ from cloudmark.agent import (
     _parse_ethtool_driver,
     _parse_ethtool_features,
     _parse_ethtool_queue_statistics,
+    _parse_dig_response,
+    _parse_resolver_config,
     _parse_tracepath,
+    _resolver_evidence,
     _tcp_congestion_control,
     join_session,
 )
@@ -1193,6 +1196,75 @@ class CloudMarkTests(unittest.TestCase):
         self.assertTrue(trace["reached_destination"])
         self.assertFalse(trace["public_internet_traversal_proven"])
 
+    def test_agent_redacts_search_domains_and_classifies_resolver_configuration(self) -> None:
+        evidence = _parse_resolver_config(
+            "nameserver 127.0.0.53\nnameserver 10.0.0.2\n"
+            "search internal.example provider.private\n"
+            "options ndots:5 timeout:2 rotate unknown:value\n"
+        )
+        self.assertEqual(evidence["status"], "observed")
+        self.assertEqual(evidence["nameserver_count"], 2)
+        self.assertEqual(evidence["nameservers"][0]["address_class"], "loopback")
+        self.assertEqual(evidence["nameservers"][1]["address_class"], "private")
+        self.assertEqual(evidence["search_domain_count"], 2)
+        self.assertFalse(evidence["search_domain_names_persisted"])
+        self.assertNotIn("internal.example", json.dumps(evidence))
+        self.assertEqual(evidence["options"], {"ndots": 5, "timeout": 2, "rotate": True})
+
+    def test_agent_normalizes_fixed_dns_outcomes_without_answer_addresses(self) -> None:
+        resolved = _parse_dig_response(
+            ";; ->>HEADER<<- opcode: QUERY, status: NOERROR, id: 1\n"
+            "example.com. 300 IN A 192.0.2.10\n",
+            "",
+            record_type="A",
+            returncode=0,
+            elapsed_ms=4.3219,
+        )
+        timeout = _parse_dig_response(
+            "",
+            ";; no servers could be reached",
+            record_type="AAAA",
+            returncode=9,
+            elapsed_ms=2001,
+        )
+        self.assertEqual(resolved["status"], "resolved")
+        self.assertEqual(resolved["answer_count"], 1)
+        self.assertEqual(resolved["answer_address_classes"], ["documentation"])
+        self.assertFalse(resolved["answer_addresses_persisted"])
+        self.assertNotIn("192.0.2.10", json.dumps(resolved))
+        self.assertEqual(timeout["status"], "timeout")
+
+    def test_agent_resolver_probe_uses_only_fixed_name_types_and_deadlines(self) -> None:
+        responses = [
+            SimpleNamespace(
+                returncode=0,
+                stdout=(
+                    ";; ->>HEADER<<- opcode: QUERY, status: NOERROR, id: 1\n"
+                    "example.com. 300 IN A 192.0.2.10\n"
+                ),
+                stderr="",
+            ),
+            SimpleNamespace(
+                returncode=0,
+                stdout=(
+                    ";; ->>HEADER<<- opcode: QUERY, status: NOERROR, id: 2\n"
+                    "example.com. 300 IN AAAA 2001:db8::10\n"
+                ),
+                stderr="",
+            ),
+        ]
+        with patch("cloudmark.agent.Path.open", mock_open(read_data="nameserver 10.0.0.2\n")), patch(
+            "cloudmark.agent.shutil.which", return_value="/usr/bin/dig"
+        ), patch("cloudmark.agent.subprocess.run", side_effect=responses) as run:
+            evidence = _resolver_evidence()
+        self.assertEqual(evidence["status"], "complete")
+        self.assertEqual(len(evidence["queries"]), 2)
+        self.assertEqual(run.call_count, 2)
+        self.assertEqual(run.call_args_list[0].args[0][-2:], ["example.com.", "A"])
+        self.assertEqual(run.call_args_list[1].args[0][-2:], ["example.com.", "AAAA"])
+        self.assertTrue(all(call.kwargs["timeout"] == 5 for call in run.call_args_list))
+        self.assertTrue(all(call.kwargs["shell"] is False for call in run.call_args_list))
+
     def test_agent_parses_bounded_ethtool_and_procfs_evidence(self) -> None:
         driver = _parse_ethtool_driver(
             "driver: virtio_net\nversion: 1.2.3\nsupports-statistics: yes\nunknown-field: ignored\n"
@@ -1609,7 +1681,7 @@ device_packets: 400
             self.assertFalse(result["policy"]["controller_in_data_path"])
             self.assertEqual(result["tool"]["version"], "iperf 3.17")
 
-    def test_standard_network_orchestrator_captures_all_v7_measurement_classes(self) -> None:
+    def test_standard_network_orchestrator_captures_all_v8_measurement_classes(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             database = Database(Path(directory) / "test.sqlite3")
             database.create_session("session_test", "pair", "hash", "2099-01-01T00:00:00+00:00")
@@ -1628,7 +1700,7 @@ device_packets: 400
             database.add_agent("agent_b", "session_test", "generator", "generator", system, endpoint={"address": "10.0.0.11"})
             total_steps = network_total_steps("network-peer-standard")
             database.create_run(
-                "run_network_v7",
+                "run_network_v8",
                 "network",
                 "network-peer-standard",
                 {"suite": "network"},
@@ -1688,6 +1760,32 @@ device_packets: 400
                                     "public_internet_traversal_proven": False,
                                 },
                             }
+                            if payload.get("resolver_probe") is True:
+                                result["resolver"] = {
+                                    "status": "complete",
+                                    "scope": "agent-system-resolver-diagnostic",
+                                    "observed_at": "2026-08-13T00:00:00+00:00",
+                                    "query_name": "example.com.",
+                                    "configuration": {
+                                        "status": "observed",
+                                        "nameservers": [
+                                            {
+                                                "address": "10.0.0.2",
+                                                "address_family": "ipv4",
+                                                "address_class": "private",
+                                            }
+                                        ],
+                                        "nameserver_count": 1,
+                                        "search_domain_count": 0,
+                                        "options": {},
+                                    },
+                                    "queries": [
+                                        {"record_type": "A", "status": "resolved", "elapsed_ms": 2.0},
+                                        {"record_type": "AAAA", "status": "resolved", "elapsed_ms": 3.0},
+                                    ],
+                                    "cache_state": "unknown",
+                                    "provider_dns_service_attributed": False,
+                                }
                             result["interface"].update({
                                 "driver": {"status": "observed", "driver": "gve", "version": "1.0"},
                                 "offloads": {
@@ -1772,10 +1870,10 @@ device_packets: 400
             worker = threading.Thread(target=complete_tasks, daemon=True)
             worker.start()
             try:
-                context = JobContext("run_network_v7", total_steps=total_steps, timeout_seconds=60)
+                context = JobContext("run_network_v8", total_steps=total_steps, timeout_seconds=60)
                 result = run_network(
                     database,
-                    "run_network_v7",
+                    "run_network_v8",
                     "session_test",
                     "network-peer-standard",
                     context=context,
@@ -1798,6 +1896,10 @@ device_packets: 400
             self.assertEqual(result["analysis"]["validity"]["interface_counter_evidence_status"], "complete")
             self.assertEqual(result["analysis"]["validity"]["queue_counter_evidence_status"], "complete")
             self.assertFalse(result["analysis"]["validity"]["queue_counter_evidence_required"])
+            self.assertEqual(result["analysis"]["validity"]["resolver_evidence_status"], "complete")
+            self.assertFalse(result["analysis"]["validity"]["resolver_evidence_required"])
+            self.assertEqual(len(result["analysis"]["resolver_observations"]), 2)
+            self.assertTrue(all(value == 2 for value in path_snapshots.values()))
             self.assertEqual(result["analysis"]["validity"]["path_trace_evidence_status"], "complete")
             self.assertEqual(result["analysis"]["validity"]["route_stability_status"], "complete")
             self.assertFalse(result["analysis"]["path_claims"]["public_internet_traversal_proven"])
@@ -1822,7 +1924,7 @@ device_packets: 400
         profile = NETWORK_PROFILES["network-peer-standard"]
         self.assertFalse(profile["cloud_to_controller"])
         self.assertEqual(profile["requires_agents"], 2)
-        self.assertEqual(profile["methodology_version"], "network-v7")
+        self.assertEqual(profile["methodology_version"], "network-v8")
         self.assertEqual(network_total_steps("network-peer-quick"), 4)
         self.assertEqual(network_total_steps("network-peer-standard"), 21)
 
@@ -2515,6 +2617,7 @@ Percentage of the requests served within a certain time (ms)
         self.assertIn("iproute2", plan.packages)
         self.assertIn("iputils-ping", plan.packages)
         self.assertIn("iputils-tracepath", plan.packages)
+        self.assertIn("dnsutils", plan.packages)
 
     def test_bootstrap_compute_and_memory_packs_include_required_tools(self) -> None:
         with patch("cloudmark.bootstrap.detect_manager", return_value="apt"):

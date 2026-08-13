@@ -52,9 +52,17 @@ baseline is still the repository head.
   queue distribution, busiest-queue share, and explicit vendor-counter
   limitations; queue evidence is observational rather than a comparison gate,
   while unfinished campaigns locked to an older standard profile are preserved
-  as `superseded`; the complete development head passes 95 Python tests, 3
-  rendered-dashboard tests, dashboard lint, and the production build without
-  starting provider load;
+  as `superseded`;
+- simulation-verified `network-v8` standard orchestration with a bounded
+  pre-load Linux system-resolver diagnostic on both Agents: at most 64 KiB of
+  resolver configuration, redacted search-domain names, and—when `dig` is
+  present—one fixed A and AAAA query for `example.com.` with strict retries and
+  deadlines. Query answers are reduced to count and address class; cache state
+  and upstream/provider attribution remain explicitly unknown. Resolver
+  evidence is observational and does not alter comparison validity. The
+  complete development head passes 98 Python tests, 3 rendered-dashboard
+  tests, dashboard lint, and the production build without starting provider
+  load;
 - simulation-verified `database-postgresql-v1` paired executor with isolated
   Target clusters, Generator-side built-in pgbench workloads, durable settings,
   progress/control heartbeat, fixed safety limits, and verified cleanup; the
@@ -66,7 +74,10 @@ baseline is still the repository head.
   fixed safety limits, and verified cleanup; the complete milestone passes 64
   Python tests, 3 rendered-dashboard tests, dashboard lint, and the production
   build without starting provider load;
-- responsive dashboard navigation and execution-target selection;
+- responsive dashboard navigation and execution-target selection; the mobile
+  navigation uses stable 12 px labels in a contained horizontal scroller and
+  was browser-verified at 390 px and 1,280 px without page-level horizontal
+  overflow;
 - `suitability-v1` target-scoped Essential, Standard, and Demanding workload
   gates for all 12 use cases, with per-check Run ID/profile/methodology/time
   provenance, 30-day freshness, cleanup/methodology validity gates, explicit
@@ -152,7 +163,7 @@ Controller run: `run_1c572100e8704843`.
 
 ## Known limitations
 
-- network coverage is Partial: `network-v7` implements Linux pre/post
+- network coverage is Partial: `network-v8` implements Linux pre/post
   route-derived interface counters, egress-interface, interface-MTU and
   path-MTU evidence, bounded destination-reaching numeric traces, endpoint/hop
   address classification, route-stability evidence, read-only NIC driver and selected offload state,
@@ -164,8 +175,11 @@ Controller run: `run_1c572100e8704843`.
   ownership or a public path, and same-host placement and the physical provider
   fabric cannot yet be proven; bounded common driver per-queue counters are
   observational but are not normalized across every NIC family and do not
-  include interrupt/RSS/RPS/XPS affinity; manual fixed-pair repeated UTC-day
-  campaigns are implemented, while unattended scheduling, cross-pair
+  include interrupt/RSS/RPS/XPS affinity; fixed system-resolver configuration
+  and A/AAAA diagnostics are observational, with no controlled authoritative
+  server, cache-cold repetition, DNSSEC, TCP fallback, or Windows parity;
+  manual fixed-pair repeated UTC-day campaigns are implemented, while
+  unattended scheduling, cross-pair
   orchestration, Windows route parity, and mTLS remain unimplemented;
 - PostgreSQL database coverage is Partial: read-only, durable read/write,
   concurrency, and connection churn are implemented; transaction tail
@@ -191,8 +205,9 @@ Controller run: `run_1c572100e8704843`.
 ## Next priorities
 
 1. Add physical-host/fabric and administrative-path verification, wider NIC
-   queue-counter normalization plus interrupt/RSS/RPS/XPS affinity, DNS
-   coverage, unattended campaign scheduling, and Windows route parity
+   queue-counter normalization plus interrupt/RSS/RPS/XPS affinity, controlled
+   authoritative/cache-cold/DNSSEC resolver coverage, unattended campaign
+   scheduling, and Windows route parity
    before promoting the network domain from Partial.
 2. Add Web generator-saturation validation and dynamic application,
    HTTP/2/3, reverse-proxy, CDN, WAF, and autoscaling evidence.

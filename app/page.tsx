@@ -94,6 +94,32 @@ type MemoryMetric = {
 
 type NetworkEndpoint = { id: string; name: string; role: string; address?: string };
 
+type NetworkResolverEvidence = {
+  status: "complete" | "partial" | "unavailable";
+  observed_at?: string;
+  scope?: string;
+  query_name?: string;
+  configuration: {
+    status: "observed" | "partial" | "unavailable";
+    nameservers: { address?: string; address_family?: string; address_class?: string }[];
+    nameserver_count: number;
+    search_domain_count: number;
+    options: Record<string, number | boolean>;
+    search_domain_names_persisted?: false;
+  };
+  queries: {
+    record_type: "A" | "AAAA";
+    status: "resolved" | "no-data" | "negative" | "timeout" | "error" | "response-error";
+    dns_status?: string | null;
+    elapsed_ms?: number;
+    answer_count?: number;
+    answer_address_classes?: string[];
+  }[];
+  cache_state?: "unknown";
+  provider_dns_service_attributed?: false;
+  reason?: string;
+};
+
 type NetworkTcpMeasurement = {
   direction: string;
   sender: NetworkEndpoint;
@@ -198,6 +224,7 @@ type NetworkPathMeasurement = {
       reason?: string;
       limitation?: string;
     };
+    resolver?: NetworkResolverEvidence;
   };
 };
 
@@ -411,6 +438,10 @@ type Run = {
         public_internet_traversal_proven: false;
         limitation: string;
       };
+      resolver_observations?: (NetworkResolverEvidence & {
+        direction: string;
+        agent?: NetworkEndpoint;
+      })[];
       validity?: {
         route_evidence_status: "complete" | "partial" | "unavailable";
         nic_evidence_status: "complete" | "partial" | "unavailable";
@@ -419,6 +450,8 @@ type Run = {
         interface_counter_evidence_required: boolean;
         queue_counter_evidence_status: "complete" | "partial" | "unavailable";
         queue_counter_evidence_required: false;
+        resolver_evidence_status: "complete" | "partial" | "unavailable";
+        resolver_evidence_required: false;
         path_trace_evidence_status: "complete" | "partial" | "unavailable";
         path_trace_evidence_required: boolean;
         route_stability_status: "complete" | "partial" | "changed" | "unavailable";
@@ -869,11 +902,11 @@ export default function Home() {
       const agent = selectedSession?.agents.find((item) => item.role === role);
       const capabilities = agent?.system.inventory?.capabilities || {};
       return capabilities.iperf3
-        && (!["network-v4", "network-v5", "network-v6", "network-v7"].includes(selectedNetworkMethodology || "")
+        && (!["network-v4", "network-v5", "network-v6", "network-v7", "network-v8"].includes(selectedNetworkMethodology || "")
           || (capabilities.iproute2
             && capabilities.ethtool
             && capabilities.tcp_congestion_control
-            && (!["network-v6", "network-v7"].includes(selectedNetworkMethodology || "") || capabilities.tracepath)));
+            && (!["network-v6", "network-v7", "network-v8"].includes(selectedNetworkMethodology || "") || capabilities.tracepath)));
     });
   const selectedNetworkCampaign = dashboard?.network_campaigns.find(
     (campaign) => campaign.session_id === selectedSession?.id && campaign.profile === selectedNetworkProfile,
@@ -886,6 +919,7 @@ export default function Home() {
   const networkAnalysis = latestNetwork?.result?.analysis?.directions || [];
   const networkCounterDeltas = latestNetwork?.result?.analysis?.interface_counter_deltas || [];
   const networkQueueDeltas = latestNetwork?.result?.analysis?.queue_counter_deltas || [];
+  const networkResolverObservations = latestNetwork?.result?.analysis?.resolver_observations || [];
   const networkPathStability = latestNetwork?.result?.analysis?.path_stability || [];
   const networkValidity = latestNetwork?.result?.analysis?.validity;
   const maxNetworkRate = Math.max(1, ...networkMeasurements.map((item) => item.metrics.received_bits_per_second || 0));
@@ -1661,8 +1695,8 @@ export default function Home() {
             {pairing && <section className="panel agent-commands"><div><span className="section-kicker">RUN ON PROVIDER VMS</span><h3>Start one persistent worker on each clean machine</h3></div><code>cloudmark agent --controller https://CONTROLLER --session {pairing.id} --token {pairing.join_token} --role target --advertise-address VM_A_IP</code><code>cloudmark agent --controller https://CONTROLLER --session {pairing.id} --token {pairing.join_token} --role generator --advertise-address VM_B_IP</code><p>Use <strong>--allow-http</strong> only when Controller access is restricted to a trusted private management network.</p></section>}
             <section className="panel session-panel">
               <div className="panel-head"><div><span className="section-kicker">AGENT CONTROL PLANE</span><h3>Pairing readiness</h3></div><label className="compact-select"><span>SESSION</span><select value={selectedSession?.id || ""} onChange={(event) => setSelectedSessionId(event.target.value)}>{dashboard?.sessions.map((session) => <option key={session.id} value={session.id}>{session.label} · {session.topology.scope} / {session.topology.verification.status} · {session.status}</option>)}</select></label></div>
-              {selectedSession ? <div className="agent-roster">{["target", "generator"].map((role) => { const agent = selectedSession.agents.find((item) => item.role === role); const capabilities = agent?.system.inventory?.capabilities || {}; const standardProfile = ["network-v4", "network-v5", "network-v6", "network-v7"].includes(selectedNetworkMethodology || ""); const traceRequired = ["network-v6", "network-v7"].includes(selectedNetworkMethodology || ""); const agentReady = capabilities.iperf3 && (!standardProfile || (capabilities.iproute2 && capabilities.ethtool && capabilities.tcp_congestion_control && (!traceRequired || capabilities.tracepath))); return <article key={role} className={agent && agentReady ? "connected" : "waiting"}><span>{role.toUpperCase()}</span><strong>{agent?.name || `Waiting for ${role}`}</strong><small>{agent ? `${agent.endpoint.address || "No advertised IP"} · ${agentReady ? standardProfile ? "Network standard ready" : "iperf3 ready" : "Network prerequisites missing"}` : "Join command has not connected"}</small></article>; })}</div> : <div className="empty-row">Create a session, then connect both provider agents.</div>}
-              <div className="session-actions"><p><strong>{selectedSession?.status !== "ready" ? "Two agents required" : selectedSessionNetworkReady ? "Ready to measure" : "Network prerequisites missing"}</strong><small>Network v7 requires iperf3, iproute2, tracepath, ethtool, and Linux TCP-control evidence on both Agents.</small></p><button className="button primary" onClick={startNetwork} disabled={busy || Boolean(activeNetwork) || selectedSession?.status !== "ready" || !selectedSessionNetworkReady}>Run network assessment</button></div>
+              {selectedSession ? <div className="agent-roster">{["target", "generator"].map((role) => { const agent = selectedSession.agents.find((item) => item.role === role); const capabilities = agent?.system.inventory?.capabilities || {}; const standardProfile = ["network-v4", "network-v5", "network-v6", "network-v7", "network-v8"].includes(selectedNetworkMethodology || ""); const traceRequired = ["network-v6", "network-v7", "network-v8"].includes(selectedNetworkMethodology || ""); const agentReady = capabilities.iperf3 && (!standardProfile || (capabilities.iproute2 && capabilities.ethtool && capabilities.tcp_congestion_control && (!traceRequired || capabilities.tracepath))); return <article key={role} className={agent && agentReady ? "connected" : "waiting"}><span>{role.toUpperCase()}</span><strong>{agent?.name || `Waiting for ${role}`}</strong><small>{agent ? `${agent.endpoint.address || "No advertised IP"} · ${agentReady ? standardProfile ? capabilities.dig ? "Network v8 ready" : "Network v8 ready · DNS config only" : "iperf3 ready" : "Network prerequisites missing"}` : "Join command has not connected"}</small></article>; })}</div> : <div className="empty-row">Create a session, then connect both provider agents.</div>}
+              <div className="session-actions"><p><strong>{selectedSession?.status !== "ready" ? "Two agents required" : selectedSessionNetworkReady ? "Ready to measure" : "Network prerequisites missing"}</strong><small>Network v8 requires iperf3, iproute2, tracepath, ethtool, and Linux TCP-control evidence. dig adds bounded resolver queries but is not a comparison gate.</small></p><button className="button primary" onClick={startNetwork} disabled={busy || Boolean(activeNetwork) || selectedSession?.status !== "ready" || !selectedSessionNetworkReady}>Run network assessment</button></div>
             </section>
             <section className="panel campaign-panel">
               <div className="panel-head"><div><span className="section-kicker">REPEATED UTC-DAY EVIDENCE</span><h3>{selectedNetworkCampaign?.label || "Create a fixed-pair campaign"}</h3></div><span className="run-id">{selectedNetworkCampaign?.contract_version?.toUpperCase() || "STANDARD PROFILE ONLY"}</span></div>
@@ -1700,7 +1734,12 @@ export default function Home() {
                 {networkQueueDeltas.length > 0 && <article className="panel network-evidence-card">
                   <div className="panel-head"><div><span className="section-kicker">DRIVER QUEUE WINDOW</span><h3>Per-queue traffic distribution</h3></div><span className="run-id">{networkValidity?.queue_counter_evidence_status?.toUpperCase() || "UNKNOWN"}</span></div>
                   <div className="evidence-rows">{networkQueueDeltas.map((item) => <div key={item.direction}><span>{item.sender?.name || item.direction} · {item.interface || "Interface unavailable"}</span><strong>{item.status !== "unavailable" ? `${item.rx_distribution?.active_queues || 0} RX · ${item.tx_distribution?.active_queues || 0} TX active queues` : "Per-queue counters unavailable"}</strong><small>{item.status !== "unavailable" ? `Busiest RX queue ${item.rx_distribution?.busiest_queue ?? "—"}: ${item.rx_distribution?.busiest_queue_percent?.toFixed(1) ?? "—"}% · ${item.total_dropped ?? "—"} driver drops · ${item.total_errors ?? "—"} errors` : item.reason}</small></div>)}</div>
-                  <p className="method-note">Network v7 recognizes only bounded common ethtool queue-counter names. Vendor-specific counters remain unclassified evidence, and missing per-queue support never becomes a zero or invalidates throughput.</p>
+                  <p className="method-note">Network v8 recognizes only bounded common ethtool queue-counter names. Vendor-specific counters remain unclassified evidence, and missing per-queue support never becomes a zero or invalidates throughput.</p>
+                </article>}
+                {networkResolverObservations.length > 0 && <article className="panel network-evidence-card">
+                  <div className="panel-head"><div><span className="section-kicker">SYSTEM RESOLVER</span><h3>Bounded DNS diagnostic</h3></div><span className="run-id">{networkValidity?.resolver_evidence_status?.toUpperCase() || "UNKNOWN"}</span></div>
+                  <div className="evidence-rows">{networkResolverObservations.map((item) => { const serverClasses = [...new Set(item.configuration.nameservers.map((server) => server.address_class).filter(Boolean))]; const queries = item.queries.map((query) => `${query.record_type} ${query.status}${typeof query.elapsed_ms === "number" ? ` ${query.elapsed_ms.toFixed(1)} ms` : ""}`).join(" · "); return <div key={item.direction}><span>{item.agent?.name || item.direction} · {item.configuration.nameserver_count} configured resolver{item.configuration.nameserver_count === 1 ? "" : "s"}</span><strong>{queries || "Active DNS query unavailable"}</strong><small>{serverClasses.length ? `Resolver address classes: ${serverClasses.join(", ")}` : item.reason || "Resolver identity unavailable"}</small></div>; })}</div>
+                  <p className="method-note">CloudMark queries only the fixed IANA example domain once for A and AAAA through each Agent&apos;s configured resolver. Cache state, split-DNS behavior, upstream ownership, and provider DNS attribution remain unknown; this evidence is diagnostic and never a comparison gate.</p>
                 </article>}
                 {pathMeasurements.length > 0 && <article className="panel network-evidence-card">
                   <div className="panel-head"><div><span className="section-kicker">NIC AND TCP CONTROL</span><h3>Driver and offload evidence</h3></div><span className="run-id">{networkValidity?.nic_evidence_status?.toUpperCase() || "UNKNOWN"}</span></div>
@@ -1710,7 +1749,7 @@ export default function Home() {
                 {networkAnalysis.length > 0 && <article className="panel network-evidence-card">
                   <div className="panel-head"><div><span className="section-kicker">MEASUREMENT VALIDITY</span><h3>Generator headroom</h3></div><span className="run-id">{networkValidity?.comparison_eligible ? "COMPARABLE" : "NOT COMPARABLE"}</span></div>
                   <div className="evidence-rows">{networkAnalysis.map((item) => <div key={item.direction}><span>{item.direction}</span><strong>{item.generator_headroom?.status || "unknown"}</strong><small>{item.generator_headroom?.peak_cpu_percent?.toFixed(1) ?? "—"}% peak Generator CPU · {item.generator_headroom?.stream_scaling_gain_percent?.toFixed(1) ?? "—"}% P1→P16 gain</small></div>)}</div>
-                  <p className="method-note">CloudMark excludes network-v7 evidence from suitability and provider comparison when route identity and stability, bounded destination-reaching traces, NIC/TCP-control evidence, the aggregate interface-counter window, or Generator headroom is incomplete. Driver per-queue evidence is observational because counter names vary by NIC.</p>
+                  <p className="method-note">CloudMark excludes network-v8 evidence from suitability and provider comparison when route identity and stability, bounded destination-reaching traces, NIC/TCP-control evidence, the aggregate interface-counter window, or Generator headroom is incomplete. Driver per-queue and system-resolver evidence remain observational.</p>
                 </article>}
                 <article className="panel network-evidence-card">
                   <div className="panel-head"><div><span className="section-kicker">LATENCY UNDER LOAD</span><h3>Idle versus TCP RTT</h3></div><span className="run-id">UNSCORED</span></div>
@@ -1728,7 +1767,7 @@ export default function Home() {
               </section>
             )}
             <section className="network-checks">
-              {[["TCP", "1 / 4 / 8 / 16 streams", "AVAILABLE"], ["UDP", "25 / 50 / 90% adaptive sweep", "AVAILABLE IN STANDARD"], ["TRACE", "address class · ≤8 numeric hops", "READ-ONLY IN NETWORK-V7"], ["NIC", "driver · offloads · congestion control", "READ-ONLY IN STANDARD"], ["QUEUES", "driver RX/TX queue distribution", "OBSERVATIONAL IN NETWORK-V7"], ["COUNTERS", "pre/post bytes · packets · drops · errors", "READ-ONLY IN NETWORK-V7"], ["VALIDITY", "Route · trace · NIC · counters · Generator", "ENFORCED IN NETWORK-V7"]].map(([name, detail, state]) => <article key={name}><span>{name}</span><strong>{detail}</strong><small>{state}</small></article>)}
+              {[["TCP", "1 / 4 / 8 / 16 streams", "AVAILABLE"], ["UDP", "25 / 50 / 90% adaptive sweep", "AVAILABLE IN STANDARD"], ["TRACE", "address class · ≤8 numeric hops", "READ-ONLY IN NETWORK-V8"], ["NIC", "driver · offloads · congestion control", "READ-ONLY IN STANDARD"], ["QUEUES", "driver RX/TX queue distribution", "OBSERVATIONAL IN NETWORK-V8"], ["COUNTERS", "pre/post bytes · packets · drops · errors", "READ-ONLY IN NETWORK-V8"], ["DNS", "fixed A/AAAA system-resolver diagnostic", "OBSERVATIONAL IN NETWORK-V8"], ["VALIDITY", "Route · trace · NIC · counters · Generator", "ENFORCED IN NETWORK-V8"]].map(([name, detail, state]) => <article key={name}><span>{name}</span><strong>{detail}</strong><small>{state}</small></article>)}
             </section>
           </div>
         )}

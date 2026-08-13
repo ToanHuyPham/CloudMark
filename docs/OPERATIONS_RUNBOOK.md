@@ -140,9 +140,12 @@ repository.
 7. Preserve failed runs; diagnose them before retrying.
 8. Repeat official profiles in multiple time windows.
 
-For Network v7, install the network pack on both Agents and restart them so
+For Network v8, install the network pack on both Agents and restart them so
 inventory reports `iperf3`, `iproute2`, `tracepath`, `ethtool`, and Linux TCP
-congestion-control support. A Standard Run is comparison-ineligible when either
+congestion-control support. The same pack installs `dig`; when it remains
+unavailable, the Run records configuration-only partial resolver evidence but
+does not fail its comparison contract. A Standard Run is comparison-ineligible
+when either
 bounded trace does not reach its paired destination or when interface, gateway,
 or source-route identity changes between the pre-load and post-load boundary.
 Review the retained hop and address-class evidence as descriptive only; it does
@@ -150,6 +153,9 @@ not prove provider ownership or public-Internet transit.
 Review driver queue distribution separately. An `unavailable` per-queue result
 usually means that the virtual NIC does not expose a recognized `ethtool -S`
 counter shape; it does not turn throughput into a failed or zero result.
+Review system-resolver observations as diagnostics only: a local stub, cache,
+split DNS, or unidentified upstream prevents provider attribution from a
+single fixed query.
 
 For a repeated network campaign, keep the same Target/Generator pair and
 topology declaration for the entire contract. In the Network dashboard select

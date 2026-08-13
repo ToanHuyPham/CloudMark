@@ -87,13 +87,13 @@ def validate_network_run(
         if not capabilities.get("iperf3"):
             raise ValueError(f"Agent {agent['name']} does not report the iperf3 capability.")
         methodology_version = str(NETWORK_PROFILES[profile_name]["methodology_version"])
-        if methodology_version in {"network-v4", "network-v5", "network-v6", "network-v7"}:
+        if methodology_version in {"network-v4", "network-v5", "network-v6", "network-v7", "network-v8"}:
             missing = [
                 capability
                 for capability in ("iproute2", "ethtool", "tcp_congestion_control")
                 if not capabilities.get(capability)
             ]
-            if methodology_version in {"network-v6", "network-v7"} and not capabilities.get("tracepath"):
+            if methodology_version in {"network-v6", "network-v7", "network-v8"} and not capabilities.get("tracepath"):
                 missing.append("tracepath")
             if missing:
                 raise ValueError(
@@ -286,9 +286,9 @@ def network_default_timeout(profile_name: str) -> int:
             // 1000
             + 20,
         )
-    path_seconds = directions * 90 if profile.get("path_probe") else 0
+    path_seconds = directions * 120 if profile.get("path_probe") else 0
     if profile.get("post_path_probe"):
-        path_seconds += directions * 90
+        path_seconds += directions * 120
     return tcp_seconds + udp_seconds + bidirectional_seconds + latency_seconds + path_seconds + 120
 
 
@@ -301,6 +301,7 @@ def _path_measurement(
     sender: dict[str, Any],
     receiver: dict[str, Any],
     phase: str = "pre-load",
+    resolver_probe: bool = False,
 ) -> dict[str, Any]:
     receiver_address = _address(receiver)
     label = f"{sender['name']} to {receiver['name']} - {phase} route, NIC, and interface evidence"
@@ -311,9 +312,9 @@ def _path_measurement(
         session_id,
         sender["id"],
         "network-path-probe",
-        {"target_address": receiver_address},
+        {"target_address": receiver_address, "resolver_probe": resolver_probe},
     )
-    task = _wait_task(database, task_id, context, 90)
+    task = _wait_task(database, task_id, context, 120)
     evidence = task.get("result") or {}
     if not isinstance(evidence, dict):
         raise NetworkError("Peer path probe returned an invalid result.")
@@ -750,6 +751,41 @@ def _network_analysis(result: dict[str, Any]) -> dict[str, Any]:
         nic_status = "partial"
     else:
         nic_status = "unavailable"
+    resolver_observations: list[dict[str, Any]] = []
+    resolver_statuses: list[str] = []
+    for item in path_items:
+        resolver = (item.get("evidence") or {}).get("resolver") or {}
+        configuration = resolver.get("configuration") or {}
+        status = str(resolver.get("status", "unavailable"))
+        resolver_statuses.append(status)
+        resolver_observations.append(
+            {
+                "direction": item.get("direction"),
+                "agent": item.get("sender"),
+                "status": status,
+                "observed_at": resolver.get("observed_at"),
+                "scope": resolver.get("scope", "agent-system-resolver-diagnostic"),
+                "query_name": resolver.get("query_name"),
+                "configuration": {
+                    "status": configuration.get("status", "unavailable"),
+                    "nameservers": configuration.get("nameservers") or [],
+                    "nameserver_count": configuration.get("nameserver_count", 0),
+                    "search_domain_count": configuration.get("search_domain_count", 0),
+                    "options": configuration.get("options") or {},
+                    "search_domain_names_persisted": False,
+                },
+                "queries": resolver.get("queries") or [],
+                "cache_state": resolver.get("cache_state", "unknown"),
+                "provider_dns_service_attributed": False,
+                "reason": resolver.get("reason"),
+            }
+        )
+    if len(resolver_statuses) >= 2 and all(status == "complete" for status in resolver_statuses):
+        resolver_status = "complete"
+    elif any(status in {"complete", "partial"} for status in resolver_statuses):
+        resolver_status = "partial"
+    else:
+        resolver_status = "unavailable"
     pre_by_direction = {str(item.get("direction", "")): item for item in path_items if item.get("direction")}
     post_by_direction = {
         str(item.get("direction", "")): item
@@ -943,16 +979,16 @@ def _network_analysis(result: dict[str, Any]) -> dict[str, Any]:
     if generator_status != "adequate":
         validity_reasons.append(f"generator-headroom-{generator_status}")
     methodology_version = str(result.get("methodology_version", ""))
-    nic_evidence_required = methodology_version in {"network-v4", "network-v5", "network-v6", "network-v7"}
+    nic_evidence_required = methodology_version in {"network-v4", "network-v5", "network-v6", "network-v7", "network-v8"}
     if nic_evidence_required and nic_status != "complete":
         validity_reasons.append("nic-offload-and-tcp-control-evidence-incomplete")
-    counter_evidence_required = methodology_version in {"network-v5", "network-v6", "network-v7"}
+    counter_evidence_required = methodology_version in {"network-v5", "network-v6", "network-v7", "network-v8"}
     if counter_evidence_required and counter_status != "complete":
         validity_reasons.append("interface-counter-window-evidence-incomplete")
-    path_trace_required = methodology_version in {"network-v6", "network-v7"}
+    path_trace_required = methodology_version in {"network-v6", "network-v7", "network-v8"}
     if path_trace_required and path_trace_status != "complete":
         validity_reasons.append("bounded-path-trace-evidence-incomplete")
-    route_stability_required = methodology_version in {"network-v6", "network-v7"}
+    route_stability_required = methodology_version in {"network-v6", "network-v7", "network-v8"}
     if route_stability_required and route_stability_status != "complete":
         validity_reasons.append(
             "route-stability-evidence-changed"
@@ -971,6 +1007,7 @@ def _network_analysis(result: dict[str, Any]) -> dict[str, Any]:
         "directions": directions,
         "interface_counter_deltas": interface_counter_deltas,
         "queue_counter_deltas": queue_counter_deltas,
+        "resolver_observations": resolver_observations,
         "path_stability": path_stability,
         "path_claims": {
             "public_internet_traversal_proven": False,
@@ -985,6 +1022,8 @@ def _network_analysis(result: dict[str, Any]) -> dict[str, Any]:
             "interface_counter_evidence_required": counter_evidence_required,
             "queue_counter_evidence_status": queue_status,
             "queue_counter_evidence_required": False,
+            "resolver_evidence_status": resolver_status,
+            "resolver_evidence_required": False,
             "path_trace_evidence_status": path_trace_status,
             "path_trace_evidence_required": path_trace_required,
             "route_stability_status": route_stability_status,
@@ -1014,6 +1053,7 @@ def run_network(
     bidirectional_streams = profile.get("bidirectional_streams")
     path_probe = profile.get("path_probe") is True
     post_path_probe = profile.get("post_path_probe") is True
+    resolver_probe = profile.get("resolver_probe") is True
     result: dict[str, Any] = {
         "suite": "network",
         "profile": profile_name,
@@ -1034,6 +1074,7 @@ def run_network(
             "read_only_nic_and_tcp_control_evidence": path_probe,
             "read_only_pre_post_interface_counters": post_path_probe,
             "bounded_numeric_path_trace": path_probe,
+            "bounded_system_resolver_diagnostic": resolver_probe,
             "public_internet_traversal_inferred": False,
             "port_range": [ALLOWED_PORT_MIN, ALLOWED_PORT_MAX],
         },
@@ -1061,6 +1102,7 @@ def run_network(
                     session_id=session_id,
                     sender=sender,
                     receiver=receiver,
+                    resolver_probe=resolver_probe,
                 )
                 result["path_measurements"].append(measurement)
                 result["analysis"] = _network_analysis(result)
