@@ -69,6 +69,15 @@ from .web_benchmark import (
 SERVICE_CONTROLLER_CONTACT_TIMEOUT_SECONDS = 20
 PATH_PROBE_MAX_HOPS = 8
 NETWORK_INTERFACE_PATTERN = re.compile(r"^[A-Za-z0-9_.:@-]{1,64}$")
+IPV4_PRIVATE_NETWORKS = tuple(
+    ipaddress.ip_network(value) for value in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16")
+)
+IPV4_DOCUMENTATION_NETWORKS = tuple(
+    ipaddress.ip_network(value) for value in ("192.0.2.0/24", "198.51.100.0/24", "203.0.113.0/24")
+)
+IPV4_SHARED_NETWORK = ipaddress.ip_network("100.64.0.0/10")
+IPV6_UNIQUE_LOCAL_NETWORK = ipaddress.ip_network("fc00::/7")
+IPV6_DOCUMENTATION_NETWORK = ipaddress.ip_network("2001:db8::/32")
 NETWORK_OFFLOAD_FEATURES = {
     "rx-checksumming",
     "tx-checksumming",
@@ -82,6 +91,94 @@ NETWORK_OFFLOAD_FEATURES = {
     "ntuple-filters",
     "receive-hashing",
 }
+
+
+def _address_class(address: ipaddress.IPv4Address | ipaddress.IPv6Address) -> str:
+    """Return an explicit routing class without inferring path ownership."""
+    if address.is_unspecified:
+        return "unspecified"
+    if address.is_loopback:
+        return "loopback"
+    if address.is_multicast:
+        return "multicast"
+    if address.is_link_local:
+        return "link-local"
+    if isinstance(address, ipaddress.IPv4Address):
+        if address in IPV4_SHARED_NETWORK:
+            return "shared-address-space"
+        if any(address in network for network in IPV4_DOCUMENTATION_NETWORKS):
+            return "documentation"
+        if any(address in network for network in IPV4_PRIVATE_NETWORKS):
+            return "private"
+    else:
+        if address in IPV6_DOCUMENTATION_NETWORK:
+            return "documentation"
+        if address in IPV6_UNIQUE_LOCAL_NETWORK:
+            return "unique-local"
+    if address.is_global:
+        return "global-unicast"
+    if address.is_reserved:
+        return "reserved"
+    return "non-global-unicast"
+
+
+def _address_value_class(value: Any) -> str | None:
+    try:
+        return _address_class(ipaddress.ip_address(str(value)))
+    except ValueError:
+        return None
+
+
+def _parse_tracepath(stdout: str, destination: ipaddress.IPv4Address | ipaddress.IPv6Address) -> dict[str, Any]:
+    """Normalize at most one numeric tracepath observation per bounded hop."""
+    observations: dict[int, dict[str, Any]] = {}
+    for line in stdout.splitlines():
+        match = re.match(r"^\s*(\d+)\??:\s*(.*)$", line)
+        if not match:
+            continue
+        hop = int(match.group(1))
+        if not 1 <= hop <= PATH_PROBE_MAX_HOPS:
+            continue
+        body = match.group(2).strip()
+        parsed_address: ipaddress.IPv4Address | ipaddress.IPv6Address | None = None
+        for token in body.split():
+            candidate = token.strip("[](),")
+            try:
+                parsed_address = ipaddress.ip_address(candidate)
+                break
+            except ValueError:
+                continue
+        rtt_match = re.search(r"(?<![\w.])(\d+(?:\.\d+)?)\s*ms\b", body, re.IGNORECASE)
+        reached = bool(re.search(r"\breached\b", body, re.IGNORECASE)) and parsed_address == destination
+        observation: dict[str, Any] = {
+            "hop": hop,
+            "state": "observed" if parsed_address is not None else "no-reply",
+            "address": str(parsed_address) if parsed_address is not None else None,
+            "address_class": _address_class(parsed_address) if parsed_address is not None else None,
+            "rtt_ms": round(float(rtt_match.group(1)), 6) if rtt_match else None,
+            "reached_destination": reached,
+        }
+        previous = observations.get(hop)
+        if previous is None or (previous["state"] == "no-reply" and observation["state"] == "observed") or reached:
+            observations[hop] = observation
+    hops = [observations[hop] for hop in sorted(observations)[:PATH_PROBE_MAX_HOPS]]
+    reached_destination = any(item["reached_destination"] for item in hops)
+    status = "observed" if reached_destination else "partial" if hops else "unavailable"
+    evidence: dict[str, Any] = {
+        "status": status,
+        "tool": "tracepath",
+        "max_hops": PATH_PROBE_MAX_HOPS,
+        "destination_address_class": _address_class(destination),
+        "hops": hops,
+        "reached_destination": reached_destination,
+        "public_internet_traversal_proven": False,
+        "limitation": "Observed IP hops do not prove administrative ownership or public Internet transit.",
+    }
+    if status == "unavailable":
+        evidence["reason"] = "tracepath returned no parseable bounded hop observations."
+    elif status == "partial":
+        evidence["reason"] = "Bounded tracepath observations did not reach the paired destination."
+    return evidence
 
 
 def _parse_ethtool_driver(stdout: str) -> dict[str, Any]:
@@ -525,6 +622,7 @@ class AgentWorker:
             "arbitrary_arguments_allowed": False,
             "read_only_nic_evidence": True,
             "network_configuration_changed": False,
+            "public_internet_traversal_inferred": False,
         }
         if os.name == "nt":
             return {
@@ -652,6 +750,17 @@ class AgentWorker:
         link_counters = _link_counters(link)
         link_counters["observed_at"] = datetime.now(timezone.utc).isoformat()
         path_mtu: dict[str, Any] = {"status": "unavailable", "value_bytes": None, "source": None}
+        path_trace: dict[str, Any] = {
+            "status": "unavailable",
+            "tool": None,
+            "max_hops": PATH_PROBE_MAX_HOPS,
+            "destination_address_class": _address_class(parsed),
+            "hops": [],
+            "reached_destination": False,
+            "public_internet_traversal_proven": False,
+            "limitation": "Observed IP hops do not prove administrative ownership or public Internet transit.",
+            "reason": "tracepath is not installed or is not on PATH.",
+        }
         trace_tool = shutil.which("tracepath")
         if trace_tool:
             trace_command = [trace_tool, "-n", "-m", str(PATH_PROBE_MAX_HOPS), address]
@@ -672,8 +781,10 @@ class AgentWorker:
                         "value_bytes": int(match.group(1)),
                         "source": "tracepath",
                     }
+                path_trace = _parse_tracepath(trace_result.stdout, parsed)
             except subprocess.TimeoutExpired:
-                pass
+                path_trace["tool"] = "tracepath"
+                path_trace["reason"] = "The bounded tracepath query timed out."
         driver_evidence: dict[str, Any] = {
             "status": "unavailable",
             "reason": "ethtool is not installed or the egress interface is outside the fixed interface-name policy.",
@@ -731,6 +842,7 @@ class AgentWorker:
             "route": {
                 "destination": route.get("dst"),
                 "gateway": route.get("gateway"),
+                "gateway_address_class": _address_value_class(route.get("gateway")) if route.get("gateway") else None,
                 "source": route.get("prefsrc") or route.get("src"),
                 "interface": interface_name,
             },
@@ -745,6 +857,7 @@ class AgentWorker:
             },
             "tcp": {"congestion_control": _tcp_congestion_control()},
             "path_mtu": path_mtu,
+            "path_trace": path_trace,
             "tool": {
                 "route": "iproute2",
                 "path_mtu": "tracepath" if trace_tool else None,

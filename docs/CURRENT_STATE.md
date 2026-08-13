@@ -27,14 +27,16 @@ baseline is still the repository head.
 - persistent authenticated Agents and explicit remote CPU/memory/storage
   dispatch;
 - guarded, bidirectional TCP measurements between paired Agents;
-- simulation-verified `network-v5` standard orchestration for allow-listed
+- simulation-verified `network-v6` standard orchestration for allow-listed
   pre/post route-derived interface byte/packet/error/drop deltas,
-  route/interface/MTU evidence, read-only NIC driver/offload and TCP
+  route/interface/MTU evidence, bounded numeric path traces with explicit
+  endpoint/hop address classes and no public-transit inference, pre/post route
+  stability, read-only NIC driver/offload and TCP
   congestion-control capture, bounded idle latency, loaded TCP RTT, adaptive
   UDP loss/jitter sweeps, simultaneous bidirectional TCP, and Generator CPU/
   scaling headroom validity; provider-pair validation is intentionally deferred
   until the complete project is ready for operator testing; the milestone
-  passes 88 Python tests, 3 rendered-dashboard tests, dashboard lint, and the
+  passes 90 Python tests, 3 rendered-dashboard tests, dashboard lint, and the
   production build without running a real load;
 - simulation-verified `database-postgresql-v1` paired executor with isolated
   Target clusters, Generator-side built-in pgbench workloads, durable settings,
@@ -133,15 +135,16 @@ Controller run: `run_1c572100e8704843`.
 
 ## Known limitations
 
-- network coverage is Partial: `network-v5` implements Linux pre/post
+- network coverage is Partial: `network-v6` implements Linux pre/post
   route-derived interface counters, egress-interface, interface-MTU and
-  optional path-MTU evidence, read-only NIC driver and selected offload state,
+  path-MTU evidence, bounded destination-reaching numeric traces, endpoint/hop
+  address classification, route-stability evidence, read-only NIC driver and selected offload state,
   active TCP congestion control, idle latency, directional TCP scaling,
   adaptive UDP jitter/loss sweeps, loaded TCP RTT, simultaneous bidirectional
   throughput, and Generator headroom rejection;
   topology claims are now independently checked when trusted provider metadata
-  permits it, while globally routable addresses alone do not prove a public
-  path, and same-host placement and the physical provider fabric cannot yet be
+  permits it, while address class and observed hops do not prove administrative
+  ownership or a public path, and same-host placement and the physical provider fabric cannot yet be
   proven; repeated topology-aware
   windows, per-queue NIC counters, Windows route parity, and mTLS remain
   unimplemented;
@@ -167,8 +170,8 @@ Controller run: `run_1c572100e8704843`.
 
 ## Next priorities
 
-1. Add repeated network windows, physical-host/fabric verification, per-queue
-   NIC counters, richer public-path evidence, and Windows route parity
+1. Add repeated network windows, physical-host/fabric and administrative-path
+   verification, per-queue NIC counters, DNS coverage, and Windows route parity
    before promoting the network domain from Partial.
 2. Add Web generator-saturation validation and dynamic application,
    HTTP/2/3, reverse-proxy, CDN, WAF, and autoscaling evidence.

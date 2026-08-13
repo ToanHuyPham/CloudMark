@@ -51,14 +51,18 @@ systems.
   range after deriving targets from measured directional TCP throughput.
 - Ping count, interval, and timeout are bounded. Loopback, unspecified,
   multicast, and link-local peer addresses are rejected.
-- Route, MTU, NIC-driver, offload, and TCP congestion-control evidence is
-  read-only. `ethtool` is restricted to fixed query arguments against the
+- Route, MTU, bounded numeric path-trace, NIC-driver, offload, and TCP
+  congestion-control evidence is read-only. `tracepath` accepts only the exact
+  paired address and a fixed eight-hop ceiling; it is not a subnet or port
+  scanner. `ethtool` is restricted to fixed query arguments against the
   route-derived egress interface; CloudMark never changes NIC or kernel network
   configuration.
 - Pre/post interface-counter snapshots use structured `ip -s -j link` output
   from that same route-derived interface. CloudMark never resets counters, and
   a counter decrease is reported as unavailable evidence rather than coerced
   into a delta.
+- Address classes and observed IP hops remain descriptive. They never establish
+  path ownership or prove that traffic crossed the public Internet.
 - Servers use one-shot mode and an independent watchdog deadline.
 - Cancelling a run prevents queued work from starting; active child processes
   retain bounded task and watchdog timeouts.

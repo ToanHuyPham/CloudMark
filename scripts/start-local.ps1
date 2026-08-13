@@ -63,8 +63,20 @@ if ($PythonPath) {
     $python = (Resolve-Path $PythonPath).Path
 } elseif (Test-Path $venvPython) {
     $python = $venvPython
+} elseif (Get-Command py -ErrorAction SilentlyContinue) {
+    $pythonLauncher = (Get-Command py).Source
+    $resolvedPython = (& $pythonLauncher -c "import sys; print(sys.executable)" 2>$null | Select-Object -Last 1)
+    if ($LASTEXITCODE -ne 0 -or -not $resolvedPython -or -not (Test-Path $resolvedPython)) {
+        throw "The Python launcher did not resolve a usable interpreter. Create .venv or pass -PythonPath."
+    }
+    $python = (Resolve-Path $resolvedPython).Path
 } elseif (Get-Command python -ErrorAction SilentlyContinue) {
-    $python = (Get-Command python).Source
+    $pythonCommand = (Get-Command python).Source
+    $resolvedPython = (& $pythonCommand -c "import sys; print(sys.executable)" 2>$null | Select-Object -Last 1)
+    if ($LASTEXITCODE -ne 0 -or -not $resolvedPython -or -not (Test-Path $resolvedPython)) {
+        throw "The python command did not resolve a usable interpreter. Create .venv or pass -PythonPath."
+    }
+    $python = (Resolve-Path $resolvedPython).Path
 } else {
     throw "Python was not found. Create .venv or pass -PythonPath."
 }

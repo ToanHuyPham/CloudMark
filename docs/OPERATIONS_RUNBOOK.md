@@ -49,7 +49,8 @@ a timestamped recovery path instead of deleting it.
 
 The launcher:
 
-- uses `.venv\Scripts\python.exe` by default;
+- resolves Python in this order: explicit `-PythonPath`, `.venv\Scripts\python.exe`,
+  the Windows `py` launcher, then a validated `python` command;
 - starts the Controller on `127.0.0.1:8787`;
 - selects the first available dashboard port from 3000 through 3010;
 - writes logs and a process record under `.tmp/local`;
@@ -138,6 +139,14 @@ repository.
 6. Review heartbeat, current job, latency percentiles, stability, and cleanup.
 7. Preserve failed runs; diagnose them before retrying.
 8. Repeat official profiles in multiple time windows.
+
+For Network v6, install the network pack on both Agents and restart them so
+inventory reports `iperf3`, `iproute2`, `tracepath`, `ethtool`, and Linux TCP
+congestion-control support. A Standard Run is comparison-ineligible when either
+bounded trace does not reach its paired destination or when interface, gateway,
+or source-route identity changes between the pre-load and post-load boundary.
+Review the retained hop and address-class evidence as descriptive only; it does
+not prove provider ownership or public-Internet transit.
 
 For PostgreSQL peer profiles, install the database pack on both Agents, run the
 Target Agent as a non-root account, and allow TCP `55432` only from the paired

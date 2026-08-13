@@ -426,7 +426,7 @@ loss and jitter sweeps at 25/50/90% of the measured directional TCP peak, and a
 simultaneous bidirectional TCP measurement. The Controller never becomes a
 performance endpoint.
 
-The standard Network v5 profile also requires `iproute2`, `ethtool`, and Linux
+The standard Network v6 profile also requires `iproute2`, `tracepath`, `ethtool`, and Linux
 TCP congestion-control evidence on both Agents. The dashboard keeps the run
 button disabled until both refreshed Agent inventories report those
 capabilities. The Quick profile requires only `iperf3`.
@@ -434,17 +434,19 @@ capabilities. The Quick profile requires only `iperf3`.
 The executor accepts only paired-agent addresses, ports 5201–5210, durations up
 to 60 seconds, an allow-list of stream counts, capped UDP rates, and bounded
 ping parameters. Each server is one-shot and has an independent watchdog
-deadline. Linux network-v5 runs capture pre/post route and structured interface
+deadline. Linux network-v6 runs capture pre/post route, bounded numeric path traces, and structured interface
 byte/packet/error/drop counters, egress-interface, interface-MTU, NIC driver,
-selected offload states, and active TCP congestion-control evidence; optional
-path MTU requires `tracepath`. These are fixed read-only queries against the
+selected offload states, active TCP congestion-control evidence, and path MTU
+when exposed by `tracepath`. These are fixed read-only queries against the
 route-derived interface. Counter deltas cover all traffic on that interface
 during the Run, so CloudMark reports this scope explicitly. Observed drops and
 errors remain evidence; they do not make a poor result disappear. CloudMark
-rejects v5 comparison evidence when route/NIC/TCP-control/counter evidence or
-Generator CPU and scaling headroom is insufficient. Overall network coverage remains `Partial`
+rejects v6 comparison evidence when pre/post route stability, destination-reaching
+bounded traces, NIC/TCP-control/counter evidence, or Generator CPU and scaling
+headroom is insufficient. Address class and observed hops do not prove public
+Internet transit. Overall network coverage remains `Partial`
 because repeated-window campaign automation, physical-fabric verification,
-per-queue NIC counters, richer public-path classification, Windows route
+per-queue NIC counters, administrative path verification, Windows route
 parity, and mTLS Agent enrollment are not complete. Session topology declarations are already
 checked against trusted region/zone metadata when those facts are available;
 the dashboard keeps claims and independent observations separate. Public IP

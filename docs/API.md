@@ -138,19 +138,21 @@ Supported storage profiles are `disk-quick`, `disk-standard`, `disk-database`,
 ```
 
 The session must contain an online `target` and `generator`. Both must advertise
-a peer-reachable IP and report `iperf3`. Network v5 additionally requires both
-Agents to report `iproute2`, `ethtool`, and Linux TCP congestion-control
+a peer-reachable IP and report `iperf3`. Network v6 additionally requires both
+Agents to report `iproute2`, `tracepath`, `ethtool`, and Linux TCP congestion-control
 evidence before load starts. `confirm_network_load` is mandatory.
 Supported profiles are `network-peer-quick` (`network-v1`) and
-`network-peer-standard` (`network-v5`). Quick executes directional TCP only.
+`network-peer-standard` (`network-v6`). Quick executes directional TCP only.
 Standard executes 21 bounded peer evidence steps: two pre-load and two
-post-load route/interface/MTU, read-only NIC driver/offload, TCP
+post-load route/interface/MTU and numeric path-trace, read-only NIC driver/offload, TCP
 congestion-control, and structured interface-counter probes; idle latency;
 directional TCP scaling; UDP rate sweeps derived from each direction's TCP
 baseline; and one simultaneous bidirectional TCP measurement. Its result
-includes byte/packet/error/drop deltas and comparison eligibility based on a
-complete route/NIC/TCP-control/counter window plus Generator CPU/scaling
-headroom. No performance traffic is sent to the Controller.
+includes byte/packet/error/drop deltas and comparison eligibility based on
+stable pre/post routes, destination-reaching bounded traces, a complete
+NIC/TCP-control/counter window, and Generator CPU/scaling headroom. Address
+class and observed hops never prove public-Internet transit. No performance
+traffic is sent to the Controller.
 
 ## Create a PostgreSQL peer run
 

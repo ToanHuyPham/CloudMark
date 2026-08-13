@@ -233,3 +233,22 @@ Legacy network-v2 through network-v4 results retain their original contracts.
 dropped packets or recorded errors during the full mixed TCP/UDP test window.
 Bracketing the Run adds auditable host-interface evidence without resetting a
 counter, changing network configuration, or allowing an arbitrary interface.
+
+## D-020: Network v6 records bounded path observations without inferring ownership
+
+**Decision:** Advance the standard peer profile to `network-v6`. At both Run
+boundaries, each Linux Agent executes numeric `tracepath` only toward the exact
+paired address with a fixed eight-hop ceiling. CloudMark normalizes at most one
+observation per hop, records destination and hop address classes, requires both
+bounded traces to reach their paired destination, and requires the route
+interface, gateway, and source to remain stable for comparison eligibility.
+Trace-sequence changes remain observational because equal-cost multipath can
+legitimately vary a hop. Every trace and aggregate path claim explicitly sets
+public-Internet traversal to unproven. Network-v2 through network-v5 evidence
+retains its original validity contract.
+
+**Reason:** A global-unicast endpoint and a list of visible IP hops are useful
+reproducibility facts, but neither establishes administrative ownership or
+proves that traffic crossed the public Internet. Bounded destination-reaching
+traces and stable route boundaries improve provider comparison evidence while
+keeping the claim narrower than the measurement.

@@ -76,12 +76,15 @@ def validate_network_run(
             raise ValueError(f"Agent {agent['name']} is offline. Start its persistent worker before running the profile.")
         if not capabilities.get("iperf3"):
             raise ValueError(f"Agent {agent['name']} does not report the iperf3 capability.")
-        if str(NETWORK_PROFILES[profile_name]["methodology_version"]) in {"network-v4", "network-v5"}:
+        methodology_version = str(NETWORK_PROFILES[profile_name]["methodology_version"])
+        if methodology_version in {"network-v4", "network-v5", "network-v6"}:
             missing = [
                 capability
                 for capability in ("iproute2", "ethtool", "tcp_congestion_control")
                 if not capabilities.get(capability)
             ]
+            if methodology_version == "network-v6" and not capabilities.get("tracepath"):
+                missing.append("tracepath")
             if missing:
                 raise ValueError(
                     f"Agent {agent['name']} is missing standard Network read-only evidence capabilities: "
@@ -616,6 +619,80 @@ def _network_analysis(result: dict[str, Any]) -> dict[str, Any]:
         for item in (result.get("post_path_measurements") or [])
         if item.get("direction")
     }
+    path_stability: list[dict[str, Any]] = []
+    for direction in sorted(set(pre_by_direction) | set(post_by_direction)):
+        before = (pre_by_direction.get(direction) or {}).get("evidence") or {}
+        after = (post_by_direction.get(direction) or {}).get("evidence") or {}
+        before_route = before.get("route") or {}
+        after_route = after.get("route") or {}
+        before_trace = before.get("path_trace") or {}
+        after_trace = after.get("path_trace") or {}
+        item: dict[str, Any] = {
+            "direction": direction,
+            "route_status": "unavailable",
+            "route_stable": None,
+            "trace_status": "unavailable",
+            "trace_stable": None,
+            "public_internet_traversal_proven": False,
+        }
+        before_interface = before_route.get("interface")
+        after_interface = after_route.get("interface")
+        before_source = before_route.get("source")
+        after_source = after_route.get("source")
+        if before_interface and after_interface and before_source and after_source:
+            item["route_status"] = "observed"
+            item["route_stable"] = all(
+                before_route.get(field) == after_route.get(field)
+                for field in ("interface", "gateway", "source")
+            )
+            if not item["route_stable"]:
+                item["route_reason"] = "The route interface, gateway, or source changed during the Run."
+        else:
+            item["route_reason"] = "Complete pre/post route interface and source evidence is required."
+        before_trace_complete = (
+            before_trace.get("status") == "observed" and before_trace.get("reached_destination") is True
+        )
+        after_trace_complete = (
+            after_trace.get("status") == "observed" and after_trace.get("reached_destination") is True
+        )
+        if before_trace_complete and after_trace_complete:
+            item["trace_status"] = "observed"
+            before_hops = [
+                hop.get("address")
+                for hop in before_trace.get("hops") or []
+                if hop.get("state") == "observed" and hop.get("address")
+            ]
+            after_hops = [
+                hop.get("address")
+                for hop in after_trace.get("hops") or []
+                if hop.get("state") == "observed" and hop.get("address")
+            ]
+            item["trace_stable"] = before_hops == after_hops
+            item["pre_observed_hops"] = len(before_hops)
+            item["post_observed_hops"] = len(after_hops)
+        else:
+            item["trace_reason"] = "Both bounded traces must reach the paired destination."
+        path_stability.append(item)
+    route_stability_observed = [item for item in path_stability if item["route_status"] == "observed"]
+    if route_stability_observed and any(item["route_stable"] is False for item in route_stability_observed):
+        route_stability_status = "changed"
+    elif (
+        len(path_stability) >= 2
+        and len(route_stability_observed) == len(path_stability)
+        and all(item["route_stable"] is True for item in route_stability_observed)
+    ):
+        route_stability_status = "complete"
+    elif route_stability_observed:
+        route_stability_status = "partial"
+    else:
+        route_stability_status = "unavailable"
+    trace_observed = [item for item in path_stability if item["trace_status"] == "observed"]
+    if len(path_stability) >= 2 and len(trace_observed) == len(path_stability):
+        path_trace_status = "complete"
+    elif trace_observed:
+        path_trace_status = "partial"
+    else:
+        path_trace_status = "unavailable"
     interface_counter_deltas: list[dict[str, Any]] = []
     for direction in sorted(set(pre_by_direction) | set(post_by_direction)):
         before = pre_by_direction.get(direction) or {}
@@ -702,21 +779,38 @@ def _network_analysis(result: dict[str, Any]) -> dict[str, Any]:
     if generator_status != "adequate":
         validity_reasons.append(f"generator-headroom-{generator_status}")
     methodology_version = str(result.get("methodology_version", ""))
-    nic_evidence_required = methodology_version in {"network-v4", "network-v5"}
+    nic_evidence_required = methodology_version in {"network-v4", "network-v5", "network-v6"}
     if nic_evidence_required and nic_status != "complete":
         validity_reasons.append("nic-offload-and-tcp-control-evidence-incomplete")
-    counter_evidence_required = methodology_version == "network-v5"
+    counter_evidence_required = methodology_version in {"network-v5", "network-v6"}
     if counter_evidence_required and counter_status != "complete":
         validity_reasons.append("interface-counter-window-evidence-incomplete")
+    path_trace_required = methodology_version == "network-v6"
+    if path_trace_required and path_trace_status != "complete":
+        validity_reasons.append("bounded-path-trace-evidence-incomplete")
+    route_stability_required = methodology_version == "network-v6"
+    if route_stability_required and route_stability_status != "complete":
+        validity_reasons.append(
+            "route-stability-evidence-changed"
+            if route_stability_status == "changed"
+            else "route-stability-evidence-incomplete"
+        )
     comparison_eligible = (
         route_status == "complete"
         and generator_status == "adequate"
         and (not nic_evidence_required or nic_status == "complete")
         and (not counter_evidence_required or counter_status == "complete")
+        and (not path_trace_required or path_trace_status == "complete")
+        and (not route_stability_required or route_stability_status == "complete")
     )
     return {
         "directions": directions,
         "interface_counter_deltas": interface_counter_deltas,
+        "path_stability": path_stability,
+        "path_claims": {
+            "public_internet_traversal_proven": False,
+            "limitation": "Address class and observed IP hops do not prove administrative ownership or public Internet transit.",
+        },
         "latency_comparison": "Idle ICMP average versus iperf3 TCP_INFO mean RTT under throughput load; protocols differ.",
         "validity": {
             "route_evidence_status": route_status,
@@ -724,6 +818,10 @@ def _network_analysis(result: dict[str, Any]) -> dict[str, Any]:
             "nic_evidence_required": nic_evidence_required,
             "interface_counter_evidence_status": counter_status,
             "interface_counter_evidence_required": counter_evidence_required,
+            "path_trace_evidence_status": path_trace_status,
+            "path_trace_evidence_required": path_trace_required,
+            "route_stability_status": route_stability_status,
+            "route_stability_required": route_stability_required,
             "generator_headroom_status": generator_status,
             "comparison_eligible": comparison_eligible,
             "reason_codes": validity_reasons,
@@ -768,6 +866,8 @@ def run_network(
             "route_interface_mtu_evidence": path_probe,
             "read_only_nic_and_tcp_control_evidence": path_probe,
             "read_only_pre_post_interface_counters": post_path_probe,
+            "bounded_numeric_path_trace": path_probe,
+            "public_internet_traversal_inferred": False,
             "port_range": [ALLOWED_PORT_MIN, ALLOWED_PORT_MAX],
         },
         "validity_policy": {

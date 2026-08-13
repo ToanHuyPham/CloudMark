@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ipaddress
 import json
 import os
 import tempfile
@@ -17,9 +18,11 @@ from unittest.mock import MagicMock, patch
 from cloudmark.agent import (
     AgentBenchmarkFailure,
     AgentWorker,
+    _address_class,
     _link_counters,
     _parse_ethtool_driver,
     _parse_ethtool_features,
+    _parse_tracepath,
     _tcp_congestion_control,
     join_session,
 )
@@ -796,7 +799,7 @@ class CloudMarkTests(unittest.TestCase):
             self.assertEqual(session["status"], "ready")
             self.assertEqual(target["role"], "target")
             self.assertEqual(generator["role"], "generator")
-            with self.assertRaisesRegex(ValueError, "standard Network read-only evidence capabilities"):
+            with self.assertRaisesRegex(ValueError, "standard Network read-only evidence capabilities:.*tracepath"):
                 validate_network_run(database, "session_test", "network-peer-standard")
 
     def test_agent_refuses_loopback_network_destination(self) -> None:
@@ -937,6 +940,10 @@ class CloudMarkTests(unittest.TestCase):
         self.assertEqual(result["route"]["interface"], "ens4")
         self.assertEqual(result["interface"]["mtu_bytes"], 1460)
         self.assertEqual(result["path_mtu"]["value_bytes"], 1460)
+        self.assertEqual(result["path_trace"]["status"], "observed")
+        self.assertTrue(result["path_trace"]["reached_destination"])
+        self.assertEqual(result["path_trace"]["destination_address_class"], "private")
+        self.assertFalse(result["path_trace"]["public_internet_traversal_proven"])
         self.assertEqual(result["interface"]["driver"]["driver"], "gve")
         self.assertTrue(result["interface"]["offloads"]["features"]["rx-checksumming"]["enabled"])
         self.assertEqual(result["tcp"]["congestion_control"]["algorithm"], "cubic")
@@ -948,6 +955,26 @@ class CloudMarkTests(unittest.TestCase):
         self.assertEqual(run.call_args_list[2].args[0], ["tracepath", "-n", "-m", "8", "10.0.0.11"])
         self.assertEqual(run.call_args_list[3].args[0], ["ethtool", "-i", "ens4"])
         self.assertEqual(run.call_args_list[4].args[0], ["ethtool", "-k", "ens4"])
+
+    def test_agent_classifies_and_bounds_numeric_path_trace_without_public_path_claim(self) -> None:
+        destination = ipaddress.ip_address("198.51.100.10")
+        trace = _parse_tracepath(
+            """
+ 1?: [LOCALHOST] pmtu 1500
+ 1: 10.0.0.1 0.125ms
+ 2: no reply
+ 3: 198.51.100.10 1.750ms reached
+ 9: 203.0.113.9 9.000ms
+""",
+            destination,
+        )
+        self.assertEqual(_address_class(destination), "documentation")
+        self.assertEqual(trace["status"], "observed")
+        self.assertEqual([hop["hop"] for hop in trace["hops"]], [1, 2, 3])
+        self.assertEqual(trace["hops"][0]["address_class"], "private")
+        self.assertEqual(trace["hops"][1]["state"], "no-reply")
+        self.assertTrue(trace["reached_destination"])
+        self.assertFalse(trace["public_internet_traversal_proven"])
 
     def test_agent_parses_bounded_ethtool_and_procfs_evidence(self) -> None:
         driver = _parse_ethtool_driver(
@@ -1160,6 +1187,94 @@ class CloudMarkTests(unittest.TestCase):
         self.assertFalse(legacy_analysis["validity"]["interface_counter_evidence_required"])
         self.assertTrue(legacy_analysis["validity"]["comparison_eligible"])
 
+    def test_network_v6_rejects_a_changed_boundary_route_without_claiming_public_transit(self) -> None:
+        def path(direction: str, source: str, gateway: str, stamp: int, counter: int) -> dict[str, object]:
+            return {
+                "direction": direction,
+                "evidence": {
+                    "status": "complete",
+                    "route": {"interface": "ens4", "source": source, "gateway": gateway},
+                    "interface": {
+                        "name": "ens4",
+                        "driver": {"status": "observed"},
+                        "offloads": {"status": "observed"},
+                        "counters": {
+                            "status": "observed",
+                            "observed_at": f"2026-08-13T00:00:0{stamp}+00:00",
+                            "rx_bytes": counter,
+                            "rx_packets": counter,
+                            "rx_errors": 0,
+                            "rx_dropped": 0,
+                            "tx_bytes": counter,
+                            "tx_packets": counter,
+                            "tx_errors": 0,
+                            "tx_dropped": 0,
+                        },
+                    },
+                    "tcp": {"congestion_control": {"status": "observed"}},
+                    "path_trace": {
+                        "status": "observed",
+                        "reached_destination": True,
+                        "hops": [{"state": "observed", "address": "198.51.100.10"}],
+                        "public_internet_traversal_proven": False,
+                    },
+                },
+            }
+
+        result = {
+            "methodology_version": "network-v6",
+            "path_measurements": [
+                path("a-to-b", "10.0.0.10", "10.0.0.1", 0, 100),
+                path("b-to-a", "10.0.0.11", "10.0.0.1", 0, 100),
+            ],
+            "post_path_measurements": [
+                path("a-to-b", "10.0.0.10", "10.0.0.254", 1, 200),
+                path("b-to-a", "10.0.0.11", "10.0.0.1", 1, 200),
+            ],
+            "latency_measurements": [],
+            "udp_measurements": [],
+            "validity_policy": {},
+            "measurements": [
+                {
+                    "direction": "a-to-b",
+                    "streams": 1,
+                    "sender": {"role": "generator"},
+                    "receiver": {"role": "target"},
+                    "metrics": {"received_bits_per_second": 900, "sender_cpu_percent": 20},
+                },
+                {
+                    "direction": "b-to-a",
+                    "streams": 1,
+                    "sender": {"role": "target"},
+                    "receiver": {"role": "generator"},
+                    "metrics": {"received_bits_per_second": 900, "receiver_cpu_percent": 20},
+                },
+            ],
+        }
+        analysis = _network_analysis(result)
+        self.assertEqual(analysis["validity"]["path_trace_evidence_status"], "complete")
+        self.assertEqual(analysis["validity"]["route_stability_status"], "changed")
+        self.assertFalse(analysis["validity"]["comparison_eligible"])
+        self.assertIn("route-stability-evidence-changed", analysis["validity"]["reason_codes"])
+        self.assertFalse(analysis["path_claims"]["public_internet_traversal_proven"])
+
+        changed_boundary = result["post_path_measurements"][0]["evidence"]
+        changed_boundary["route"]["gateway"] = "10.0.0.1"
+        changed_boundary["path_trace"]["status"] = "partial"
+        changed_boundary["path_trace"]["reached_destination"] = False
+        incomplete_trace_analysis = _network_analysis(result)
+        self.assertEqual(incomplete_trace_analysis["validity"]["route_stability_status"], "complete")
+        self.assertEqual(incomplete_trace_analysis["validity"]["path_trace_evidence_status"], "partial")
+        self.assertIn(
+            "bounded-path-trace-evidence-incomplete",
+            incomplete_trace_analysis["validity"]["reason_codes"],
+        )
+
+        result["methodology_version"] = "network-v5"
+        legacy_analysis = _network_analysis(result)
+        self.assertFalse(legacy_analysis["validity"]["route_stability_required"])
+        self.assertTrue(legacy_analysis["validity"]["comparison_eligible"])
+
     def test_network_orchestrator_records_both_directions_without_controller_traffic(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             database = Database(Path(directory) / "test.sqlite3")
@@ -1209,7 +1324,7 @@ class CloudMarkTests(unittest.TestCase):
             self.assertFalse(result["policy"]["controller_in_data_path"])
             self.assertEqual(result["tool"]["version"], "iperf 3.17")
 
-    def test_standard_network_orchestrator_captures_all_v5_measurement_classes(self) -> None:
+    def test_standard_network_orchestrator_captures_all_v6_measurement_classes(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             database = Database(Path(directory) / "test.sqlite3")
             database.create_session("session_test", "pair", "hash", "2099-01-01T00:00:00+00:00")
@@ -1218,6 +1333,7 @@ class CloudMarkTests(unittest.TestCase):
                     "capabilities": {
                         "iperf3": True,
                         "iproute2": True,
+                        "tracepath": True,
                         "ethtool": True,
                         "tcp_congestion_control": True,
                     }
@@ -1227,7 +1343,7 @@ class CloudMarkTests(unittest.TestCase):
             database.add_agent("agent_b", "session_test", "generator", "generator", system, endpoint={"address": "10.0.0.11"})
             total_steps = network_total_steps("network-peer-standard")
             database.create_run(
-                "run_network_v5",
+                "run_network_v6",
                 "network",
                 "network-peer-standard",
                 {"suite": "network"},
@@ -1253,7 +1369,12 @@ class CloudMarkTests(unittest.TestCase):
                             counter_offset = snapshot * 1000
                             result = {
                                 "status": "complete",
-                                "route": {"destination": payload["target_address"], "interface": "ens4"},
+                                "route": {
+                                    "destination": payload["target_address"],
+                                    "gateway": "10.0.0.1",
+                                    "source": "10.0.0.10" if agent_id == "agent_a" else "10.0.0.11",
+                                    "interface": "ens4",
+                                },
                                 "interface": {"name": "ens4", "mtu_bytes": 1460, "state": "UP"},
                                 "tcp": {
                                     "congestion_control": {
@@ -1263,6 +1384,24 @@ class CloudMarkTests(unittest.TestCase):
                                     }
                                 },
                                 "path_mtu": {"status": "observed", "value_bytes": 1460, "source": "tracepath"},
+                                "path_trace": {
+                                    "status": "observed",
+                                    "tool": "tracepath",
+                                    "max_hops": 8,
+                                    "destination_address_class": "private",
+                                    "hops": [
+                                        {
+                                            "hop": 1,
+                                            "state": "observed",
+                                            "address": payload["target_address"],
+                                            "address_class": "private",
+                                            "rtt_ms": 0.25,
+                                            "reached_destination": True,
+                                        }
+                                    ],
+                                    "reached_destination": True,
+                                    "public_internet_traversal_proven": False,
+                                },
                             }
                             result["interface"].update({
                                 "driver": {"status": "observed", "driver": "gve", "version": "1.0"},
@@ -1322,10 +1461,10 @@ class CloudMarkTests(unittest.TestCase):
             worker = threading.Thread(target=complete_tasks, daemon=True)
             worker.start()
             try:
-                context = JobContext("run_network_v5", total_steps=total_steps, timeout_seconds=60)
+                context = JobContext("run_network_v6", total_steps=total_steps, timeout_seconds=60)
                 result = run_network(
                     database,
-                    "run_network_v5",
+                    "run_network_v6",
                     "session_test",
                     "network-peer-standard",
                     context=context,
@@ -1346,6 +1485,9 @@ class CloudMarkTests(unittest.TestCase):
             self.assertTrue(result["analysis"]["validity"]["comparison_eligible"])
             self.assertEqual(result["analysis"]["validity"]["nic_evidence_status"], "complete")
             self.assertEqual(result["analysis"]["validity"]["interface_counter_evidence_status"], "complete")
+            self.assertEqual(result["analysis"]["validity"]["path_trace_evidence_status"], "complete")
+            self.assertEqual(result["analysis"]["validity"]["route_stability_status"], "complete")
+            self.assertFalse(result["analysis"]["path_claims"]["public_internet_traversal_proven"])
             self.assertEqual(result["analysis"]["validity"]["generator_headroom_status"], "adequate")
             self.assertEqual(len(result["analysis"]["interface_counter_deltas"]), 2)
             self.assertTrue(all(item["total_dropped"] == 5 for item in result["analysis"]["interface_counter_deltas"]))
@@ -1365,7 +1507,7 @@ class CloudMarkTests(unittest.TestCase):
         profile = NETWORK_PROFILES["network-peer-standard"]
         self.assertFalse(profile["cloud_to_controller"])
         self.assertEqual(profile["requires_agents"], 2)
-        self.assertEqual(profile["methodology_version"], "network-v5")
+        self.assertEqual(profile["methodology_version"], "network-v6")
         self.assertEqual(network_total_steps("network-peer-quick"), 4)
         self.assertEqual(network_total_steps("network-peer-standard"), 21)
 

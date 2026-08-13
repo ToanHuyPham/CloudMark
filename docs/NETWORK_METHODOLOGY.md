@@ -28,19 +28,19 @@ physical provider fabric.
 | Profile | Methodology | Measurements |
 |---|---|---|
 | `network-peer-quick` | `network-v1` | TCP A→B and B→A, 1 and 4 streams, 10 seconds each |
-| `network-peer-standard` | `network-v5` | Pre/post route and interface-counter snapshots; route/interface/MTU, NIC driver/offload, and TCP congestion-control evidence; idle latency; TCP scaling; adaptive UDP sweeps; simultaneous bidirectional TCP; and Generator headroom validation |
+| `network-peer-standard` | `network-v6` | Pre/post route, bounded path-trace, and interface-counter snapshots; route/interface/MTU, NIC driver/offload, and TCP congestion-control evidence; idle latency; TCP scaling; adaptive UDP sweeps; simultaneous bidirectional TCP; and Generator headroom validation |
 
 The standard profile contains 21 evidence steps:
 
 1. allow-listed pre-load route, egress-interface, structured interface-counter,
-   interface-MTU, optional path-MTU, NIC driver/offload, and active TCP
+   interface-MTU, path-MTU, bounded numeric path trace, NIC driver/offload, and active TCP
    congestion-control probes in both directions;
 2. bounded idle ICMP latency in both directions: 20 probes at 100 ms intervals;
 3. TCP A→B and B→A at 1, 4, 8, and 16 streams for 15 seconds;
 4. UDP A→B and B→A at 25%, 50%, and 90% of that direction's measured peak TCP receiver rate for 15 seconds; and
 5. one simultaneous bidirectional TCP test with four streams for 15 seconds;
    and
-6. matching post-load route, NIC, and structured interface-counter snapshots in
+6. matching post-load route, bounded path-trace, NIC, and structured interface-counter snapshots in
    both directions.
 
 UDP targets are rounded to 1 Mbit/s and clamped between 1 Mbit/s and 1 Gbit/s.
@@ -62,22 +62,28 @@ different protocols and sampling mechanisms. CloudMark reports the absolute and
 percentage change as diagnostic evidence but deliberately does not assign a
 bufferbloat score.
 
-`network-v5` evaluates Generator headroom independently in each
+`network-v6` evaluates Generator headroom independently in each
 direction. The iperf3 client is the sender, so CloudMark selects local or
 remote CPU evidence according to which endpoint has the `generator` role. A
 direction is constrained when Generator CPU reaches 90%, or when throughput
 scaling stalls below 5% while Generator CPU is at least 85%. Missing CPU data
-produces `unknown`, not a passing result. Network-v5 evidence is eligible for
+produces `unknown`, not a passing result. Network-v6 evidence is eligible for
 suitability and provider comparison only when both route/interface/MTU probes,
-NIC driver/offload observations, and TCP congestion-control observations are
-complete, the pre/post interface-counter window is complete, and Generator
-headroom is adequate in every measured direction.
+destination-reaching bounded traces, NIC driver/offload observations, and TCP
+congestion-control observations are complete, the route interface/gateway/source
+is stable across both boundaries, the pre/post interface-counter window is
+complete, and Generator headroom is adequate in every measured direction.
 
 On Linux, route identity uses JSON output from fixed `ip route get` and `ip
-link show` commands. If `tracepath` is installed, CloudMark also records its
-observed path MTU using a maximum of eight hops. Interface MTU and path MTU are
-kept separate because they are not interchangeable. Windows Agents currently
-report this evidence as unavailable.
+link show` commands. CloudMark runs numeric `tracepath` toward only the paired
+address with a maximum of eight hops. It records at most one normalized
+observation per hop, whether the exact destination was reached, each numeric
+address class, RTT when exposed, and path MTU. Interface MTU and path MTU are
+kept separate because they are not interchangeable. Trace-sequence changes are
+retained but are not a failure by themselves because ECMP can legitimately
+change observed hops. Address class and observed hops never prove administrative
+ownership or public-Internet transit. Windows Agents currently report this
+evidence as unavailable.
 
 On the exact Linux egress interface discovered by that route lookup, CloudMark
 runs fixed read-only `ethtool -i` and `ethtool -k` queries. It retains bounded
@@ -86,8 +92,8 @@ and filter feature states. The active TCP congestion-control algorithm is read
 from Linux procfs. CloudMark does not enable or disable offloads, change the
 congestion-control algorithm, or accept an interface name from the Controller.
 Missing tools or unsupported virtual NIC features remain `unavailable`; they
-are not converted to zero. Network-v2 through network-v4 results remain
-readable under their original contracts and do not gain v5 claims.
+are not converted to zero. Network-v2 through network-v5 results remain
+readable under their original contracts and do not gain v6 claims.
 
 Each pre/post snapshot retains cumulative RX/TX bytes, packets, errors, and
 drops from structured `ip -s -j link` output. CloudMark computes a delta only
@@ -109,7 +115,7 @@ result merely because those values are non-zero.
 - guarded UDP uses exactly one stream and a capped numeric bit rate;
 - ping count, interval, and timeout are bounded;
 - iperf3 servers are one-shot and have watchdog deadlines;
-- route, MTU, NIC, and TCP-control probes use only the paired peer IP, the
+- route, MTU, bounded path-trace, NIC, and TCP-control probes use only the paired peer IP, the
   route-derived egress interface, fixed arguments, and read-only kernel state;
 - arbitrary commands and raw shell input are never accepted; and
 - only one saturation suite may target an Agent at a time.
@@ -118,10 +124,10 @@ The standard profile can saturate a provider link. It requires explicit
 `confirm_network_load` authorization and may incur provider egress or traffic
 charges, particularly across zones or regions.
 
-The Controller refuses to start Network v5 unless both Agents advertise
-`iperf3`, `iproute2`, `ethtool`, and Linux TCP congestion-control capabilities.
-This prevents an expensive load run that can never satisfy the v5 comparison
-contract. `tracepath` remains optional and its absence is reported explicitly.
+The Controller refuses to start Network v6 unless both Agents advertise
+`iperf3`, `iproute2`, `tracepath`, `ethtool`, and Linux TCP congestion-control
+capabilities. This prevents an expensive load run that can never satisfy the
+v6 comparison contract.
 
 ## Validity and remaining limitations
 
@@ -131,9 +137,9 @@ identical shapes, placement or anti-affinity evidence, matching tool versions,
 fresh instances, several time windows, and preserved directional results.
 
 The network domain remains `Partial`. CloudMark does not yet provide per-queue
-NIC counters, DNS coverage, richer public-path routing evidence, repeated-window
-campaign automation, physical-fabric verification, or mTLS Agent identity. Path MTU depends on
-`tracepath`; otherwise only the egress interface MTU is observed. Windows
+NIC counters, DNS coverage, administrative route-ownership verification,
+repeated-window campaign automation, physical-fabric verification, or mTLS
+Agent identity. Windows
 latency parsing currently supports English `ping` output, while Windows route
 and MTU evidence is unavailable. Missing evidence is never converted to a zero
 score.

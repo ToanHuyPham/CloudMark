@@ -125,8 +125,8 @@ SCENARIO_REQUIREMENTS: dict[str, dict[str, Any]] = {
             ("network.udp_loss_pct", "Worst adaptive UDP loss", "<=", _threshold(2.0, 1.0, 0.25), "%"),
             ("network.udp_jitter_ms", "Worst adaptive UDP jitter", "<=", _threshold(10, 3, 1), "ms"),
         ],
-        "limitations": ["DNS, public path, cross-zone/region topology, per-queue NIC behavior, and repeated windows are not fully validated."],
-        "next_actions": ["Run Provider Internal Network (network-v5) between equivalent provider instances."],
+        "limitations": ["DNS, administrative path ownership, cross-zone/region topology, per-queue NIC behavior, and repeated windows are not fully validated."],
+        "next_actions": ["Run Provider Internal Network (network-v6) between equivalent provider instances."],
     },
     "big-data": {
         "rules": [
@@ -186,10 +186,10 @@ EXPECTED_METHODOLOGIES = {
     "database": {str(profile["methodology_version"]) for profile in DATABASE_PROFILES.values()},
     "web": {str(profile["methodology_version"]) for profile in WEB_PROFILES.values()},
 }
-# Completed network-v2 through network-v4 evidence remains readable after the
-# standard profile moves to network-v5. Version 5 extends the comparison gate
-# with a complete pre/post interface-counter window.
-EXPECTED_METHODOLOGIES["network"].update({"network-v2", "network-v3", "network-v4"})
+# Completed network-v2 through network-v5 evidence remains readable after the
+# standard profile moves to network-v6. Version 6 extends the comparison gate
+# with bounded destination-reaching path traces and stable pre/post routes.
+EXPECTED_METHODOLOGIES["network"].update({"network-v2", "network-v3", "network-v4", "network-v5"})
 
 
 def _nested(value: Any, *path: str) -> Any:
@@ -277,9 +277,10 @@ def _run_valid(run: dict[str, Any]) -> tuple[bool, str | None]:
         "network-v3",
         "network-v4",
         "network-v5",
+        "network-v6",
     }:
         if _nested(result, "analysis", "validity", "comparison_eligible") is not True:
-            return False, "Network route, NIC, TCP-control, interface-counter, or Generator headroom evidence is insufficient for comparison."
+            return False, "Network route, bounded path-trace, NIC, TCP-control, interface-counter, or Generator headroom evidence is insufficient for comparison."
     return True, None
 
 
