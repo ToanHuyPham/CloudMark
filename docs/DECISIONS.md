@@ -216,3 +216,20 @@ Run evidence, including raw tool output and full-resolution time series.
 every five seconds made the UI pay evidence-export costs for data it does not
 render. A documented presentation boundary improves local responsiveness while
 preserving reproducibility and auditability at the Run endpoint.
+
+## D-019: Network v5 brackets load with route-derived interface counters
+
+**Decision:** Advance the standard peer profile to `network-v5` and add one
+pre-load and one post-load structured interface snapshot on each Agent. The
+Agent derives the interface from the exact paired-peer route and reads
+cumulative RX/TX bytes, packets, errors, and drops through fixed `ip -s -j link`
+arguments. CloudMark computes deltas only when the interface is unchanged, all
+counters exist, and none decrease. A complete counter window joins route/NIC
+identity and Generator headroom as a comparison-validity requirement. Non-zero
+drops or errors remain valid measured evidence and do not hide a poor result.
+Legacy network-v2 through network-v4 results retain their original contracts.
+
+**Reason:** iperf3 application metrics cannot show whether the guest interface
+dropped packets or recorded errors during the full mixed TCP/UDP test window.
+Bracketing the Run adds auditable host-interface evidence without resetting a
+counter, changing network configuration, or allowing an arbitrary interface.

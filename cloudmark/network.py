@@ -23,6 +23,16 @@ ALLOWED_LATENCY_INTERVAL_MS_MIN = 100
 ALLOWED_LATENCY_INTERVAL_MS_MAX = 1_000
 ALLOWED_LATENCY_TIMEOUT_MS_MIN = 100
 ALLOWED_LATENCY_TIMEOUT_MS_MAX = 5_000
+INTERFACE_COUNTER_FIELDS = (
+    "rx_bytes",
+    "rx_packets",
+    "rx_errors",
+    "rx_dropped",
+    "tx_bytes",
+    "tx_packets",
+    "tx_errors",
+    "tx_dropped",
+)
 
 
 class NetworkError(RuntimeError):
@@ -66,7 +76,7 @@ def validate_network_run(
             raise ValueError(f"Agent {agent['name']} is offline. Start its persistent worker before running the profile.")
         if not capabilities.get("iperf3"):
             raise ValueError(f"Agent {agent['name']} does not report the iperf3 capability.")
-        if str(NETWORK_PROFILES[profile_name]["methodology_version"]) == "network-v4":
+        if str(NETWORK_PROFILES[profile_name]["methodology_version"]) in {"network-v4", "network-v5"}:
             missing = [
                 capability
                 for capability in ("iproute2", "ethtool", "tcp_congestion_control")
@@ -74,7 +84,7 @@ def validate_network_run(
             ]
             if missing:
                 raise ValueError(
-                    f"Agent {agent['name']} is missing Network v4 read-only evidence capabilities: "
+                    f"Agent {agent['name']} is missing standard Network read-only evidence capabilities: "
                     + ", ".join(missing)
                     + ". Restart the Agent after installing the network pack."
                 )
@@ -235,6 +245,8 @@ def network_total_steps(profile_name: str) -> int:
         total += directions
     if profile.get("path_probe"):
         total += directions
+    if profile.get("post_path_probe"):
+        total += directions
     total += directions * len(profile.get("udp_rate_fractions") or [])
     if profile.get("bidirectional_streams"):
         total += 1
@@ -262,6 +274,8 @@ def network_default_timeout(profile_name: str) -> int:
             + 20,
         )
     path_seconds = directions * 90 if profile.get("path_probe") else 0
+    if profile.get("post_path_probe"):
+        path_seconds += directions * 90
     return tcp_seconds + udp_seconds + bidirectional_seconds + latency_seconds + path_seconds + 120
 
 
@@ -273,10 +287,11 @@ def _path_measurement(
     session_id: str,
     sender: dict[str, Any],
     receiver: dict[str, Any],
+    phase: str = "pre-load",
 ) -> dict[str, Any]:
     receiver_address = _address(receiver)
-    label = f"{sender['name']} to {receiver['name']} - route and MTU evidence"
-    context.report("collecting-network-path", label)
+    label = f"{sender['name']} to {receiver['name']} - {phase} route, NIC, and interface evidence"
+    context.report(f"collecting-network-path-{phase}", label)
     task_id = _task(
         database,
         run_id,
@@ -291,6 +306,7 @@ def _path_measurement(
         raise NetworkError("Peer path probe returned an invalid result.")
     return {
         "direction": f"{sender['id']}-to-{receiver['id']}",
+        "phase": phase,
         "sender": {"id": sender["id"], "name": sender["name"], "role": sender["role"]},
         "receiver": {
             "id": receiver["id"],
@@ -594,6 +610,86 @@ def _network_analysis(result: dict[str, Any]) -> dict[str, Any]:
         nic_status = "partial"
     else:
         nic_status = "unavailable"
+    pre_by_direction = {str(item.get("direction", "")): item for item in path_items if item.get("direction")}
+    post_by_direction = {
+        str(item.get("direction", "")): item
+        for item in (result.get("post_path_measurements") or [])
+        if item.get("direction")
+    }
+    interface_counter_deltas: list[dict[str, Any]] = []
+    for direction in sorted(set(pre_by_direction) | set(post_by_direction)):
+        before = pre_by_direction.get(direction) or {}
+        after = post_by_direction.get(direction) or {}
+        before_interface = ((before.get("evidence") or {}).get("interface") or {})
+        after_interface = ((after.get("evidence") or {}).get("interface") or {})
+        item: dict[str, Any] = {
+            "direction": direction,
+            "sender": before.get("sender") or after.get("sender"),
+            "receiver": before.get("receiver") or after.get("receiver"),
+            "interface": before_interface.get("name") or after_interface.get("name"),
+            "status": "unavailable",
+            "traffic_scope": "all-traffic-on-route-derived-interface-during-run-window",
+        }
+        if not before or not after:
+            item["reason"] = "Both pre-load and post-load snapshots are required."
+            interface_counter_deltas.append(item)
+            continue
+        before_name = before_interface.get("name")
+        after_name = after_interface.get("name")
+        if not before_name or before_name != after_name:
+            item["reason"] = "The route-derived egress interface was unavailable or changed during the run."
+            interface_counter_deltas.append(item)
+            continue
+        before_counters = before_interface.get("counters") or {}
+        after_counters = after_interface.get("counters") or {}
+        item["window_started_at"] = before_counters.get("observed_at")
+        item["window_ended_at"] = after_counters.get("observed_at")
+        if not isinstance(item["window_started_at"], str) or not isinstance(item["window_ended_at"], str):
+            item["reason"] = "Both interface-counter boundary timestamps are required."
+            interface_counter_deltas.append(item)
+            continue
+        if before_counters.get("status") != "observed" or after_counters.get("status") != "observed":
+            item["reason"] = "Complete structured interface counters were not observed at both boundaries."
+            interface_counter_deltas.append(item)
+            continue
+        deltas: dict[str, int] = {}
+        for field in INTERFACE_COUNTER_FIELDS:
+            start = before_counters.get(field)
+            finish = after_counters.get(field)
+            if (
+                not isinstance(start, int)
+                or isinstance(start, bool)
+                or not isinstance(finish, int)
+                or isinstance(finish, bool)
+            ):
+                break
+            if finish < start:
+                break
+            deltas[field] = finish - start
+        if len(deltas) != len(INTERFACE_COUNTER_FIELDS):
+            item["reason"] = "An interface counter was unavailable, reset, or decreased during the run."
+            interface_counter_deltas.append(item)
+            continue
+        rx_total = deltas["rx_packets"] + deltas["rx_dropped"]
+        tx_total = deltas["tx_packets"] + deltas["tx_dropped"]
+        item.update(
+            {
+                "status": "observed",
+                "counters": deltas,
+                "total_errors": deltas["rx_errors"] + deltas["tx_errors"],
+                "total_dropped": deltas["rx_dropped"] + deltas["tx_dropped"],
+                "rx_drop_percent": round(deltas["rx_dropped"] / rx_total * 100, 6) if rx_total else 0.0,
+                "tx_drop_percent": round(deltas["tx_dropped"] / tx_total * 100, 6) if tx_total else 0.0,
+            }
+        )
+        interface_counter_deltas.append(item)
+    counter_statuses = [str(item.get("status", "unavailable")) for item in interface_counter_deltas]
+    if len(counter_statuses) >= 2 and all(status == "observed" for status in counter_statuses):
+        counter_status = "complete"
+    elif "observed" in counter_statuses:
+        counter_status = "partial"
+    else:
+        counter_status = "unavailable"
     if len(headroom_statuses) >= 2 and all(status == "adequate" for status in headroom_statuses):
         generator_status = "adequate"
     elif "constrained" in headroom_statuses:
@@ -605,21 +701,29 @@ def _network_analysis(result: dict[str, Any]) -> dict[str, Any]:
         validity_reasons.append("route-interface-mtu-evidence-incomplete")
     if generator_status != "adequate":
         validity_reasons.append(f"generator-headroom-{generator_status}")
-    nic_evidence_required = str(result.get("methodology_version", "")) == "network-v4"
+    methodology_version = str(result.get("methodology_version", ""))
+    nic_evidence_required = methodology_version in {"network-v4", "network-v5"}
     if nic_evidence_required and nic_status != "complete":
         validity_reasons.append("nic-offload-and-tcp-control-evidence-incomplete")
+    counter_evidence_required = methodology_version == "network-v5"
+    if counter_evidence_required and counter_status != "complete":
+        validity_reasons.append("interface-counter-window-evidence-incomplete")
     comparison_eligible = (
         route_status == "complete"
         and generator_status == "adequate"
         and (not nic_evidence_required or nic_status == "complete")
+        and (not counter_evidence_required or counter_status == "complete")
     )
     return {
         "directions": directions,
+        "interface_counter_deltas": interface_counter_deltas,
         "latency_comparison": "Idle ICMP average versus iperf3 TCP_INFO mean RTT under throughput load; protocols differ.",
         "validity": {
             "route_evidence_status": route_status,
             "nic_evidence_status": nic_status,
             "nic_evidence_required": nic_evidence_required,
+            "interface_counter_evidence_status": counter_status,
+            "interface_counter_evidence_required": counter_evidence_required,
             "generator_headroom_status": generator_status,
             "comparison_eligible": comparison_eligible,
             "reason_codes": validity_reasons,
@@ -644,6 +748,7 @@ def run_network(
     latency = profile.get("latency")
     bidirectional_streams = profile.get("bidirectional_streams")
     path_probe = profile.get("path_probe") is True
+    post_path_probe = profile.get("post_path_probe") is True
     result: dict[str, Any] = {
         "suite": "network",
         "profile": profile_name,
@@ -662,6 +767,7 @@ def run_network(
             "simultaneous_bidirectional": bool(bidirectional_streams),
             "route_interface_mtu_evidence": path_probe,
             "read_only_nic_and_tcp_control_evidence": path_probe,
+            "read_only_pre_post_interface_counters": post_path_probe,
             "port_range": [ALLOWED_PORT_MIN, ALLOWED_PORT_MAX],
         },
         "validity_policy": {
@@ -670,6 +776,7 @@ def run_network(
             "generator_scaling_gain_floor_percent": profile.get("generator_scaling_gain_floor_percent", 5),
         },
         "path_measurements": [],
+        "post_path_measurements": [],
         "latency_measurements": [],
         "measurements": [],
         "udp_measurements": [],
@@ -784,6 +891,21 @@ def run_network(
             result["bidirectional_measurements"].append(measurement)
             result["analysis"] = _network_analysis(result)
             context.complete_step("bidirectional-measurement-complete", None, partial_result=result)
+
+        if post_path_probe:
+            for sender, receiver in directions:
+                measurement = _path_measurement(
+                    database,
+                    context,
+                    run_id=run_id,
+                    session_id=session_id,
+                    sender=sender,
+                    receiver=receiver,
+                    phase="post-load",
+                )
+                result["post_path_measurements"].append(measurement)
+                result["analysis"] = _network_analysis(result)
+                context.complete_step("network-post-load-interface-evidence-complete", None, partial_result=result)
     except (RunStopped, NetworkError) as exc:
         result["analysis"] = _network_analysis(result)
         exc.partial_result = result

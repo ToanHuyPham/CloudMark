@@ -138,18 +138,19 @@ Supported storage profiles are `disk-quick`, `disk-standard`, `disk-database`,
 ```
 
 The session must contain an online `target` and `generator`. Both must advertise
-a peer-reachable IP and report `iperf3`. Network v4 additionally requires both
+a peer-reachable IP and report `iperf3`. Network v5 additionally requires both
 Agents to report `iproute2`, `ethtool`, and Linux TCP congestion-control
 evidence before load starts. `confirm_network_load` is mandatory.
 Supported profiles are `network-peer-quick` (`network-v1`) and
-`network-peer-standard` (`network-v4`). Quick executes directional TCP only.
-Standard executes 19 bounded peer evidence steps: two route/interface/MTU,
-read-only NIC driver/offload, and TCP congestion-control probes; idle latency;
+`network-peer-standard` (`network-v5`). Quick executes directional TCP only.
+Standard executes 21 bounded peer evidence steps: two pre-load and two
+post-load route/interface/MTU, read-only NIC driver/offload, TCP
+congestion-control, and structured interface-counter probes; idle latency;
 directional TCP scaling; UDP rate sweeps derived from each direction's TCP
 baseline; and one simultaneous bidirectional TCP measurement. Its result
-includes comparison eligibility based on complete route/NIC/TCP-control
-evidence and Generator CPU/scaling headroom. No performance traffic is sent to
-the Controller.
+includes byte/packet/error/drop deltas and comparison eligibility based on a
+complete route/NIC/TCP-control/counter window plus Generator CPU/scaling
+headroom. No performance traffic is sent to the Controller.
 
 ## Create a PostgreSQL peer run
 

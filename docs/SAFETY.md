@@ -55,6 +55,10 @@ systems.
   read-only. `ethtool` is restricted to fixed query arguments against the
   route-derived egress interface; CloudMark never changes NIC or kernel network
   configuration.
+- Pre/post interface-counter snapshots use structured `ip -s -j link` output
+  from that same route-derived interface. CloudMark never resets counters, and
+  a counter decrease is reported as unavailable evidence rather than coerced
+  into a delta.
 - Servers use one-shot mode and an independent watchdog deadline.
 - Cancelling a run prevents queued work from starting; active child processes
   retain bounded task and watchdog timeouts.

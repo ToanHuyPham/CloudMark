@@ -26,7 +26,7 @@ timestamp, and raw result.
 | Available | Local Controller API, SQLite history, and responsive dashboard |
 | Available | Authenticated persistent agents, heartbeat, and durable task queues |
 | Available | Explicit remote Agent dispatch for CPU, memory, and storage with live progress, cancellation, and result attribution |
-| Partial | Guarded peer network executor: route/MTU, read-only NIC/TCP-control evidence, directional TCP scaling, idle/loaded RTT, adaptive UDP sweeps, and simultaneous bidirectional TCP |
+| Partial | Guarded peer network executor: pre/post interface counters, route/MTU, read-only NIC/TCP-control evidence, directional TCP scaling, idle/loaded RTT, adaptive UDP sweeps, and simultaneous bidirectional TCP |
 | Partial | Guarded two-Agent PostgreSQL/pgbench profiles with durable settings and verified ephemeral cleanup |
 | Partial | Guarded two-Agent Nginx/ApacheBench HTTP, API, TLS, connection-churn, tail-latency, and static-transfer profiles |
 | Available | Target-scoped, versioned Essential/Standard/Demanding workload gates with per-check run provenance and explicit unknown evidence |
@@ -166,7 +166,7 @@ Controller is never an iperf3 endpoint.
 Version `0.5.0` adds authenticated remote dispatch of CPU, memory, and storage
 profiles, per-task heartbeat and cancellation, same-target load exclusion,
 provider/Agent attribution, and strict result-version validation. The current
-development head also implements the versioned `network-v4` standard profile
+development head also implements the versioned `network-v5` standard profile
 and the first `database-postgresql-v1` and `web-http-v1` client/server profiles.
 Compute and memory remain `Partial` until floating-point, crypto, compilation,
 latency, NUMA, and broader architecture coverage are implemented. Network

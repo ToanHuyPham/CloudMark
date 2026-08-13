@@ -94,13 +94,14 @@ Required topology: Controller + Agent A + Agent B.
 - TCP A→B and B→A using 1/4/8/16 streams — available;
 - authenticated agent heartbeat and durable allow-listed task queues — available;
 - fixed port range, duration/stream caps, one-shot servers, watchdog, and cleanup — available;
-- simultaneous bidirectional TCP mode — available in `network-v4`;
-- adaptive UDP rate sweep, loss, jitter, and reorder — available in `network-v4`;
+- simultaneous bidirectional TCP mode — available in `network-v5`;
+- adaptive UDP rate sweep, loss, jitter, and reorder — available in `network-v5`;
 - idle ICMP RTT and loaded TCP_INFO RTT comparison — available and explicitly unscored;
-- route, egress-interface, interface-MTU, and optional path-MTU evidence — available in `network-v4`;
-- Generator CPU and stream-scaling validity gate — available in `network-v4`;
+- route, egress-interface, interface-MTU, and optional path-MTU evidence — available in `network-v5`;
+- Generator CPU and stream-scaling validity gate — available in `network-v5`;
 - topology-aware practical ceiling and bufferbloat classification — planned;
-- read-only TCP congestion-control, NIC driver, and selected offload evidence — available in `network-v4`;
+- read-only TCP congestion-control, NIC driver, and selected offload evidence — available in `network-v5`;
+- pre/post route-derived interface byte, packet, error, and drop deltas — available in `network-v5`;
 - per-queue NIC counters and interrupt-affinity evidence — planned;
 - operator-declared same-host, same-zone, cross-zone, cross-region, and
   public-Internet labels — available;

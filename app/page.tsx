@@ -136,6 +136,20 @@ type NetworkPathMeasurement = {
         features: Record<string, { enabled: boolean; fixed: boolean }>;
         reason?: string;
       };
+      counters?: {
+        status: "observed" | "partial" | "unavailable";
+        rx_bytes?: number;
+        rx_packets?: number;
+        rx_errors?: number;
+        rx_dropped?: number;
+        tx_bytes?: number;
+        tx_packets?: number;
+        tx_errors?: number;
+        tx_dropped?: number;
+        source?: string;
+        observed_at?: string;
+        reason?: string;
+      };
     };
     tcp?: {
       congestion_control?: {
@@ -255,6 +269,7 @@ type Run = {
     };
     measurements?: NetworkTcpMeasurement[];
     path_measurements?: NetworkPathMeasurement[];
+    post_path_measurements?: NetworkPathMeasurement[];
     latency_measurements?: NetworkLatencyMeasurement[];
     udp_measurements?: NetworkUdpMeasurement[];
     bidirectional_measurements?: NetworkBidirectionalMeasurement[];
@@ -293,10 +308,36 @@ type Run = {
           reason_codes: string[];
         };
       }[];
+      interface_counter_deltas?: {
+        direction: string;
+        sender?: NetworkEndpoint;
+        receiver?: NetworkEndpoint;
+        interface?: string;
+        status: "observed" | "unavailable";
+        counters?: {
+          rx_bytes: number;
+          rx_packets: number;
+          rx_errors: number;
+          rx_dropped: number;
+          tx_bytes: number;
+          tx_packets: number;
+          tx_errors: number;
+          tx_dropped: number;
+        };
+        total_errors?: number;
+        total_dropped?: number;
+        rx_drop_percent?: number;
+        tx_drop_percent?: number;
+        window_started_at?: string;
+        window_ended_at?: string;
+        reason?: string;
+      }[];
       validity?: {
         route_evidence_status: "complete" | "partial" | "unavailable";
         nic_evidence_status: "complete" | "partial" | "unavailable";
         nic_evidence_required: boolean;
+        interface_counter_evidence_status: "complete" | "partial" | "unavailable";
+        interface_counter_evidence_required: boolean;
         generator_headroom_status: "adequate" | "constrained" | "unknown";
         comparison_eligible: boolean;
         reason_codes: string[];
@@ -687,7 +728,7 @@ export default function Home() {
       const agent = selectedSession?.agents.find((item) => item.role === role);
       const capabilities = agent?.system.inventory?.capabilities || {};
       return capabilities.iperf3
-        && (selectedNetworkMethodology !== "network-v4"
+        && (!["network-v4", "network-v5"].includes(selectedNetworkMethodology || "")
           || (capabilities.iproute2 && capabilities.ethtool && capabilities.tcp_congestion_control));
     });
   const networkMeasurements = latestNetwork?.result?.measurements || [];
@@ -696,6 +737,7 @@ export default function Home() {
   const bidirectionalMeasurements = latestNetwork?.result?.bidirectional_measurements || [];
   const pathMeasurements = latestNetwork?.result?.path_measurements || [];
   const networkAnalysis = latestNetwork?.result?.analysis?.directions || [];
+  const networkCounterDeltas = latestNetwork?.result?.analysis?.interface_counter_deltas || [];
   const networkValidity = latestNetwork?.result?.analysis?.validity;
   const maxNetworkRate = Math.max(1, ...networkMeasurements.map((item) => item.metrics.received_bits_per_second || 0));
   const activeDatabase = dashboard?.runs.find(
@@ -1415,8 +1457,8 @@ export default function Home() {
             {pairing && <section className="panel agent-commands"><div><span className="section-kicker">RUN ON PROVIDER VMS</span><h3>Start one persistent worker on each clean machine</h3></div><code>cloudmark agent --controller https://CONTROLLER --session {pairing.id} --token {pairing.join_token} --role target --advertise-address VM_A_IP</code><code>cloudmark agent --controller https://CONTROLLER --session {pairing.id} --token {pairing.join_token} --role generator --advertise-address VM_B_IP</code><p>Use <strong>--allow-http</strong> only when Controller access is restricted to a trusted private management network.</p></section>}
             <section className="panel session-panel">
               <div className="panel-head"><div><span className="section-kicker">AGENT CONTROL PLANE</span><h3>Pairing readiness</h3></div><label className="compact-select"><span>SESSION</span><select value={selectedSession?.id || ""} onChange={(event) => setSelectedSessionId(event.target.value)}>{dashboard?.sessions.map((session) => <option key={session.id} value={session.id}>{session.label} · {session.topology.scope} / {session.topology.verification.status} · {session.status}</option>)}</select></label></div>
-              {selectedSession ? <div className="agent-roster">{["target", "generator"].map((role) => { const agent = selectedSession.agents.find((item) => item.role === role); const capabilities = agent?.system.inventory?.capabilities || {}; const agentReady = capabilities.iperf3 && (selectedNetworkMethodology !== "network-v4" || (capabilities.iproute2 && capabilities.ethtool && capabilities.tcp_congestion_control)); return <article key={role} className={agent && agentReady ? "connected" : "waiting"}><span>{role.toUpperCase()}</span><strong>{agent?.name || `Waiting for ${role}`}</strong><small>{agent ? `${agent.endpoint.address || "No advertised IP"} · ${agentReady ? selectedNetworkMethodology === "network-v4" ? "Network v4 ready" : "iperf3 ready" : "Network prerequisites missing"}` : "Join command has not connected"}</small></article>; })}</div> : <div className="empty-row">Create a session, then connect both provider agents.</div>}
-              <div className="session-actions"><p><strong>{selectedSession?.status !== "ready" ? "Two agents required" : selectedSessionNetworkReady ? "Ready to measure" : "Network prerequisites missing"}</strong><small>Network v4 requires iperf3, iproute2, ethtool, and Linux TCP-control evidence on both Agents.</small></p><button className="button primary" onClick={startNetwork} disabled={busy || Boolean(activeNetwork) || selectedSession?.status !== "ready" || !selectedSessionNetworkReady}>Run network assessment</button></div>
+              {selectedSession ? <div className="agent-roster">{["target", "generator"].map((role) => { const agent = selectedSession.agents.find((item) => item.role === role); const capabilities = agent?.system.inventory?.capabilities || {}; const standardProfile = ["network-v4", "network-v5"].includes(selectedNetworkMethodology || ""); const agentReady = capabilities.iperf3 && (!standardProfile || (capabilities.iproute2 && capabilities.ethtool && capabilities.tcp_congestion_control)); return <article key={role} className={agent && agentReady ? "connected" : "waiting"}><span>{role.toUpperCase()}</span><strong>{agent?.name || `Waiting for ${role}`}</strong><small>{agent ? `${agent.endpoint.address || "No advertised IP"} · ${agentReady ? standardProfile ? "Network standard ready" : "iperf3 ready" : "Network prerequisites missing"}` : "Join command has not connected"}</small></article>; })}</div> : <div className="empty-row">Create a session, then connect both provider agents.</div>}
+              <div className="session-actions"><p><strong>{selectedSession?.status !== "ready" ? "Two agents required" : selectedSessionNetworkReady ? "Ready to measure" : "Network prerequisites missing"}</strong><small>Network v5 requires iperf3, iproute2, ethtool, and Linux TCP-control evidence on both Agents.</small></p><button className="button primary" onClick={startNetwork} disabled={busy || Boolean(activeNetwork) || selectedSession?.status !== "ready" || !selectedSessionNetworkReady}>Run network assessment</button></div>
             </section>
             {activeNetwork && <section className="panel run-progress" aria-live="polite"><div><span className="section-kicker">ACTIVE NETWORK RUN / {activeNetwork.id}</span><strong>{activeNetwork.current_job || activeNetwork.phase || "Waiting for agents"}</strong><small>{activeNetwork.completed_steps || 0} of {activeNetwork.total_steps || 1} measurements · {Math.round((activeNetwork.progress || 0) * 100)}%</small></div><div className="progress-track"><i style={{ width: `${Math.max(2, (activeNetwork.progress || 0) * 100)}%` }} /></div><button className="button danger" onClick={cancelNetwork} disabled={busy || activeNetwork.cancel_requested}>{activeNetwork.cancel_requested ? "Cancelling" : "Cancel run"}</button></section>}
             <section className="panel network-results">
@@ -1429,6 +1471,11 @@ export default function Home() {
                   <div className="panel-head"><div><span className="section-kicker">PATH IDENTITY</span><h3>Route and MTU evidence</h3></div><span className="run-id">{networkValidity?.route_evidence_status?.toUpperCase() || "UNKNOWN"}</span></div>
                   <div className="evidence-rows">{pathMeasurements.map((item) => <div key={item.direction}><span>{item.sender.name} → {item.receiver.name}</span><strong>{item.evidence.interface?.name || "Interface unavailable"} · MTU {item.evidence.interface?.mtu_bytes ?? "—"}</strong><small>{item.evidence.path_mtu?.value_bytes ? `Path MTU ${item.evidence.path_mtu.value_bytes} bytes` : item.evidence.reason || "Path MTU not observed"}</small></div>)}</div>
                 </article>}
+                {networkCounterDeltas.length > 0 && <article className="panel network-evidence-card">
+                  <div className="panel-head"><div><span className="section-kicker">INTERFACE WINDOW</span><h3>Pre/post packet counters</h3></div><span className="run-id">{networkValidity?.interface_counter_evidence_status?.toUpperCase() || "UNKNOWN"}</span></div>
+                  <div className="evidence-rows">{networkCounterDeltas.map((item) => <div key={item.direction}><span>{item.sender?.name || item.direction} · {item.interface || "Interface unavailable"}</span><strong>{item.status === "observed" ? `${(item.counters?.rx_packets || 0).toLocaleString()} RX · ${(item.counters?.tx_packets || 0).toLocaleString()} TX packets` : "Counter delta unavailable"}</strong><small>{item.status === "observed" ? `${formatBytes(item.counters?.rx_bytes)} RX · ${formatBytes(item.counters?.tx_bytes)} TX · ${item.total_dropped || 0} drops · ${item.total_errors || 0} errors` : item.reason}</small></div>)}</div>
+                  <p className="method-note">Deltas include all traffic on the route-derived interface during the benchmark window. Observed drops and errors remain visible evidence and do not invalidate an otherwise complete Run.</p>
+                </article>}
                 {pathMeasurements.length > 0 && <article className="panel network-evidence-card">
                   <div className="panel-head"><div><span className="section-kicker">NIC AND TCP CONTROL</span><h3>Driver and offload evidence</h3></div><span className="run-id">{networkValidity?.nic_evidence_status?.toUpperCase() || "UNKNOWN"}</span></div>
                   <div className="evidence-rows">{pathMeasurements.map((item) => { const features = Object.values(item.evidence.interface?.offloads?.features || {}); const enabled = features.filter((feature) => feature.enabled).length; return <div key={item.direction}><span>{item.sender.name} · {item.evidence.interface?.name || "Interface unavailable"}</span><strong>{item.evidence.interface?.driver?.driver || "Driver unavailable"} · TCP {item.evidence.tcp?.congestion_control?.algorithm || "unknown"}</strong><small>{item.evidence.interface?.offloads?.status === "observed" ? `${enabled} of ${features.length} selected offloads enabled` : item.evidence.interface?.offloads?.reason || "Offload state unavailable"}</small></div>; })}</div>
@@ -1437,7 +1484,7 @@ export default function Home() {
                 {networkAnalysis.length > 0 && <article className="panel network-evidence-card">
                   <div className="panel-head"><div><span className="section-kicker">MEASUREMENT VALIDITY</span><h3>Generator headroom</h3></div><span className="run-id">{networkValidity?.comparison_eligible ? "COMPARABLE" : "NOT COMPARABLE"}</span></div>
                   <div className="evidence-rows">{networkAnalysis.map((item) => <div key={item.direction}><span>{item.direction}</span><strong>{item.generator_headroom?.status || "unknown"}</strong><small>{item.generator_headroom?.peak_cpu_percent?.toFixed(1) ?? "—"}% peak Generator CPU · {item.generator_headroom?.stream_scaling_gain_percent?.toFixed(1) ?? "—"}% P1→P16 gain</small></div>)}</div>
-                  <p className="method-note">CloudMark excludes network-v4 evidence from suitability and provider comparison when route identity, NIC/TCP-control evidence, or Generator headroom is incomplete.</p>
+                  <p className="method-note">CloudMark excludes network-v5 evidence from suitability and provider comparison when route identity, NIC/TCP-control evidence, the interface-counter window, or Generator headroom is incomplete.</p>
                 </article>}
                 <article className="panel network-evidence-card">
                   <div className="panel-head"><div><span className="section-kicker">LATENCY UNDER LOAD</span><h3>Idle versus TCP RTT</h3></div><span className="run-id">UNSCORED</span></div>
@@ -1455,7 +1502,7 @@ export default function Home() {
               </section>
             )}
             <section className="network-checks">
-              {[["TCP", "1 / 4 / 8 / 16 streams", "AVAILABLE"], ["UDP", "25 / 50 / 90% adaptive sweep", "AVAILABLE IN STANDARD"], ["PATH", "route · interface · MTU", "AVAILABLE IN STANDARD"], ["NIC", "driver · offloads · congestion control", "READ-ONLY IN STANDARD"], ["VALIDITY", "Path · NIC · Generator headroom", "ENFORCED IN NETWORK-V4"]].map(([name, detail, state]) => <article key={name}><span>{name}</span><strong>{detail}</strong><small>{state}</small></article>)}
+              {[["TCP", "1 / 4 / 8 / 16 streams", "AVAILABLE"], ["UDP", "25 / 50 / 90% adaptive sweep", "AVAILABLE IN STANDARD"], ["PATH", "route · interface · MTU", "AVAILABLE IN STANDARD"], ["NIC", "driver · offloads · congestion control", "READ-ONLY IN STANDARD"], ["COUNTERS", "pre/post bytes · packets · drops · errors", "READ-ONLY IN NETWORK-V5"], ["VALIDITY", "Path · NIC · counters · Generator", "ENFORCED IN NETWORK-V5"]].map(([name, detail, state]) => <article key={name}><span>{name}</span><strong>{detail}</strong><small>{state}</small></article>)}
             </section>
           </div>
         )}

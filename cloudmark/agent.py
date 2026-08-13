@@ -144,6 +144,38 @@ def _tcp_congestion_control() -> dict[str, Any]:
     }
 
 
+def _link_counters(link: dict[str, Any] | None) -> dict[str, Any]:
+    statistics = (link or {}).get("stats64") or (link or {}).get("stats") or {}
+    values: dict[str, int] = {}
+    for direction in ("rx", "tx"):
+        direction_values = statistics.get(direction) if isinstance(statistics, dict) else None
+        if not isinstance(direction_values, dict):
+            continue
+        for field in ("bytes", "packets", "errors", "dropped"):
+            value = direction_values.get(field)
+            if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+                values[f"{direction}_{field}"] = value
+    expected = {
+        f"{direction}_{field}"
+        for direction in ("rx", "tx")
+        for field in ("bytes", "packets", "errors", "dropped")
+    }
+    if expected.issubset(values):
+        return {"status": "observed", **values, "source": "iproute2-link-stats"}
+    if values:
+        return {
+            "status": "partial",
+            **values,
+            "source": "iproute2-link-stats",
+            "reason": "iproute2 did not expose every required interface counter.",
+        }
+    return {
+        "status": "unavailable",
+        "source": "iproute2-link-stats",
+        "reason": "iproute2 did not expose interface counters in structured output.",
+    }
+
+
 def _validate_controller(controller: str, allow_http: bool) -> str:
     base = controller.rstrip("/")
     parsed = urlparse(base)
@@ -573,7 +605,7 @@ class AgentWorker:
                 "address_family": f"ipv{parsed.version}",
                 "policy": policy,
             }
-        link_command = [ip_tool, "-j", "link", "show", "dev", interface_name]
+        link_command = [ip_tool, "-s", "-j", "link", "show", "dev", interface_name]
         link_result: subprocess.CompletedProcess[str] | None = None
         try:
             link_result = subprocess.run(
@@ -617,6 +649,8 @@ class AgentWorker:
                     "mtu": int(mtu_match.group(1)) if mtu_match else None,
                     "operstate": state_match.group(1) if state_match else None,
                 }
+        link_counters = _link_counters(link)
+        link_counters["observed_at"] = datetime.now(timezone.utc).isoformat()
         path_mtu: dict[str, Any] = {"status": "unavailable", "value_bytes": None, "source": None}
         trace_tool = shutil.which("tracepath")
         if trace_tool:
@@ -707,6 +741,7 @@ class AgentWorker:
                 "link_type": (link or {}).get("link_type"),
                 "driver": driver_evidence,
                 "offloads": offload_evidence,
+                "counters": link_counters,
             },
             "tcp": {"congestion_control": _tcp_congestion_control()},
             "path_mtu": path_mtu,

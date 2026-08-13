@@ -63,11 +63,11 @@ Provider environment
 
 The Controller may dispatch single-system CPU, memory, and storage suites to an
 explicitly selected authenticated Agent. Provider network benchmark traffic
-must not traverse the operator system. The standard `network-v4` profile adds
-route/interface/MTU, read-only NIC driver/offload, and TCP congestion-control
-evidence plus Generator-headroom validity gates to bounded idle latency,
-directional TCP scaling, adaptive UDP loss/jitter sweeps, and simultaneous
-bidirectional TCP between the two Agents.
+must not traverse the operator system. The standard `network-v5` profile adds
+pre/post route and interface-counter snapshots, route/interface/MTU, read-only
+NIC driver/offload, and TCP congestion-control evidence plus Generator-headroom
+validity gates to bounded idle latency, directional TCP scaling, adaptive UDP
+loss/jitter sweeps, and simultaneous bidirectional TCP between the two Agents.
 The first paired service executor creates an isolated durable PostgreSQL cluster
 on Agent A and runs allow-listed pgbench workloads from Agent B; cleanup is part
 of the evidence contract. The second paired service executor creates an

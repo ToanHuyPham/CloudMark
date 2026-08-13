@@ -426,7 +426,7 @@ loss and jitter sweeps at 25/50/90% of the measured directional TCP peak, and a
 simultaneous bidirectional TCP measurement. The Controller never becomes a
 performance endpoint.
 
-The standard Network v4 profile also requires `iproute2`, `ethtool`, and Linux
+The standard Network v5 profile also requires `iproute2`, `ethtool`, and Linux
 TCP congestion-control evidence on both Agents. The dashboard keeps the run
 button disabled until both refreshed Agent inventories report those
 capabilities. The Quick profile requires only `iperf3`.
@@ -434,12 +434,15 @@ capabilities. The Quick profile requires only `iperf3`.
 The executor accepts only paired-agent addresses, ports 5201–5210, durations up
 to 60 seconds, an allow-list of stream counts, capped UDP rates, and bounded
 ping parameters. Each server is one-shot and has an independent watchdog
-deadline. Linux network-v4 runs capture route, egress-interface,
-interface-MTU, NIC driver, selected offload states, and active TCP
-congestion-control evidence; optional path MTU requires `tracepath`. These are
-fixed read-only queries against the route-derived interface. CloudMark rejects
-v4 comparison evidence when route/NIC/TCP-control evidence or Generator CPU and
-scaling headroom is insufficient. Overall network coverage remains `Partial`
+deadline. Linux network-v5 runs capture pre/post route and structured interface
+byte/packet/error/drop counters, egress-interface, interface-MTU, NIC driver,
+selected offload states, and active TCP congestion-control evidence; optional
+path MTU requires `tracepath`. These are fixed read-only queries against the
+route-derived interface. Counter deltas cover all traffic on that interface
+during the Run, so CloudMark reports this scope explicitly. Observed drops and
+errors remain evidence; they do not make a poor result disappear. CloudMark
+rejects v5 comparison evidence when route/NIC/TCP-control/counter evidence or
+Generator CPU and scaling headroom is insufficient. Overall network coverage remains `Partial`
 because repeated-window campaign automation, physical-fabric verification,
 per-queue NIC counters, richer public-path classification, Windows route
 parity, and mTLS Agent enrollment are not complete. Session topology declarations are already

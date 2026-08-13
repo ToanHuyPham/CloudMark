@@ -258,7 +258,7 @@ class CloudMarkController:
             profile_config = NETWORK_PROFILES[profile]
             total_steps = network_total_steps(profile)
             methodology_version = str(profile_config["methodology_version"])
-            if methodology_version == "network-v4":
+            if methodology_version in {"network-v4", "network-v5"}:
                 tool_version = "iperf3/ping/iproute2/ethtool-agent"
             elif methodology_version == "network-v3":
                 tool_version = "iperf3/ping/iproute2-agent"

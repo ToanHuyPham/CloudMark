@@ -27,13 +27,14 @@ baseline is still the repository head.
 - persistent authenticated Agents and explicit remote CPU/memory/storage
   dispatch;
 - guarded, bidirectional TCP measurements between paired Agents;
-- simulation-verified `network-v4` standard orchestration for allow-listed
+- simulation-verified `network-v5` standard orchestration for allow-listed
+  pre/post route-derived interface byte/packet/error/drop deltas,
   route/interface/MTU evidence, read-only NIC driver/offload and TCP
   congestion-control capture, bounded idle latency, loaded TCP RTT, adaptive
   UDP loss/jitter sweeps, simultaneous bidirectional TCP, and Generator CPU/
   scaling headroom validity; provider-pair validation is intentionally deferred
   until the complete project is ready for operator testing; the milestone
-  passes 84 Python tests, 3 rendered-dashboard tests, dashboard lint, and the
+  passes 88 Python tests, 3 rendered-dashboard tests, dashboard lint, and the
   production build without running a real load;
 - simulation-verified `database-postgresql-v1` paired executor with isolated
   Target clusters, Generator-side built-in pgbench workloads, durable settings,
@@ -69,7 +70,7 @@ baseline is still the repository head.
 - dashboard polling uses non-mutating Run summaries, compact JSON, no raw tool
   output, and a 90-point presentation timeline while `/runs/{id}` and SQLite
   preserve complete evidence; expected client disconnects no longer produce
-  misleading server tracebacks; the complete development head passes 86 Python
+  misleading server tracebacks; the complete development head passes 88 Python
   tests, 3 rendered-dashboard tests, dashboard lint, and the production build.
 
 ## Last verified provider target
@@ -132,11 +133,12 @@ Controller run: `run_1c572100e8704843`.
 
 ## Known limitations
 
-- network coverage is Partial: `network-v4` implements Linux route,
-  egress-interface, interface-MTU and optional path-MTU evidence, read-only NIC
-  driver and selected offload state, active TCP congestion control, idle
-  latency, directional TCP scaling, adaptive UDP jitter/loss sweeps, loaded TCP
-  RTT, simultaneous bidirectional throughput, and Generator headroom rejection;
+- network coverage is Partial: `network-v5` implements Linux pre/post
+  route-derived interface counters, egress-interface, interface-MTU and
+  optional path-MTU evidence, read-only NIC driver and selected offload state,
+  active TCP congestion control, idle latency, directional TCP scaling,
+  adaptive UDP jitter/loss sweeps, loaded TCP RTT, simultaneous bidirectional
+  throughput, and Generator headroom rejection;
   topology claims are now independently checked when trusted provider metadata
   permits it, while globally routable addresses alone do not prove a public
   path, and same-host placement and the physical provider fabric cannot yet be
