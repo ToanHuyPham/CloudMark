@@ -96,12 +96,13 @@ ranking is computed.
 `network-campaign-v1` is the durable acquisition contract for one fixed
 Target/Generator pair. It locks the pairing session, participant identities,
 topology evidence class, `network-peer-standard` profile version, and
-`network-v6` methodology. The Controller projects progress from linked Runs
+the installed standard methodology. The Controller projects progress from linked Runs
 and counts at most one comparison-eligible Run per UTC calendar day. Campaign
 creation never starts traffic, and each window requires a separate
 operator-confirmed API action. A completed fixed-pair campaign is temporal
 evidence only; it does not satisfy the independent-target requirement for a
-provider rating.
+provider rating. An unfinished campaign is projected as `superseded` when its
+locked profile or methodology no longer matches the installed standard contract.
 
 ## Local saturation executors
 
@@ -170,15 +171,16 @@ The controller may coordinate sessions but cloud agents do not benchmark toward
 the operator's home machine.
 
 `network-peer-quick` preserves the `network-v1` directional TCP baseline.
-`network-peer-standard` uses `network-v6`: fixed pre/post route, bounded numeric
-path-trace, and structured interface-counter snapshots, route/interface/MTU probes, read-only NIC
+`network-peer-standard` uses `network-v7`: fixed pre/post route, bounded numeric
+path-trace, structured aggregate interface counters, bounded driver per-queue
+counter snapshots, route/interface/MTU probes, read-only NIC
 driver/offload and TCP congestion-control capture, bounded idle ICMP,
 directional TCP scaling, capped UDP sweeps derived from each direction's
 measured TCP peak, simultaneous bidirectional TCP, and Generator headroom
 validation. The Agent independently validates every peer address, port,
 duration, stream count, protocol, rate, ping bound, and path-probe argument
-before it starts a child process. Network-v2 through network-v5 results remain
-readable as legacy evidence but do not claim the v6 bounded-trace and stable-route contract.
+before it starts a child process. Network-v2 through network-v6 results remain
+readable as legacy evidence but do not gain v7 per-queue claims.
 
 ## Persistence
 

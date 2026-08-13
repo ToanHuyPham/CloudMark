@@ -1,6 +1,6 @@
 # CloudMark current state
 
-Last updated: 2026-08-13
+Last updated: 2026-08-14
 
 ## Repository baseline
 
@@ -43,9 +43,18 @@ baseline is still the repository head.
   explicit per-window confirmation, retryable failed attempts, and strict
   comparison-eligibility counting; campaign creation is side-effect free and a
   completed campaign remains one-pair temporal evidence rather than a provider
-  rating; the complete development head passes 93 Python tests, 3 rendered-
+  rating; that campaign milestone passed 93 Python tests, 3 rendered-
   dashboard tests, dashboard lint, and the production build without starting
   provider load;
+- simulation-verified `network-v7` standard orchestration with bounded,
+  read-only `ethtool -S` snapshots on the route-derived interface, common
+  driver per-queue counter normalization, pre/post queue deltas, active RX/TX
+  queue distribution, busiest-queue share, and explicit vendor-counter
+  limitations; queue evidence is observational rather than a comparison gate,
+  while unfinished campaigns locked to an older standard profile are preserved
+  as `superseded`; the complete development head passes 95 Python tests, 3
+  rendered-dashboard tests, dashboard lint, and the production build without
+  starting provider load;
 - simulation-verified `database-postgresql-v1` paired executor with isolated
   Target clusters, Generator-side built-in pgbench workloads, durable settings,
   progress/control heartbeat, fixed safety limits, and verified cleanup; the
@@ -80,7 +89,7 @@ baseline is still the repository head.
 - dashboard polling uses non-mutating Run summaries, compact JSON, no raw tool
   output, and a 90-point presentation timeline while `/runs/{id}` and SQLite
   preserve complete evidence; expected client disconnects no longer produce
-  misleading server tracebacks; the complete development head passes 93 Python
+  misleading server tracebacks; the complete development head passes 95 Python
   tests, 3 rendered-dashboard tests, dashboard lint, and the production build.
 
 ## Last verified provider target
@@ -143,7 +152,7 @@ Controller run: `run_1c572100e8704843`.
 
 ## Known limitations
 
-- network coverage is Partial: `network-v6` implements Linux pre/post
+- network coverage is Partial: `network-v7` implements Linux pre/post
   route-derived interface counters, egress-interface, interface-MTU and
   path-MTU evidence, bounded destination-reaching numeric traces, endpoint/hop
   address classification, route-stability evidence, read-only NIC driver and selected offload state,
@@ -152,10 +161,12 @@ Controller run: `run_1c572100e8704843`.
   throughput, and Generator headroom rejection;
   topology claims are now independently checked when trusted provider metadata
   permits it, while address class and observed hops do not prove administrative
-  ownership or a public path, and same-host placement and the physical provider fabric cannot yet be
-  proven; manual fixed-pair repeated UTC-day campaigns are implemented, while
-  unattended scheduling, cross-pair orchestration, per-queue NIC counters,
-  Windows route parity, and mTLS remain unimplemented;
+  ownership or a public path, and same-host placement and the physical provider
+  fabric cannot yet be proven; bounded common driver per-queue counters are
+  observational but are not normalized across every NIC family and do not
+  include interrupt/RSS/RPS/XPS affinity; manual fixed-pair repeated UTC-day
+  campaigns are implemented, while unattended scheduling, cross-pair
+  orchestration, Windows route parity, and mTLS remain unimplemented;
 - PostgreSQL database coverage is Partial: read-only, durable read/write,
   concurrency, and connection churn are implemented; transaction tail
   percentiles, replication, recovery, MySQL/MariaDB, Redis, and managed-service
@@ -179,9 +190,9 @@ Controller run: `run_1c572100e8704843`.
 
 ## Next priorities
 
-1. Add physical-host/fabric and administrative-path verification, per-queue
-   NIC counters, DNS coverage, unattended campaign scheduling, and Windows
-   route parity
+1. Add physical-host/fabric and administrative-path verification, wider NIC
+   queue-counter normalization plus interrupt/RSS/RPS/XPS affinity, DNS
+   coverage, unattended campaign scheduling, and Windows route parity
    before promoting the network domain from Partial.
 2. Add Web generator-saturation validation and dynamic application,
    HTTP/2/3, reverse-proxy, CDN, WAF, and autoscaling evidence.

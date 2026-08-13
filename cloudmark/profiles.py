@@ -164,7 +164,7 @@ NETWORK_PROFILES: dict[str, dict[str, Any]] = {
     },
     "network-peer-standard": {
         "label": "Provider Internal Network",
-        "description": "Pre/post peer route, bounded path-trace, interface-counter, NIC, TCP-control, and MTU evidence; TCP scaling; idle latency; loaded TCP RTT; adaptive UDP loss/jitter sweeps; simultaneous bidirectional throughput; and Generator-headroom validation.",
+        "description": "Pre/post peer route, bounded path-trace, aggregate and driver-exposed per-queue counter, NIC, TCP-control, and MTU evidence; TCP scaling; idle latency; loaded TCP RTT; adaptive UDP loss/jitter sweeps; simultaneous bidirectional throughput; and Generator-headroom validation.",
         "requires_agents": 2,
         "directions": ["generator-to-target", "target-to-generator"],
         "tcp_streams": [1, 4, 8, 16],
@@ -182,8 +182,8 @@ NETWORK_PROFILES: dict[str, dict[str, Any]] = {
         "generator_scaling_cpu_floor_percent": 85,
         "generator_scaling_gain_floor_percent": 5,
         "cloud_to_controller": False,
-        "profile_version": "6.0",
-        "methodology_version": "network-v6",
+        "profile_version": "7.0",
+        "methodology_version": "network-v7",
     }
 }
 
@@ -279,7 +279,7 @@ ASSESSMENT_DOMAINS: list[dict[str, Any]] = [
     {"id": "compute", "label": "CPU & Compute", "status": "partial", "summary": "Versioned integer single-, multi-core and sustained profiles available; floating point, crypto and compilation pending"},
     {"id": "memory", "label": "Memory & NUMA", "status": "partial", "summary": "Versioned userspace bandwidth profiles available; true latency, STREAM and NUMA penalties pending"},
     {"id": "storage", "label": "Storage, Filesystem & Object", "status": "available", "summary": "Safe block/filesystem profiles available; object and snapshot tests pending"},
-    {"id": "network", "label": "Network & Connectivity", "status": "partial", "summary": "Two-Agent TCP, UDP, idle latency, loaded RTT, path evidence, metadata-aware topology checks, and Generator validity available; repeated windows and physical-fabric verification pending"},
+    {"id": "network", "label": "Network & Connectivity", "status": "partial", "summary": "Two-Agent TCP/UDP, idle/loaded latency, bounded path and driver queue evidence, metadata-aware topology checks, Generator validity, and manual repeated windows available; physical-fabric verification and cross-pair automation pending"},
     {"id": "gpu", "label": "GPU & Accelerators", "status": "roadmap", "summary": "GPU inventory, VRAM, transfer, compute and framework profiles"},
     {"id": "web", "label": "Web, API & TLS", "status": "partial", "summary": "Guarded two-Agent Nginx HTTP/TLS concurrency, tail latency, connection churn, and transfer profiles available"},
     {"id": "database", "label": "Database & Cache", "status": "partial", "summary": "Guarded two-Agent PostgreSQL/pgbench profiles available; MySQL/MariaDB, Redis, replication, and recovery pending"},

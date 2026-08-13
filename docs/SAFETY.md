@@ -61,6 +61,10 @@ systems.
   from that same route-derived interface. CloudMark never resets counters, and
   a counter decrease is reported as unavailable evidence rather than coerced
   into a delta.
+- Network v7 reads `ethtool -S` only for the route-derived interface. It
+  examines at most 4,096 lines, accepts queue indexes 0-127, recognizes only a
+  bounded common counter-name set, and never changes queue, RSS, RPS, XPS, IRQ,
+  or NIC configuration. Unknown driver counters remain unclassified.
 - Address classes and observed IP hops remain descriptive. They never establish
   path ownership or prove that traffic crossed the public Internet.
 - Servers use one-shot mode and an independent watchdog deadline.
@@ -75,6 +79,8 @@ systems.
   valid window.
 - Campaign completion is temporal evidence for one pair, not provider-wide
   quality evidence and not authorization for unattended scheduling.
+- A profile or methodology upgrade supersedes an unfinished campaign instead
+  of mutating its immutable contract or dispatching it under new semantics.
 - Public DDoS, spoofing, reflection, and amplification are outside project
   scope. Future resilience tests require authenticated, operator-owned targets
   with enforced rate and duration caps.

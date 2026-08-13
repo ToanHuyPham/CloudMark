@@ -128,7 +128,7 @@ components:
       properties:
         id: { type: string }
         label: { type: string }
-        status: { type: string, enum: [active, completed] }
+        status: { type: string, enum: [active, completed, superseded] }
         created_at: { type: string, format: date-time }
         contract_version: { type: string, const: network-campaign-v1 }
         profile: { type: string, const: network-peer-standard }

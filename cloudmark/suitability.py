@@ -126,7 +126,7 @@ SCENARIO_REQUIREMENTS: dict[str, dict[str, Any]] = {
             ("network.udp_jitter_ms", "Worst adaptive UDP jitter", "<=", _threshold(10, 3, 1), "ms"),
         ],
         "limitations": ["DNS, administrative path ownership, cross-zone/region topology, per-queue NIC behavior, and repeated windows are not fully validated."],
-        "next_actions": ["Run Provider Internal Network (network-v6) between equivalent provider instances."],
+        "next_actions": ["Run Provider Internal Network (network-v7) between equivalent provider instances."],
     },
     "big-data": {
         "rules": [
@@ -186,10 +186,10 @@ EXPECTED_METHODOLOGIES = {
     "database": {str(profile["methodology_version"]) for profile in DATABASE_PROFILES.values()},
     "web": {str(profile["methodology_version"]) for profile in WEB_PROFILES.values()},
 }
-# Completed network-v2 through network-v5 evidence remains readable after the
-# standard profile moves to network-v6. Version 6 extends the comparison gate
-# with bounded destination-reaching path traces and stable pre/post routes.
-EXPECTED_METHODOLOGIES["network"].update({"network-v2", "network-v3", "network-v4", "network-v5"})
+# Completed network-v2 through network-v6 evidence remains readable after the
+# standard profile moves to network-v7. Version 7 adds bounded, driver-exposed
+# per-queue counter evidence without making vendor-specific counters a gate.
+EXPECTED_METHODOLOGIES["network"].update({"network-v2", "network-v3", "network-v4", "network-v5", "network-v6"})
 
 
 def _nested(value: Any, *path: str) -> Any:
@@ -278,6 +278,7 @@ def _run_valid(run: dict[str, Any]) -> tuple[bool, str | None]:
         "network-v4",
         "network-v5",
         "network-v6",
+        "network-v7",
     }:
         if _nested(result, "analysis", "validity", "comparison_eligible") is not True:
             return False, "Network route, bounded path-trace, NIC, TCP-control, interface-counter, or Generator headroom evidence is insufficient for comparison."

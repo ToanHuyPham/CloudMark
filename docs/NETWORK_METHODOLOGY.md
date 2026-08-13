@@ -28,11 +28,11 @@ physical provider fabric.
 | Profile | Methodology | Measurements |
 |---|---|---|
 | `network-peer-quick` | `network-v1` | TCP A→B and B→A, 1 and 4 streams, 10 seconds each |
-| `network-peer-standard` | `network-v6` | Pre/post route, bounded path-trace, and interface-counter snapshots; route/interface/MTU, NIC driver/offload, and TCP congestion-control evidence; idle latency; TCP scaling; adaptive UDP sweeps; simultaneous bidirectional TCP; and Generator headroom validation |
+| `network-peer-standard` | `network-v7` | Pre/post route, bounded path-trace, aggregate interface-counter, and driver per-queue snapshots; route/interface/MTU, NIC driver/offload, and TCP congestion-control evidence; idle latency; TCP scaling; adaptive UDP sweeps; simultaneous bidirectional TCP; and Generator headroom validation |
 
 The standard profile contains 21 evidence steps:
 
-1. allow-listed pre-load route, egress-interface, structured interface-counter,
+1. allow-listed pre-load route, egress-interface, structured aggregate and driver per-queue counter,
    interface-MTU, path-MTU, bounded numeric path trace, NIC driver/offload, and active TCP
    congestion-control probes in both directions;
 2. bounded idle ICMP latency in both directions: 20 probes at 100 ms intervals;
@@ -40,7 +40,7 @@ The standard profile contains 21 evidence steps:
 4. UDP A→B and B→A at 25%, 50%, and 90% of that direction's measured peak TCP receiver rate for 15 seconds; and
 5. one simultaneous bidirectional TCP test with four streams for 15 seconds;
    and
-6. matching post-load route, bounded path-trace, NIC, and structured interface-counter snapshots in
+6. matching post-load route, bounded path-trace, NIC, and structured aggregate/per-queue counter snapshots in
    both directions.
 
 UDP targets are rounded to 1 Mbit/s and clamped between 1 Mbit/s and 1 Gbit/s.
@@ -62,12 +62,12 @@ different protocols and sampling mechanisms. CloudMark reports the absolute and
 percentage change as diagnostic evidence but deliberately does not assign a
 bufferbloat score.
 
-`network-v6` evaluates Generator headroom independently in each
+`network-v7` evaluates Generator headroom independently in each
 direction. The iperf3 client is the sender, so CloudMark selects local or
 remote CPU evidence according to which endpoint has the `generator` role. A
 direction is constrained when Generator CPU reaches 90%, or when throughput
 scaling stalls below 5% while Generator CPU is at least 85%. Missing CPU data
-produces `unknown`, not a passing result. Network-v6 evidence is eligible for
+produces `unknown`, not a passing result. Network-v7 evidence is eligible for
 suitability and provider comparison only when both route/interface/MTU probes,
 destination-reaching bounded traces, NIC driver/offload observations, and TCP
 congestion-control observations are complete, the route interface/gateway/source
@@ -92,8 +92,8 @@ and filter feature states. The active TCP congestion-control algorithm is read
 from Linux procfs. CloudMark does not enable or disable offloads, change the
 congestion-control algorithm, or accept an interface name from the Controller.
 Missing tools or unsupported virtual NIC features remain `unavailable`; they
-are not converted to zero. Network-v2 through network-v5 results remain
-readable under their original contracts and do not gain v6 claims.
+are not converted to zero. Network-v2 through network-v6 results remain
+readable under their original contracts and do not gain v7 claims.
 
 Each pre/post snapshot retains cumulative RX/TX bytes, packets, errors, and
 drops from structured `ip -s -j link` output. CloudMark computes a delta only
@@ -105,6 +105,17 @@ Agent control traffic when data and control share one NIC. Observed drops and
 errors remain comparable measured evidence; CloudMark never rejects a poor
 result merely because those values are non-zero.
 
+Network v7 also executes fixed read-only `ethtool -S` against that same
+route-derived interface at both boundaries. Because driver statistic names are
+not standardized, CloudMark recognizes only a bounded set of common queue
+counter shapes, limits queue indexes to 0-127, and examines at most 4,096 lines
+per snapshot. It reports active RX/TX queues, the busiest queue share, and
+driver-exposed queue drop/error deltas. Unknown vendor counters remain
+unclassified, queue-set or counter resets remain partial, and absent queue
+support remains unavailable. Per-queue evidence is observational and is not a
+comparison gate; making vendor-specific availability a hard requirement would
+systematically exclude otherwise valid NICs and clouds.
+
 ## Safety gates
 
 - peer destinations come only from the paired Agent records;
@@ -115,7 +126,7 @@ result merely because those values are non-zero.
 - guarded UDP uses exactly one stream and a capped numeric bit rate;
 - ping count, interval, and timeout are bounded;
 - iperf3 servers are one-shot and have watchdog deadlines;
-- route, MTU, bounded path-trace, NIC, and TCP-control probes use only the paired peer IP, the
+- route, MTU, bounded path-trace, NIC, aggregate/per-queue counter, and TCP-control probes use only the paired peer IP, the
   route-derived egress interface, fixed arguments, and read-only kernel state;
 - arbitrary commands and raw shell input are never accepted; and
 - only one saturation suite may target an Agent at a time.
@@ -124,21 +135,23 @@ The standard profile can saturate a provider link. It requires explicit
 `confirm_network_load` authorization and may incur provider egress or traffic
 charges, particularly across zones or regions.
 
-The Controller refuses to start Network v6 unless both Agents advertise
+The Controller refuses to start Network v7 unless both Agents advertise
 `iperf3`, `iproute2`, `tracepath`, `ethtool`, and Linux TCP congestion-control
 capabilities. This prevents an expensive load run that can never satisfy the
-v6 comparison contract.
+v7 comparison contract.
 
 ## Repeated campaign acquisition
 
 `network-campaign-v1` binds one fixed Target/Generator pair, topology evidence
-class, standard profile version, and Network v6 methodology for 3-30 distinct
+class, standard profile version, and Network v7 methodology for 3-30 distinct
 UTC-day windows. Creating the campaign does not generate traffic. The operator
 must explicitly confirm each window, and CloudMark counts at most one completed
 comparison-eligible Run per UTC day. Failed and cancelled attempts remain
 visible and may be retried without becoming valid windows. Campaign completion
 is temporal evidence for one pair; provider-level comparison still requires
-independent targets in the same exact cohort.
+independent targets in the same exact cohort. An incomplete active campaign
+becomes `superseded` when the installed standard profile or methodology changes;
+CloudMark preserves its Runs but requires a new immutable campaign contract.
 
 ## Validity and remaining limitations
 
@@ -147,8 +160,9 @@ not necessarily the provider fabric. Provider-grade comparisons should use
 identical shapes, placement or anti-affinity evidence, matching tool versions,
 fresh instances, several time windows, and preserved directional results.
 
-The network domain remains `Partial`. CloudMark does not yet provide per-queue
-NIC counters, DNS coverage, administrative route-ownership verification,
+The network domain remains `Partial`. Driver-exposed per-queue NIC counters are
+observational and not yet normalized across every NIC family. CloudMark does
+not yet provide DNS coverage, administrative route-ownership verification,
 unattended campaign scheduling, cross-pair orchestration, physical-fabric
 verification, or mTLS Agent identity. Windows
 latency parsing currently supports English `ping` output, while Windows route

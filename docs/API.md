@@ -142,17 +142,19 @@ Supported storage profiles are `disk-quick`, `disk-standard`, `disk-database`,
 ```
 
 The session must contain an online `target` and `generator`. Both must advertise
-a peer-reachable IP and report `iperf3`. Network v6 additionally requires both
+a peer-reachable IP and report `iperf3`. Network v7 additionally requires both
 Agents to report `iproute2`, `tracepath`, `ethtool`, and Linux TCP congestion-control
 evidence before load starts. `confirm_network_load` is mandatory.
 Supported profiles are `network-peer-quick` (`network-v1`) and
-`network-peer-standard` (`network-v6`). Quick executes directional TCP only.
+`network-peer-standard` (`network-v7`). Quick executes directional TCP only.
 Standard executes 21 bounded peer evidence steps: two pre-load and two
-post-load route/interface/MTU and numeric path-trace, read-only NIC driver/offload, TCP
-congestion-control, and structured interface-counter probes; idle latency;
+post-load route/interface/MTU and numeric path-trace, read-only NIC driver/offload,
+TCP congestion-control, structured aggregate interface counters, and bounded
+driver-exposed per-queue counters; idle latency;
 directional TCP scaling; UDP rate sweeps derived from each direction's TCP
 baseline; and one simultaneous bidirectional TCP measurement. Its result
-includes byte/packet/error/drop deltas and comparison eligibility based on
+includes aggregate byte/packet/error/drop deltas, observational queue traffic
+distribution when the NIC driver exposes recognized counters, and comparison eligibility based on
 stable pre/post routes, destination-reaching bounded traces, a complete
 NIC/TCP-control/counter window, and Generator CPU/scaling headroom. Address
 class and observed hops never prove public-Internet transit. No performance
@@ -178,7 +180,7 @@ X-CloudMark-Token: ...
 
 Creation returns `201` and never starts network traffic. The immutable
 `network-campaign-v1` contract records the pair, topology evidence class,
-profile version, `network-v6` methodology, and a 3-30 day target. Dispatch the
+profile version, `network-v7` methodology, and a 3-30 day target. Dispatch the
 next eligible window explicitly:
 
 ```http
@@ -195,7 +197,10 @@ attempts remain auditable and may be retried on the same day. A window is
 blocked when a campaign Run is active, a valid Run already exists for that UTC
 day, either Agent is offline, or the immutable pair/topology/profile contract
 no longer matches. This campaign establishes time-separated evidence for one
-fixed pair only; it does not rate a provider.
+fixed pair only; it does not rate a provider. When the installed standard
+profile or methodology changes, an unfinished older campaign is returned as
+`superseded`; its Runs remain readable, but the dispatch endpoint refuses to
+continue it under the new contract.
 
 ## Create a PostgreSQL peer run
 

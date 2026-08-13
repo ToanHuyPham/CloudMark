@@ -33,6 +33,16 @@ INTERFACE_COUNTER_FIELDS = (
     "tx_errors",
     "tx_dropped",
 )
+QUEUE_COUNTER_FIELDS = (
+    "rx_bytes",
+    "rx_packets",
+    "rx_errors",
+    "rx_dropped",
+    "tx_bytes",
+    "tx_packets",
+    "tx_errors",
+    "tx_dropped",
+)
 
 
 class NetworkError(RuntimeError):
@@ -77,13 +87,13 @@ def validate_network_run(
         if not capabilities.get("iperf3"):
             raise ValueError(f"Agent {agent['name']} does not report the iperf3 capability.")
         methodology_version = str(NETWORK_PROFILES[profile_name]["methodology_version"])
-        if methodology_version in {"network-v4", "network-v5", "network-v6"}:
+        if methodology_version in {"network-v4", "network-v5", "network-v6", "network-v7"}:
             missing = [
                 capability
                 for capability in ("iproute2", "ethtool", "tcp_congestion_control")
                 if not capabilities.get(capability)
             ]
-            if methodology_version == "network-v6" and not capabilities.get("tracepath"):
+            if methodology_version in {"network-v6", "network-v7"} and not capabilities.get("tracepath"):
                 missing.append("tracepath")
             if missing:
                 raise ValueError(
@@ -490,6 +500,133 @@ def _measurement(
     return measurement
 
 
+def _queue_counter_delta(
+    before_interface: dict[str, Any],
+    after_interface: dict[str, Any],
+) -> dict[str, Any]:
+    before = before_interface.get("queue_counters") or {}
+    after = after_interface.get("queue_counters") or {}
+    result: dict[str, Any] = {
+        "status": "unavailable",
+        "source": "ethtool-nic-statistics",
+        "traffic_scope": "driver-exposed-per-queue-counters-on-route-derived-interface",
+        "window_started_at": before.get("observed_at"),
+        "window_ended_at": after.get("observed_at"),
+        "queues": [],
+    }
+    accepted_statuses = {"observed", "partial"}
+    if before.get("status") not in accepted_statuses or after.get("status") not in accepted_statuses:
+        result["reason"] = "Driver per-queue counters were not observed at both boundaries."
+        return result
+    if not isinstance(result["window_started_at"], str) or not isinstance(result["window_ended_at"], str):
+        result["reason"] = "Both per-queue counter boundary timestamps are required."
+        return result
+
+    def queue_map(snapshot: dict[str, Any]) -> dict[int, dict[str, int]]:
+        values: dict[int, dict[str, int]] = {}
+        for item in snapshot.get("queues") or []:
+            queue = item.get("queue")
+            counters = item.get("counters")
+            if not isinstance(queue, int) or isinstance(queue, bool) or not isinstance(counters, dict):
+                continue
+            normalized = {
+                field: value
+                for field, value in counters.items()
+                if field in QUEUE_COUNTER_FIELDS
+                and isinstance(value, int)
+                and not isinstance(value, bool)
+                and value >= 0
+            }
+            if normalized:
+                values[queue] = normalized
+        return values
+
+    before_queues = queue_map(before)
+    after_queues = queue_map(after)
+    common_queues = sorted(set(before_queues) & set(after_queues))
+    if not common_queues:
+        result["reason"] = "No matching driver queue counters were observed at both boundaries."
+        return result
+    complete = (
+        before.get("status") == "observed"
+        and after.get("status") == "observed"
+        and set(before_queues) == set(after_queues)
+    )
+    reset_fields: list[str] = []
+    queue_rows: list[dict[str, Any]] = []
+    for queue in common_queues:
+        before_values = before_queues[queue]
+        after_values = after_queues[queue]
+        common_fields = sorted(set(before_values) & set(after_values))
+        queue_complete = set(before_values) == set(after_values)
+        deltas: dict[str, int] = {}
+        queue_resets: list[str] = []
+        for field in common_fields:
+            if after_values[field] < before_values[field]:
+                queue_resets.append(field)
+                reset_fields.append(f"queue-{queue}:{field}")
+                queue_complete = False
+                continue
+            deltas[field] = after_values[field] - before_values[field]
+        if not deltas:
+            complete = False
+            continue
+        if not queue_complete or queue_resets:
+            complete = False
+        queue_rows.append({
+            "queue": queue,
+            "status": "complete" if queue_complete and not queue_resets else "partial",
+            "counters": deltas,
+            "reset_fields": queue_resets,
+        })
+    if not queue_rows:
+        result["reason"] = "Driver queue counters were unavailable, reset, or decreased during the Run."
+        result["reset_fields"] = reset_fields
+        return result
+
+    def optional_total(fields: tuple[str, ...]) -> int | None:
+        values = [
+            counters[field]
+            for item in queue_rows
+            for counters in [item["counters"]]
+            for field in fields
+            if field in counters
+        ]
+        return sum(values) if values else None
+
+    def packet_distribution(field: str) -> dict[str, Any]:
+        values = [
+            (item["queue"], item["counters"][field])
+            for item in queue_rows
+            if field in item["counters"]
+        ]
+        total = sum(value for _, value in values)
+        active = [(queue, value) for queue, value in values if value > 0]
+        peak = max(active, key=lambda item: item[1], default=None)
+        return {
+            "reported_queues": len(values),
+            "active_queues": len(active),
+            "total_packets": total,
+            "busiest_queue": peak[0] if peak else None,
+            "busiest_queue_packets": peak[1] if peak else None,
+            "busiest_queue_percent": round(peak[1] / total * 100, 6) if peak and total else None,
+        }
+
+    result.update({
+        "status": "complete" if complete else "partial",
+        "queues": queue_rows,
+        "reported_queue_count": len(queue_rows),
+        "rx_distribution": packet_distribution("rx_packets"),
+        "tx_distribution": packet_distribution("tx_packets"),
+        "total_dropped": optional_total(("rx_dropped", "tx_dropped")),
+        "total_errors": optional_total(("rx_errors", "tx_errors")),
+        "reset_fields": reset_fields,
+    })
+    if not complete:
+        result["reason"] = "Queue sets or driver-exposed counter fields changed between boundaries."
+    return result
+
+
 def _network_analysis(result: dict[str, Any]) -> dict[str, Any]:
     latency_by_direction = {item["direction"]: item for item in result["latency_measurements"]}
     tcp_by_direction: dict[str, list[dict[str, Any]]] = {}
@@ -767,6 +904,33 @@ def _network_analysis(result: dict[str, Any]) -> dict[str, Any]:
         counter_status = "partial"
     else:
         counter_status = "unavailable"
+    queue_counter_deltas: list[dict[str, Any]] = []
+    for direction in sorted(set(pre_by_direction) | set(post_by_direction)):
+        before = pre_by_direction.get(direction) or {}
+        after = post_by_direction.get(direction) or {}
+        before_interface = ((before.get("evidence") or {}).get("interface") or {})
+        after_interface = ((after.get("evidence") or {}).get("interface") or {})
+        item = _queue_counter_delta(before_interface, after_interface)
+        item.update({
+            "direction": direction,
+            "sender": before.get("sender") or after.get("sender"),
+            "receiver": before.get("receiver") or after.get("receiver"),
+            "interface": before_interface.get("name") or after_interface.get("name"),
+        })
+        if not before or not after:
+            item["status"] = "unavailable"
+            item["reason"] = "Both pre-load and post-load snapshots are required."
+        elif before_interface.get("name") != after_interface.get("name"):
+            item["status"] = "unavailable"
+            item["reason"] = "The route-derived egress interface changed during the Run."
+        queue_counter_deltas.append(item)
+    queue_statuses = [str(item.get("status", "unavailable")) for item in queue_counter_deltas]
+    if len(queue_statuses) >= 2 and all(status == "complete" for status in queue_statuses):
+        queue_status = "complete"
+    elif any(status in {"complete", "partial"} for status in queue_statuses):
+        queue_status = "partial"
+    else:
+        queue_status = "unavailable"
     if len(headroom_statuses) >= 2 and all(status == "adequate" for status in headroom_statuses):
         generator_status = "adequate"
     elif "constrained" in headroom_statuses:
@@ -779,16 +943,16 @@ def _network_analysis(result: dict[str, Any]) -> dict[str, Any]:
     if generator_status != "adequate":
         validity_reasons.append(f"generator-headroom-{generator_status}")
     methodology_version = str(result.get("methodology_version", ""))
-    nic_evidence_required = methodology_version in {"network-v4", "network-v5", "network-v6"}
+    nic_evidence_required = methodology_version in {"network-v4", "network-v5", "network-v6", "network-v7"}
     if nic_evidence_required and nic_status != "complete":
         validity_reasons.append("nic-offload-and-tcp-control-evidence-incomplete")
-    counter_evidence_required = methodology_version in {"network-v5", "network-v6"}
+    counter_evidence_required = methodology_version in {"network-v5", "network-v6", "network-v7"}
     if counter_evidence_required and counter_status != "complete":
         validity_reasons.append("interface-counter-window-evidence-incomplete")
-    path_trace_required = methodology_version == "network-v6"
+    path_trace_required = methodology_version in {"network-v6", "network-v7"}
     if path_trace_required and path_trace_status != "complete":
         validity_reasons.append("bounded-path-trace-evidence-incomplete")
-    route_stability_required = methodology_version == "network-v6"
+    route_stability_required = methodology_version in {"network-v6", "network-v7"}
     if route_stability_required and route_stability_status != "complete":
         validity_reasons.append(
             "route-stability-evidence-changed"
@@ -806,6 +970,7 @@ def _network_analysis(result: dict[str, Any]) -> dict[str, Any]:
     return {
         "directions": directions,
         "interface_counter_deltas": interface_counter_deltas,
+        "queue_counter_deltas": queue_counter_deltas,
         "path_stability": path_stability,
         "path_claims": {
             "public_internet_traversal_proven": False,
@@ -818,6 +983,8 @@ def _network_analysis(result: dict[str, Any]) -> dict[str, Any]:
             "nic_evidence_required": nic_evidence_required,
             "interface_counter_evidence_status": counter_status,
             "interface_counter_evidence_required": counter_evidence_required,
+            "queue_counter_evidence_status": queue_status,
+            "queue_counter_evidence_required": False,
             "path_trace_evidence_status": path_trace_status,
             "path_trace_evidence_required": path_trace_required,
             "route_stability_status": route_stability_status,

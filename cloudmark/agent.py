@@ -69,6 +69,26 @@ from .web_benchmark import (
 SERVICE_CONTROLLER_CONTACT_TIMEOUT_SECONDS = 20
 PATH_PROBE_MAX_HOPS = 8
 NETWORK_INTERFACE_PATTERN = re.compile(r"^[A-Za-z0-9_.:@-]{1,64}$")
+NETWORK_QUEUE_MAX_INDEX = 127
+NETWORK_QUEUE_MAX_STAT_LINES = 4096
+NETWORK_QUEUE_METRIC_ALIASES = {
+    "bytes": "bytes",
+    "packets": "packets",
+    "cnt": "packets",
+    "drop": "dropped",
+    "drops": "dropped",
+    "dropped": "dropped",
+    "error": "errors",
+    "errors": "errors",
+}
+NETWORK_QUEUE_STAT_PATTERNS = (
+    re.compile(
+        r"^(rx|tx)_queue_(\d+)_(?:(rx|tx)_)?"
+        r"(bytes|packets|cnt|drop|drops|dropped|error|errors)$"
+    ),
+    re.compile(r"^queue_(\d+)_(rx|tx)_(bytes|packets|cnt|drop|drops|dropped|error|errors)$"),
+    re.compile(r"^(rx|tx)(\d+)_(bytes|packets|cnt|drop|drops|dropped|error|errors)$"),
+)
 IPV4_PRIVATE_NETWORKS = tuple(
     ipaddress.ip_network(value) for value in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16")
 )
@@ -220,6 +240,83 @@ def _parse_ethtool_features(stdout: str) -> dict[str, dict[str, bool]]:
             "fixed": match.group(3) == "fixed",
         }
     return features
+
+
+def _queue_stat_identity(name: str) -> tuple[int, str] | None:
+    for index, pattern in enumerate(NETWORK_QUEUE_STAT_PATTERNS):
+        match = pattern.fullmatch(name)
+        if not match:
+            continue
+        if index == 0:
+            direction, queue_text, nested_direction, metric = match.groups()
+            if nested_direction and nested_direction != direction:
+                return None
+        elif index == 1:
+            queue_text, direction, metric = match.groups()
+        else:
+            direction, queue_text, metric = match.groups()
+        queue = int(queue_text)
+        if queue > NETWORK_QUEUE_MAX_INDEX:
+            return None
+        return queue, f"{direction}_{NETWORK_QUEUE_METRIC_ALIASES[metric]}"
+    return None
+
+
+def _parse_ethtool_queue_statistics(stdout: str) -> dict[str, Any]:
+    """Normalize a bounded subset of common driver per-queue counter names."""
+    lines = stdout.splitlines()
+    queues: dict[int, dict[str, int]] = {}
+    numeric_statistics = 0
+    unclassified_statistics = 0
+    duplicate_counters = 0
+    for line in lines[:NETWORK_QUEUE_MAX_STAT_LINES]:
+        key, separator, raw_value = line.partition(":")
+        if not separator:
+            continue
+        value_text = raw_value.strip()
+        if not re.fullmatch(r"\d+", value_text):
+            continue
+        numeric_statistics += 1
+        identity = _queue_stat_identity(key.strip().lower())
+        if identity is None:
+            unclassified_statistics += 1
+            continue
+        queue, field = identity
+        counters = queues.setdefault(queue, {})
+        if field in counters:
+            duplicate_counters += 1
+            continue
+        counters[field] = int(value_text)
+    if not queues:
+        return {
+            "status": "unavailable",
+            "source": "ethtool-nic-statistics",
+            "queues": [],
+            "numeric_statistics": numeric_statistics,
+            "unclassified_statistics": unclassified_statistics,
+            "truncated": len(lines) > NETWORK_QUEUE_MAX_STAT_LINES,
+            "reason": "ethtool did not expose a recognized bounded per-queue counter name.",
+        }
+    normalized = [
+        {"queue": queue, "counters": dict(sorted(counters.items()))}
+        for queue, counters in sorted(queues.items())
+    ]
+    incomplete = duplicate_counters > 0 or len(lines) > NETWORK_QUEUE_MAX_STAT_LINES
+    result: dict[str, Any] = {
+        "status": "partial" if incomplete else "observed",
+        "source": "ethtool-nic-statistics",
+        "queues": normalized,
+        "queue_count": len(normalized),
+        "parsed_counters": sum(len(item["counters"]) for item in normalized),
+        "numeric_statistics": numeric_statistics,
+        "unclassified_statistics": unclassified_statistics,
+        "duplicate_counters": duplicate_counters,
+        "maximum_queue_index": NETWORK_QUEUE_MAX_INDEX,
+        "truncated": len(lines) > NETWORK_QUEUE_MAX_STAT_LINES,
+    }
+    if incomplete:
+        result["reason"] = "Duplicate normalized fields or output truncation made the queue snapshot partial."
+    return result
 
 
 def _tcp_congestion_control() -> dict[str, Any]:
@@ -794,6 +891,12 @@ class AgentWorker:
             "features": {},
             "reason": "ethtool is not installed or the egress interface is outside the fixed interface-name policy.",
         }
+        queue_counter_evidence: dict[str, Any] = {
+            "status": "unavailable",
+            "source": "ethtool-nic-statistics",
+            "queues": [],
+            "reason": "ethtool is not installed or the egress interface is outside the fixed interface-name policy.",
+        }
         ethtool = shutil.which("ethtool")
         if ethtool and NETWORK_INTERFACE_PATTERN.fullmatch(interface_name):
             try:
@@ -834,6 +937,26 @@ class AgentWorker:
                     )
             except subprocess.TimeoutExpired:
                 offload_evidence["reason"] = "The bounded ethtool feature query timed out."
+            try:
+                queue_result = subprocess.run(
+                    [ethtool, "-S", interface_name],
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                    check=False,
+                    shell=False,
+                    env=environment,
+                )
+                if queue_result.returncode == 0:
+                    queue_counter_evidence = _parse_ethtool_queue_statistics(queue_result.stdout)
+                    queue_counter_evidence["observed_at"] = datetime.now(timezone.utc).isoformat()
+                else:
+                    queue_counter_evidence["reason"] = (
+                        queue_result.stderr.strip()[:256]
+                        or "ethtool did not expose NIC statistics for the route-derived interface."
+                    )
+            except subprocess.TimeoutExpired:
+                queue_counter_evidence["reason"] = "The bounded ethtool statistics query timed out."
         interface_mtu = (link or {}).get("mtu")
         status = "complete" if isinstance(interface_mtu, int) else "partial"
         return {
@@ -854,6 +977,7 @@ class AgentWorker:
                 "driver": driver_evidence,
                 "offloads": offload_evidence,
                 "counters": link_counters,
+                "queue_counters": queue_counter_evidence,
             },
             "tcp": {"congestion_control": _tcp_congestion_control()},
             "path_mtu": path_mtu,

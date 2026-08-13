@@ -183,11 +183,25 @@ def project_network_campaign(
     target_windows = int(campaign.get("target_windows") or NETWORK_CAMPAIGN_MIN_WINDOWS)
     valid_window_count = len(valid_days)
     stored_status = str(campaign.get("status") or "active")
-    effective_status = "completed" if valid_window_count >= target_windows else stored_status
+    installed_profile = NETWORK_PROFILES.get(str(contract.get("profile") or "")) or {}
+    profile_contract_current = (
+        str(installed_profile.get("profile_version") or "") == str(contract.get("profile_version") or "")
+        and str(installed_profile.get("methodology_version") or "") == str(contract.get("methodology_version") or "")
+    )
+    if valid_window_count >= target_windows:
+        effective_status = "completed"
+    elif stored_status == "active" and not profile_contract_current:
+        effective_status = "superseded"
+    else:
+        effective_status = stored_status
     session_matches = campaign_contract_matches_session(campaign, session) if session else False
     if effective_status == "completed":
         eligible = False
         reason_code = "campaign-complete"
+        earliest_at = None
+    elif effective_status == "superseded":
+        eligible = False
+        reason_code = "campaign-profile-contract-superseded"
         earliest_at = None
     elif stored_status != "active":
         eligible = False

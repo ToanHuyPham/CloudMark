@@ -22,6 +22,7 @@ from cloudmark.agent import (
     _link_counters,
     _parse_ethtool_driver,
     _parse_ethtool_features,
+    _parse_ethtool_queue_statistics,
     _parse_tracepath,
     _tcp_congestion_control,
     join_session,
@@ -45,6 +46,7 @@ from cloudmark.network import (
     NetworkError,
     _iperf_metrics,
     _network_analysis,
+    _queue_counter_delta,
     _udp_metrics,
     network_total_steps,
     parse_ping_output,
@@ -691,6 +693,22 @@ class CloudMarkTests(unittest.TestCase):
         self.assertFalse(changed["next_window"]["eligible"])
         self.assertEqual(changed["next_window"]["reason_code"], "campaign-session-contract-mismatch")
 
+        superseded_campaign = json.loads(json.dumps(campaign))
+        superseded_campaign["contract"]["profile_version"] = "6.0"
+        superseded_campaign["contract"]["methodology_version"] = "network-v6"
+        superseded = project_network_campaign(
+            superseded_campaign,
+            [],
+            session=session,
+            now=datetime(2026, 8, 13, 12, tzinfo=timezone.utc),
+        )
+        self.assertEqual(superseded["status"], "superseded")
+        self.assertFalse(superseded["next_window"]["eligible"])
+        self.assertEqual(
+            superseded["next_window"]["reason_code"],
+            "campaign-profile-contract-superseded",
+        )
+
     def test_controller_creates_and_manually_dispatches_network_campaign_window(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             controller = CloudMarkController(Path(directory))
@@ -1114,6 +1132,17 @@ class CloudMarkTests(unittest.TestCase):
                 ),
                 stderr="",
             ),
+            SimpleNamespace(
+                returncode=0,
+                stdout=(
+                    "NIC statistics:\n"
+                    "rx_queue_0_packets: 100\n"
+                    "rx_queue_0_bytes: 1000\n"
+                    "tx_queue_0_packets: 200\n"
+                    "tx_queue_0_bytes: 2000\n"
+                ),
+                stderr="",
+            ),
         ]
         with patch("cloudmark.agent.os.name", "posix"), patch(
             "cloudmark.agent.shutil.which", side_effect=lambda name: name
@@ -1134,12 +1163,15 @@ class CloudMarkTests(unittest.TestCase):
         self.assertEqual(result["tcp"]["congestion_control"]["algorithm"], "cubic")
         self.assertEqual(result["interface"]["counters"]["rx_packets"], 100)
         self.assertEqual(result["interface"]["counters"]["tx_dropped"], 4)
+        self.assertEqual(result["interface"]["queue_counters"]["queue_count"], 1)
+        self.assertEqual(result["interface"]["queue_counters"]["queues"][0]["counters"]["tx_packets"], 200)
         self.assertFalse(result["policy"]["network_configuration_changed"])
         self.assertEqual(run.call_args_list[0].args[0], ["ip", "-4", "-j", "route", "get", "10.0.0.11"])
         self.assertEqual(run.call_args_list[1].args[0], ["ip", "-s", "-j", "link", "show", "dev", "ens4"])
         self.assertEqual(run.call_args_list[2].args[0], ["tracepath", "-n", "-m", "8", "10.0.0.11"])
         self.assertEqual(run.call_args_list[3].args[0], ["ethtool", "-i", "ens4"])
         self.assertEqual(run.call_args_list[4].args[0], ["ethtool", "-k", "ens4"])
+        self.assertEqual(run.call_args_list[5].args[0], ["ethtool", "-S", "ens4"])
 
     def test_agent_classifies_and_bounds_numeric_path_trace_without_public_path_claim(self) -> None:
         destination = ipaddress.ip_address("198.51.100.10")
@@ -1178,6 +1210,35 @@ class CloudMarkTests(unittest.TestCase):
         self.assertNotIn("tx-checksum-ipv4", features)
         self.assertEqual(congestion["algorithm"], "bbr")
 
+    def test_agent_normalizes_bounded_driver_per_queue_counters(self) -> None:
+        evidence = _parse_ethtool_queue_statistics(
+            """
+NIC statistics:
+rx_queue_0_packets: 100
+rx_queue_0_bytes: 1000
+tx_queue_0_packets: 80
+queue_1_rx_cnt: 50
+queue_1_tx_bytes: 700
+rx2_drops: 3
+queue_999_rx_packets: 999
+rx_queue_0_xdp_packets: 1000
+device_packets: 400
+"""
+        )
+        self.assertEqual(evidence["status"], "observed")
+        self.assertEqual(evidence["queue_count"], 3)
+        self.assertEqual(evidence["queues"][0]["counters"]["rx_packets"], 100)
+        self.assertEqual(evidence["queues"][1]["counters"]["rx_packets"], 50)
+        self.assertEqual(evidence["queues"][2]["counters"]["rx_dropped"], 3)
+        self.assertGreaterEqual(evidence["unclassified_statistics"], 3)
+        duplicate = _parse_ethtool_queue_statistics(
+            "rx_queue_0_packets: 100\nrx_queue_0_cnt: 100\n"
+        )
+        self.assertEqual(duplicate["status"], "partial")
+        self.assertEqual(duplicate["duplicate_counters"], 1)
+        unavailable = _parse_ethtool_queue_statistics("device_packets: 100\n")
+        self.assertEqual(unavailable["status"], "unavailable")
+
     def test_agent_normalizes_only_complete_nonnegative_link_counters(self) -> None:
         complete = _link_counters({
             "stats64": {
@@ -1191,6 +1252,37 @@ class CloudMarkTests(unittest.TestCase):
         self.assertEqual(complete["rx_dropped"], 1)
         self.assertEqual(partial["status"], "partial")
         self.assertEqual(invalid["status"], "unavailable")
+
+    def test_network_queue_counter_delta_preserves_distribution_and_resets(self) -> None:
+        def snapshot(stamp: str, q0: int, q1: int) -> dict[str, object]:
+            return {
+                "queue_counters": {
+                    "status": "observed",
+                    "observed_at": stamp,
+                    "queues": [
+                        {"queue": 0, "counters": {"rx_packets": q0, "rx_bytes": q0 * 100, "rx_dropped": 2}},
+                        {"queue": 1, "counters": {"rx_packets": q1, "rx_bytes": q1 * 100, "rx_dropped": 1}},
+                    ],
+                }
+            }
+
+        complete = _queue_counter_delta(
+            snapshot("2026-08-14T00:00:00+00:00", 100, 100),
+            snapshot("2026-08-14T00:01:00+00:00", 900, 300),
+        )
+        self.assertEqual(complete["status"], "complete")
+        self.assertEqual(complete["reported_queue_count"], 2)
+        self.assertEqual(complete["rx_distribution"]["active_queues"], 2)
+        self.assertEqual(complete["rx_distribution"]["busiest_queue"], 0)
+        self.assertEqual(complete["rx_distribution"]["busiest_queue_percent"], 80.0)
+        self.assertEqual(complete["total_dropped"], 0)
+
+        reset = _queue_counter_delta(
+            snapshot("2026-08-14T00:00:00+00:00", 100, 100),
+            snapshot("2026-08-14T00:01:00+00:00", 90, 300),
+        )
+        self.assertEqual(reset["status"], "partial")
+        self.assertIn("queue-0:rx_packets", reset["reset_fields"])
 
     def test_agent_reports_path_evidence_unavailable_without_iproute2(self) -> None:
         worker = AgentWorker("http://127.0.0.1:8787", "agent", "token")
@@ -1455,6 +1547,14 @@ class CloudMarkTests(unittest.TestCase):
             incomplete_trace_analysis["validity"]["reason_codes"],
         )
 
+        changed_boundary["path_trace"]["status"] = "observed"
+        changed_boundary["path_trace"]["reached_destination"] = True
+        result["methodology_version"] = "network-v7"
+        v7_analysis = _network_analysis(result)
+        self.assertEqual(v7_analysis["validity"]["queue_counter_evidence_status"], "unavailable")
+        self.assertFalse(v7_analysis["validity"]["queue_counter_evidence_required"])
+        self.assertTrue(v7_analysis["validity"]["comparison_eligible"])
+
         result["methodology_version"] = "network-v5"
         legacy_analysis = _network_analysis(result)
         self.assertFalse(legacy_analysis["validity"]["route_stability_required"])
@@ -1509,7 +1609,7 @@ class CloudMarkTests(unittest.TestCase):
             self.assertFalse(result["policy"]["controller_in_data_path"])
             self.assertEqual(result["tool"]["version"], "iperf 3.17")
 
-    def test_standard_network_orchestrator_captures_all_v6_measurement_classes(self) -> None:
+    def test_standard_network_orchestrator_captures_all_v7_measurement_classes(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             database = Database(Path(directory) / "test.sqlite3")
             database.create_session("session_test", "pair", "hash", "2099-01-01T00:00:00+00:00")
@@ -1528,7 +1628,7 @@ class CloudMarkTests(unittest.TestCase):
             database.add_agent("agent_b", "session_test", "generator", "generator", system, endpoint={"address": "10.0.0.11"})
             total_steps = network_total_steps("network-peer-standard")
             database.create_run(
-                "run_network_v6",
+                "run_network_v7",
                 "network",
                 "network-peer-standard",
                 {"suite": "network"},
@@ -1606,6 +1706,32 @@ class CloudMarkTests(unittest.TestCase):
                                     "tx_errors": 3 + snapshot,
                                     "tx_dropped": 4 + snapshot * 3,
                                 },
+                                "queue_counters": {
+                                    "status": "observed",
+                                    "observed_at": f"2026-08-13T00:00:0{snapshot}+00:00",
+                                    "queues": [
+                                        {
+                                            "queue": 0,
+                                            "counters": {
+                                                "rx_packets": 100 + snapshot * 800,
+                                                "rx_bytes": 10_000 + snapshot * 80_000,
+                                                "rx_dropped": 1 + snapshot,
+                                                "tx_packets": 200 + snapshot * 600,
+                                                "tx_bytes": 20_000 + snapshot * 60_000,
+                                            },
+                                        },
+                                        {
+                                            "queue": 1,
+                                            "counters": {
+                                                "rx_packets": 50 + snapshot * 200,
+                                                "rx_bytes": 5_000 + snapshot * 20_000,
+                                                "rx_dropped": snapshot,
+                                                "tx_packets": 75 + snapshot * 400,
+                                                "tx_bytes": 7_500 + snapshot * 40_000,
+                                            },
+                                        },
+                                    ],
+                                },
                             })
                         elif task["kind"] == "network-latency":
                             result = {
@@ -1646,10 +1772,10 @@ class CloudMarkTests(unittest.TestCase):
             worker = threading.Thread(target=complete_tasks, daemon=True)
             worker.start()
             try:
-                context = JobContext("run_network_v6", total_steps=total_steps, timeout_seconds=60)
+                context = JobContext("run_network_v7", total_steps=total_steps, timeout_seconds=60)
                 result = run_network(
                     database,
-                    "run_network_v6",
+                    "run_network_v7",
                     "session_test",
                     "network-peer-standard",
                     context=context,
@@ -1670,12 +1796,16 @@ class CloudMarkTests(unittest.TestCase):
             self.assertTrue(result["analysis"]["validity"]["comparison_eligible"])
             self.assertEqual(result["analysis"]["validity"]["nic_evidence_status"], "complete")
             self.assertEqual(result["analysis"]["validity"]["interface_counter_evidence_status"], "complete")
+            self.assertEqual(result["analysis"]["validity"]["queue_counter_evidence_status"], "complete")
+            self.assertFalse(result["analysis"]["validity"]["queue_counter_evidence_required"])
             self.assertEqual(result["analysis"]["validity"]["path_trace_evidence_status"], "complete")
             self.assertEqual(result["analysis"]["validity"]["route_stability_status"], "complete")
             self.assertFalse(result["analysis"]["path_claims"]["public_internet_traversal_proven"])
             self.assertEqual(result["analysis"]["validity"]["generator_headroom_status"], "adequate")
             self.assertEqual(len(result["analysis"]["interface_counter_deltas"]), 2)
             self.assertTrue(all(item["total_dropped"] == 5 for item in result["analysis"]["interface_counter_deltas"]))
+            self.assertEqual(len(result["analysis"]["queue_counter_deltas"]), 2)
+            self.assertTrue(all(item["rx_distribution"]["active_queues"] == 2 for item in result["analysis"]["queue_counter_deltas"]))
 
     def test_profiles_enforce_network_direction_policy(self) -> None:
         self.assertIn("compute-quick", COMPUTE_PROFILES)
@@ -1692,7 +1822,7 @@ class CloudMarkTests(unittest.TestCase):
         profile = NETWORK_PROFILES["network-peer-standard"]
         self.assertFalse(profile["cloud_to_controller"])
         self.assertEqual(profile["requires_agents"], 2)
-        self.assertEqual(profile["methodology_version"], "network-v6")
+        self.assertEqual(profile["methodology_version"], "network-v7")
         self.assertEqual(network_total_steps("network-peer-quick"), 4)
         self.assertEqual(network_total_steps("network-peer-standard"), 21)
 

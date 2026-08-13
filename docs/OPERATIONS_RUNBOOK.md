@@ -140,13 +140,16 @@ repository.
 7. Preserve failed runs; diagnose them before retrying.
 8. Repeat official profiles in multiple time windows.
 
-For Network v6, install the network pack on both Agents and restart them so
+For Network v7, install the network pack on both Agents and restart them so
 inventory reports `iperf3`, `iproute2`, `tracepath`, `ethtool`, and Linux TCP
 congestion-control support. A Standard Run is comparison-ineligible when either
 bounded trace does not reach its paired destination or when interface, gateway,
 or source-route identity changes between the pre-load and post-load boundary.
 Review the retained hop and address-class evidence as descriptive only; it does
 not prove provider ownership or public-Internet transit.
+Review driver queue distribution separately. An `unavailable` per-queue result
+usually means that the virtual NIC does not expose a recognized `ethtool -S`
+counter shape; it does not turn throughput into a failed or zero result.
 
 For a repeated network campaign, keep the same Target/Generator pair and
 topology declaration for the entire contract. In the Network dashboard select
@@ -209,6 +212,9 @@ can become the limiting component.
 - cancel or finish the existing campaign Run before another dispatch;
 - create a new campaign instead of editing SQLite when pair identity or
   topology evidence changed.
+- create a new campaign when the old campaign is `superseded`; CloudMark keeps
+  its existing Runs but will not continue it under a different profile or
+  methodology contract.
 
 ### A PostgreSQL peer run cannot start
 

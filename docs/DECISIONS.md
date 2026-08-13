@@ -268,3 +268,22 @@ one pair and never enables a provider rating.
 stable and an operator controls every load window. Separating acquisition from
 provider inference prevents a scheduler, duplicate Run, failed attempt, or
 single repeatedly tested pair from overstating evidence quality.
+
+## D-022: Network v7 keeps driver per-queue counters observational
+
+**Decision:** Advance the standard peer profile to `network-v7`. At both Run
+boundaries, each Linux Agent issues a fixed read-only `ethtool -S` query only
+against the egress interface derived from the paired-peer route. CloudMark
+examines at most 4,096 lines, accepts queue indexes 0-127, and normalizes only a
+bounded set of common RX/TX queue byte, packet, drop, and error names. It
+reports pre/post deltas, active queues, and busiest-queue share. Unknown vendor
+counters remain unclassified; absent or partial per-queue evidence does not
+invalidate otherwise comparable Network v7 evidence. Unfinished campaigns
+locked to an older standard contract become `superseded` rather than silently
+adopting the new methodology.
+
+**Reason:** Aggregate interface counters can hide a single hot queue, weak RSS,
+or queue-local drops, but `ethtool -S` names are driver-specific and not a
+portable completeness contract. Bounded observational normalization adds
+useful evidence without changing NIC configuration, penalizing providers whose
+drivers use different names, or rewriting an immutable sampling campaign.
