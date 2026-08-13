@@ -61,10 +61,23 @@ def validate_network_run(
     if not target or not generator:
         raise ValueError("Network run requires one target agent and one generator agent.")
     for agent in (target, generator):
+        capabilities = agent.get("system", {}).get("inventory", {}).get("capabilities", {})
         if agent.get("status") != "online":
             raise ValueError(f"Agent {agent['name']} is offline. Start its persistent worker before running the profile.")
-        if not agent.get("system", {}).get("inventory", {}).get("capabilities", {}).get("iperf3"):
+        if not capabilities.get("iperf3"):
             raise ValueError(f"Agent {agent['name']} does not report the iperf3 capability.")
+        if str(NETWORK_PROFILES[profile_name]["methodology_version"]) == "network-v4":
+            missing = [
+                capability
+                for capability in ("iproute2", "ethtool", "tcp_congestion_control")
+                if not capabilities.get(capability)
+            ]
+            if missing:
+                raise ValueError(
+                    f"Agent {agent['name']} is missing Network v4 read-only evidence capabilities: "
+                    + ", ".join(missing)
+                    + ". Restart the Agent after installing the network pack."
+                )
         _address(agent)
     return session, target, generator
 
@@ -248,7 +261,7 @@ def network_default_timeout(profile_name: str) -> int:
             // 1000
             + 20,
         )
-    path_seconds = directions * 30 if profile.get("path_probe") else 0
+    path_seconds = directions * 90 if profile.get("path_probe") else 0
     return tcp_seconds + udp_seconds + bidirectional_seconds + latency_seconds + path_seconds + 120
 
 
@@ -272,7 +285,7 @@ def _path_measurement(
         "network-path-probe",
         {"target_address": receiver_address},
     )
-    task = _wait_task(database, task_id, context, 35)
+    task = _wait_task(database, task_id, context, 90)
     evidence = task.get("result") or {}
     if not isinstance(evidence, dict):
         raise NetworkError("Peer path probe returned an invalid result.")
@@ -560,6 +573,27 @@ def _network_analysis(result: dict[str, Any]) -> dict[str, Any]:
         route_status = "partial"
     else:
         route_status = "unavailable"
+    nic_direction_statuses: list[str] = []
+    for item in path_items:
+        evidence = item.get("evidence") or {}
+        interface = evidence.get("interface") or {}
+        evidence_statuses = [
+            str((interface.get("driver") or {}).get("status", "unavailable")),
+            str((interface.get("offloads") or {}).get("status", "unavailable")),
+            str(((evidence.get("tcp") or {}).get("congestion_control") or {}).get("status", "unavailable")),
+        ]
+        if all(status == "observed" for status in evidence_statuses):
+            nic_direction_statuses.append("complete")
+        elif "observed" in evidence_statuses:
+            nic_direction_statuses.append("partial")
+        else:
+            nic_direction_statuses.append("unavailable")
+    if len(nic_direction_statuses) >= 2 and all(status == "complete" for status in nic_direction_statuses):
+        nic_status = "complete"
+    elif any(status in {"complete", "partial"} for status in nic_direction_statuses):
+        nic_status = "partial"
+    else:
+        nic_status = "unavailable"
     if len(headroom_statuses) >= 2 and all(status == "adequate" for status in headroom_statuses):
         generator_status = "adequate"
     elif "constrained" in headroom_statuses:
@@ -571,12 +605,21 @@ def _network_analysis(result: dict[str, Any]) -> dict[str, Any]:
         validity_reasons.append("route-interface-mtu-evidence-incomplete")
     if generator_status != "adequate":
         validity_reasons.append(f"generator-headroom-{generator_status}")
-    comparison_eligible = route_status == "complete" and generator_status == "adequate"
+    nic_evidence_required = str(result.get("methodology_version", "")) == "network-v4"
+    if nic_evidence_required and nic_status != "complete":
+        validity_reasons.append("nic-offload-and-tcp-control-evidence-incomplete")
+    comparison_eligible = (
+        route_status == "complete"
+        and generator_status == "adequate"
+        and (not nic_evidence_required or nic_status == "complete")
+    )
     return {
         "directions": directions,
         "latency_comparison": "Idle ICMP average versus iperf3 TCP_INFO mean RTT under throughput load; protocols differ.",
         "validity": {
             "route_evidence_status": route_status,
+            "nic_evidence_status": nic_status,
+            "nic_evidence_required": nic_evidence_required,
             "generator_headroom_status": generator_status,
             "comparison_eligible": comparison_eligible,
             "reason_codes": validity_reasons,
@@ -618,6 +661,7 @@ def run_network(
             "udp_rate_cap_bits_per_second": ALLOWED_UDP_RATE_MAX,
             "simultaneous_bidirectional": bool(bidirectional_streams),
             "route_interface_mtu_evidence": path_probe,
+            "read_only_nic_and_tcp_control_evidence": path_probe,
             "port_range": [ALLOWED_PORT_MIN, ALLOWED_PORT_MAX],
         },
         "validity_policy": {

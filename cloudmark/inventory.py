@@ -201,6 +201,10 @@ def collect_inventory(workspace: Path | None = None) -> dict[str, Any]:
         "capabilities": {
             "fio": shutil.which("fio") is not None,
             "iperf3": shutil.which("iperf3") is not None,
+            "iproute2": shutil.which("ip") is not None,
+            "tracepath": shutil.which("tracepath") is not None,
+            "ethtool": shutil.which("ethtool") is not None,
+            "tcp_congestion_control": Path("/proc/sys/net/ipv4/tcp_congestion_control").is_file(),
             "postgres": find_postgres_binary("postgres") is not None,
             "initdb": find_postgres_binary("initdb") is not None,
             "pgbench": find_postgres_binary("pgbench") is not None,

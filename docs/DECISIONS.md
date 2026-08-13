@@ -184,3 +184,21 @@ comparison contracts.
 service, so an operator claim must remain usable and visibly labelled. Where
 independent facts do exist, silently ignoring a contradiction would allow
 misclassified same-zone, cross-zone, cross-region, or public-Internet evidence.
+
+## D-017: Read-only NIC and TCP-control evidence is part of Network v4 validity
+
+**Decision:** Advance the standard peer profile to `network-v4`. On each Linux
+Agent, CloudMark resolves the egress interface only from the fixed route lookup
+to the paired peer, then records bounded `ethtool -i`, selected `ethtool -k`,
+and active procfs TCP congestion-control evidence. These queries are read-only;
+CloudMark never changes offloads or kernel network configuration. Complete
+observations in both directions join route/MTU and Generator headroom as a
+comparison-validity requirement. Unsupported platforms and missing tools remain
+`unavailable`, not zero. Network-v3 evidence remains readable under its original
+validity contract and does not gain Network v4 claims retroactively.
+
+**Reason:** Throughput, loss, and latency can change materially with a virtual
+NIC driver, checksum/segmentation/aggregation state, and congestion-control
+algorithm. Capturing those facts makes repeated provider cohorts more
+reproducible without changing the assessed machine or letting the Controller
+select an arbitrary interface or command.

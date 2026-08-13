@@ -160,9 +160,10 @@ In the dashboard:
   Sustained profiles with live progress and cancellation.
 - **Distributed Testing** creates an authenticated multi-agent topology and
   runs guarded path evidence, TCP, UDP, idle-latency, and simultaneous
-  bidirectional profiles. Network remains `Partial` because repeated-window
-  aggregation, physical-fabric verification, NIC-offload evidence, public-path
-  classification, and mTLS enrollment are incomplete.
+  bidirectional profiles plus read-only NIC and TCP-control evidence. Network
+  remains `Partial` because repeated-window automation, physical-fabric
+  verification, per-queue NIC counters, public-path classification, and mTLS
+  enrollment are incomplete.
 - **Database Assessment** uses the same paired Agents for an isolated
   PostgreSQL service and guarded pgbench workloads. PostgreSQL remains
   `Partial` until tail-percentile, replication, recovery, MySQL, and Redis
@@ -423,16 +424,23 @@ loss and jitter sweeps at 25/50/90% of the measured directional TCP peak, and a
 simultaneous bidirectional TCP measurement. The Controller never becomes a
 performance endpoint.
 
+The standard Network v4 profile also requires `iproute2`, `ethtool`, and Linux
+TCP congestion-control evidence on both Agents. The dashboard keeps the run
+button disabled until both refreshed Agent inventories report those
+capabilities. The Quick profile requires only `iperf3`.
+
 The executor accepts only paired-agent addresses, ports 5201–5210, durations up
 to 60 seconds, an allow-list of stream counts, capped UDP rates, and bounded
 ping parameters. Each server is one-shot and has an independent watchdog
-deadline. Linux network-v3 runs capture route, egress-interface and
-interface-MTU evidence; optional path MTU requires `tracepath`. CloudMark
-rejects v3 comparison evidence when Generator CPU or scaling headroom is
-insufficient. Overall network coverage remains `Partial` because
-repeated-window aggregation, physical-fabric verification, NIC-offload
-evidence, richer public-path classification, Windows route parity, and mTLS
-Agent enrollment are not complete. Session topology declarations are already
+deadline. Linux network-v4 runs capture route, egress-interface,
+interface-MTU, NIC driver, selected offload states, and active TCP
+congestion-control evidence; optional path MTU requires `tracepath`. These are
+fixed read-only queries against the route-derived interface. CloudMark rejects
+v4 comparison evidence when route/NIC/TCP-control evidence or Generator CPU and
+scaling headroom is insufficient. Overall network coverage remains `Partial`
+because repeated-window campaign automation, physical-fabric verification,
+per-queue NIC counters, richer public-path classification, Windows route
+parity, and mTLS Agent enrollment are not complete. Session topology declarations are already
 checked against trusted region/zone metadata when those facts are available;
 the dashboard keeps claims and independent observations separate. Public IP
 address class is not treated as proof of public-Internet traversal.

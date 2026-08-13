@@ -251,7 +251,7 @@ code, .eyebrow, .section-kicker, .metric-index, .version { font-family: var(--fo
 .evidence-rows strong { margin-top: 7px; font-size: var(--type-small); }
 .evidence-rows small { margin-top: 4px; color: var(--muted); font-size: var(--type-micro); line-height: 1.45; }
 .method-note { margin: 0; padding: 0 17px 17px; color: #7b8996; font-size: var(--type-micro); line-height: 1.55; }
-.network-checks { margin-top: 12px; display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+.network-checks { margin-top: 12px; display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; }
 .network-checks article { min-height: 105px; padding: 15px; border: 1px solid var(--line); background: var(--panel); }
 .network-checks span { color: var(--cyan); font-family: var(--font-plex-mono); font-size: var(--type-micro); }
 .network-checks strong, .network-checks small { display: block; }

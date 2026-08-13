@@ -51,6 +51,10 @@ systems.
   range after deriving targets from measured directional TCP throughput.
 - Ping count, interval, and timeout are bounded. Loopback, unspecified,
   multicast, and link-local peer addresses are rejected.
+- Route, MTU, NIC-driver, offload, and TCP congestion-control evidence is
+  read-only. `ethtool` is restricted to fixed query arguments against the
+  route-derived egress interface; CloudMark never changes NIC or kernel network
+  configuration.
 - Servers use one-shot mode and an independent watchdog deadline.
 - Cancelling a run prevents queued work from starting; active child processes
   retain bounded task and watchdog timeouts.

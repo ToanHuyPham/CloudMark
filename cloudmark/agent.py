@@ -68,6 +68,80 @@ from .web_benchmark import (
 
 SERVICE_CONTROLLER_CONTACT_TIMEOUT_SECONDS = 20
 PATH_PROBE_MAX_HOPS = 8
+NETWORK_INTERFACE_PATTERN = re.compile(r"^[A-Za-z0-9_.:@-]{1,64}$")
+NETWORK_OFFLOAD_FEATURES = {
+    "rx-checksumming",
+    "tx-checksumming",
+    "scatter-gather",
+    "tcp-segmentation-offload",
+    "generic-segmentation-offload",
+    "generic-receive-offload",
+    "large-receive-offload",
+    "rx-vlan-offload",
+    "tx-vlan-offload",
+    "ntuple-filters",
+    "receive-hashing",
+}
+
+
+def _parse_ethtool_driver(stdout: str) -> dict[str, Any]:
+    allowed = {
+        "driver",
+        "version",
+        "firmware-version",
+        "bus-info",
+        "supports-statistics",
+        "supports-test",
+        "supports-eeprom-access",
+        "supports-register-dump",
+        "supports-priv-flags",
+    }
+    values: dict[str, str | bool] = {}
+    for line in stdout.splitlines():
+        key, separator, raw_value = line.partition(":")
+        normalized_key = key.strip().lower()
+        value = raw_value.strip()
+        if not separator or normalized_key not in allowed or not value:
+            continue
+        output_key = normalized_key.replace("-", "_")
+        if normalized_key.startswith("supports-") and value.lower() in {"yes", "no"}:
+            values[output_key] = value.lower() == "yes"
+        else:
+            values[output_key] = value[:256]
+    return values
+
+
+def _parse_ethtool_features(stdout: str) -> dict[str, dict[str, bool]]:
+    features: dict[str, dict[str, bool]] = {}
+    pattern = re.compile(r"^([a-z0-9-]+):\s+(on|off)(?:\s+\[(fixed)\])?$")
+    for line in stdout.splitlines():
+        match = pattern.match(line.strip().lower())
+        if not match or match.group(1) not in NETWORK_OFFLOAD_FEATURES:
+            continue
+        features[match.group(1)] = {
+            "enabled": match.group(2) == "on",
+            "fixed": match.group(3) == "fixed",
+        }
+    return features
+
+
+def _tcp_congestion_control() -> dict[str, Any]:
+    try:
+        algorithm = Path("/proc/sys/net/ipv4/tcp_congestion_control").read_text(encoding="utf-8").strip()
+    except (OSError, UnicodeError):
+        algorithm = ""
+    if not algorithm:
+        return {
+            "status": "unavailable",
+            "algorithm": None,
+            "source": "linux-procfs",
+            "reason": "The active TCP congestion-control algorithm is not exposed by procfs.",
+        }
+    return {
+        "status": "observed",
+        "algorithm": algorithm[:64],
+        "source": "linux-procfs",
+    }
 
 
 def _validate_controller(controller: str, allow_http: bool) -> str:
@@ -417,6 +491,8 @@ class AgentWorker:
             "passive_route_lookup": True,
             "path_probe_max_hops": PATH_PROBE_MAX_HOPS,
             "arbitrary_arguments_allowed": False,
+            "read_only_nic_evidence": True,
+            "network_configuration_changed": False,
         }
         if os.name == "nt":
             return {
@@ -564,6 +640,55 @@ class AgentWorker:
                     }
             except subprocess.TimeoutExpired:
                 pass
+        driver_evidence: dict[str, Any] = {
+            "status": "unavailable",
+            "reason": "ethtool is not installed or the egress interface is outside the fixed interface-name policy.",
+        }
+        offload_evidence: dict[str, Any] = {
+            "status": "unavailable",
+            "features": {},
+            "reason": "ethtool is not installed or the egress interface is outside the fixed interface-name policy.",
+        }
+        ethtool = shutil.which("ethtool")
+        if ethtool and NETWORK_INTERFACE_PATTERN.fullmatch(interface_name):
+            try:
+                driver_result = subprocess.run(
+                    [ethtool, "-i", interface_name],
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                    check=False,
+                    shell=False,
+                    env=environment,
+                )
+                driver = _parse_ethtool_driver(driver_result.stdout) if driver_result.returncode == 0 else {}
+                if driver.get("driver"):
+                    driver_evidence = {"status": "observed", **driver}
+                else:
+                    driver_evidence["reason"] = (
+                        driver_result.stderr.strip()[:256] or "ethtool did not expose driver identity."
+                    )
+            except subprocess.TimeoutExpired:
+                driver_evidence["reason"] = "The bounded ethtool driver query timed out."
+            try:
+                feature_result = subprocess.run(
+                    [ethtool, "-k", interface_name],
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                    check=False,
+                    shell=False,
+                    env=environment,
+                )
+                features = _parse_ethtool_features(feature_result.stdout) if feature_result.returncode == 0 else {}
+                if features:
+                    offload_evidence = {"status": "observed", "features": features}
+                else:
+                    offload_evidence["reason"] = (
+                        feature_result.stderr.strip()[:256] or "ethtool did not expose selected offload features."
+                    )
+            except subprocess.TimeoutExpired:
+                offload_evidence["reason"] = "The bounded ethtool feature query timed out."
         interface_mtu = (link or {}).get("mtu")
         status = "complete" if isinstance(interface_mtu, int) else "partial"
         return {
@@ -580,9 +705,16 @@ class AgentWorker:
                 "mtu_bytes": interface_mtu,
                 "state": (link or {}).get("operstate"),
                 "link_type": (link or {}).get("link_type"),
+                "driver": driver_evidence,
+                "offloads": offload_evidence,
             },
+            "tcp": {"congestion_control": _tcp_congestion_control()},
             "path_mtu": path_mtu,
-            "tool": {"route": "iproute2", "path_mtu": "tracepath" if trace_tool else None},
+            "tool": {
+                "route": "iproute2",
+                "path_mtu": "tracepath" if trace_tool else None,
+                "nic": "ethtool" if ethtool else None,
+            },
             "policy": policy,
         }
 

@@ -56,6 +56,9 @@ from .web_benchmark import (
 )
 
 
+CLIENT_DISCONNECT_ERRORS = (BrokenPipeError, ConnectionAbortedError, ConnectionResetError)
+
+
 def _json_bytes(value: Any) -> bytes:
     return json.dumps(value, ensure_ascii=False, indent=2).encode("utf-8")
 
@@ -202,7 +205,12 @@ class CloudMarkController:
             profile_config = NETWORK_PROFILES[profile]
             total_steps = network_total_steps(profile)
             methodology_version = str(profile_config["methodology_version"])
-            tool_version = "iperf3/ping/iproute2-agent" if methodology_version == "network-v3" else "iperf3-agent"
+            if methodology_version == "network-v4":
+                tool_version = "iperf3/ping/iproute2/ethtool-agent"
+            elif methodology_version == "network-v3":
+                tool_version = "iperf3/ping/iproute2-agent"
+            else:
+                tool_version = "iperf3-agent"
             default_timeout = network_default_timeout(profile)
         elif suite == "database":
             if request.get("confirm_database_load") is not True:
@@ -656,6 +664,12 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _send_failure(self, status: int, exc: Exception) -> None:
+        try:
+            self._send(status, {"error": str(exc)})
+        except CLIENT_DISCONNECT_ERRORS:
+            return
+
     def _body(self) -> dict[str, Any]:
         length = int(self.headers.get("Content-Length", "0"))
         if length > 16 * 1024 * 1024:
@@ -727,8 +741,10 @@ class Handler(BaseHTTPRequestHandler):
                 )
             else:
                 self._send(404, {"error": "Not found"})
+        except CLIENT_DISCONNECT_ERRORS:
+            return
         except Exception as exc:  # defensive API boundary
-            self._send(500, {"error": str(exc)})
+            self._send_failure(500, exc)
 
     def do_POST(self) -> None:  # noqa: N802
         path = urlparse(self.path).path.rstrip("/")
@@ -775,14 +791,16 @@ class Handler(BaseHTTPRequestHandler):
                 )
             else:
                 self._send(404, {"error": "Not found"})
+        except CLIENT_DISCONNECT_ERRORS:
+            return
         except PermissionError as exc:
-            self._send(403, {"error": str(exc)})
+            self._send_failure(403, exc)
         except LookupError as exc:
-            self._send(404, {"error": str(exc)})
+            self._send_failure(404, exc)
         except (ValueError, BenchmarkError, ComputeError, NetworkError, json.JSONDecodeError) as exc:
-            self._send(400, {"error": str(exc)})
+            self._send_failure(400, exc)
         except Exception as exc:  # defensive API boundary
-            self._send(500, {"error": str(exc)})
+            self._send_failure(500, exc)
 
 
 class Server(ThreadingHTTPServer):
