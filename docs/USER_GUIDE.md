@@ -444,8 +444,20 @@ errors remain evidence; they do not make a poor result disappear. CloudMark
 rejects v6 comparison evidence when pre/post route stability, destination-reaching
 bounded traces, NIC/TCP-control/counter evidence, or Generator CPU and scaling
 headroom is insufficient. Address class and observed hops do not prove public
-Internet transit. Overall network coverage remains `Partial`
-because repeated-window campaign automation, physical-fabric verification,
+Internet transit.
+
+For time-separated evidence, keep `Provider Internal Network` selected and use
+**Create 3-day campaign**. The campaign permanently binds the current Target,
+Generator, topology evidence class, standard profile version, and Network v6
+methodology. Select **Run next campaign window** once in each authorized UTC
+day. CloudMark never schedules these Runs silently, failed attempts can be
+retried, and no more than one comparison-eligible Run counts per UTC day. The
+dashboard shows valid windows, attempts, failures, and the exact reason the next
+window is available or blocked. Completing this campaign describes one fixed
+pair across time; provider comparison still requires independent targets.
+
+Overall network coverage remains `Partial`
+because unattended campaign scheduling, physical-fabric verification,
 per-queue NIC counters, administrative path verification, Windows route
 parity, and mTLS Agent enrollment are not complete. Session topology declarations are already
 checked against trusted region/zone metadata when those facts are available;

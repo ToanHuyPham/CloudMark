@@ -16,6 +16,14 @@ from urllib.parse import parse_qs, urlparse
 
 from . import __version__
 from .benchmarks import BenchmarkError, run_storage, storage_preflight
+from .campaigns import (
+    NETWORK_CAMPAIGN_MAX_WINDOWS,
+    NETWORK_CAMPAIGN_MIN_WINDOWS,
+    NETWORK_CAMPAIGN_PROFILE,
+    build_network_campaign_contract,
+    campaign_contract_matches_session,
+    project_network_campaign,
+)
 from .compute import ComputeError, run_system_benchmark, system_preflight
 from .database import Database
 from .database_benchmark import (
@@ -146,14 +154,16 @@ class CloudMarkController:
     def dashboard(self) -> dict[str, Any]:
         system = self.system()
         runs = self.database.list_runs(10)
+        evidence_runs = self.database.list_runs(2000)
         return {
             "version": __version__,
             "system": system,
             "runs": _dashboard_run_summaries(runs),
             "sessions": [enrich_pairing_session(session) for session in self.database.list_sessions(10)],
+            "network_campaigns": self.list_network_campaigns(),
             "profiles": all_profiles(),
             "suitability": evaluate_suitability(
-                self.database.list_runs(2000),
+                evidence_runs,
                 system,
                 self.database.get_agent,
             ),
@@ -165,6 +175,110 @@ class CloudMarkController:
                 "full_run_evidence_endpoint": "/api/v1/runs/{id}",
             },
         }
+
+    def list_network_campaigns(self, *, runs: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
+        campaign_runs = runs if runs is not None else self.database.list_campaign_runs()
+        results: list[dict[str, Any]] = []
+        for campaign in self.database.list_campaigns(50):
+            session_id = str((campaign.get("contract") or {}).get("session_id") or "")
+            session = self.database.get_session(session_id)
+            enriched = enrich_pairing_session(session) if session else None
+            results.append(project_network_campaign(campaign, campaign_runs, session=enriched))
+        return results
+
+    def get_network_campaign(self, campaign_id: str) -> dict[str, Any]:
+        campaign = self.database.get_campaign(campaign_id)
+        if not campaign:
+            raise LookupError("Network campaign not found.")
+        session_id = str((campaign.get("contract") or {}).get("session_id") or "")
+        session = self.database.get_session(session_id)
+        enriched = enrich_pairing_session(session) if session else None
+        return project_network_campaign(campaign, self.database.list_campaign_runs(campaign_id), session=enriched)
+
+    def create_network_campaign(self, request: dict[str, Any]) -> dict[str, Any]:
+        with self._submission_lock:
+            return self._create_network_campaign_locked(request)
+
+    def _create_network_campaign_locked(self, request: dict[str, Any]) -> dict[str, Any]:
+        session_id = str(request.get("session_id") or "").strip()
+        profile_name = str(request.get("profile") or NETWORK_CAMPAIGN_PROFILE).strip()
+        try:
+            target_windows = int(request.get("target_windows", NETWORK_CAMPAIGN_MIN_WINDOWS))
+        except (TypeError, ValueError) as exc:
+            raise ValueError("target_windows must be an integer.") from exc
+        if isinstance(request.get("target_windows"), bool):
+            raise ValueError("target_windows must be an integer.")
+        if not NETWORK_CAMPAIGN_MIN_WINDOWS <= target_windows <= NETWORK_CAMPAIGN_MAX_WINDOWS:
+            raise ValueError(
+                f"target_windows must be between {NETWORK_CAMPAIGN_MIN_WINDOWS} and {NETWORK_CAMPAIGN_MAX_WINDOWS}."
+            )
+        session, _, _ = validate_network_run(self.database, session_id, profile_name)
+        label = str(request.get("label") or "Provider network repeated-window campaign").strip()
+        if not label:
+            raise ValueError("Campaign label cannot be empty.")
+        if len(label) > 120:
+            raise ValueError("Campaign label cannot exceed 120 characters.")
+        campaign_runs = self.database.list_campaign_runs()
+        for existing in self.database.list_campaigns(500):
+            existing_contract = existing.get("contract") or {}
+            if (
+                str(existing_contract.get("session_id") or "") == session_id
+                and str(existing_contract.get("profile") or "") == profile_name
+                and project_network_campaign(existing, campaign_runs, session=session)["status"] == "active"
+            ):
+                raise ValueError(
+                    "An active repeated network campaign already exists for this pairing session and profile."
+                )
+        contract = build_network_campaign_contract(session, profile_name, target_windows)
+        campaign_id = f"campaign_{uuid.uuid4().hex[:12]}"
+        self.database.create_campaign(campaign_id, label, target_windows, contract)
+        return self.get_network_campaign(campaign_id)
+
+    def start_network_campaign_window(self, campaign_id: str, request: dict[str, Any]) -> dict[str, Any]:
+        if request.get("confirm_network_load") is not True or request.get("confirm_campaign_window") is not True:
+            raise ValueError(
+                "Campaign dispatch requires confirm_network_load=true and confirm_campaign_window=true."
+            )
+        with self._submission_lock:
+            campaign = self.database.get_campaign(campaign_id)
+            if not campaign:
+                raise LookupError("Network campaign not found.")
+            contract = campaign.get("contract") or {}
+            session_id = str(contract.get("session_id") or "")
+            session = self.database.get_session(session_id)
+            if not session:
+                raise ValueError("The campaign pairing session is unavailable.")
+            session = enrich_pairing_session(session)
+            view = project_network_campaign(campaign, self.database.list_campaign_runs(campaign_id), session=session)
+            if not view["next_window"]["eligible"]:
+                raise ValueError(
+                    "The next campaign window cannot start: " + str(view["next_window"]["reason_code"]) + "."
+                )
+            profile_name = str(contract.get("profile") or "")
+            validated_session, _, _ = validate_network_run(self.database, session_id, profile_name)
+            if not campaign_contract_matches_session(campaign, validated_session):
+                raise ValueError("The current pairing session no longer matches the immutable campaign contract.")
+            profile = NETWORK_PROFILES.get(profile_name) or {}
+            if (
+                str(profile.get("profile_version") or "") != str(contract.get("profile_version") or "")
+                or str(profile.get("methodology_version") or "") != str(contract.get("methodology_version") or "")
+            ):
+                raise ValueError("The installed network profile no longer matches the immutable campaign contract.")
+            run = self._submit_run_locked({
+                "suite": "network",
+                "profile": profile_name,
+                "session_id": session_id,
+                "confirm_network_load": True,
+                "campaign_id": campaign_id,
+                "campaign_contract_version": contract.get("version"),
+                "campaign_window_day": view["next_window"]["window_day"],
+                "campaign_window_number": view["next_window"]["window_number"],
+                "campaign_attempt_number": view["next_window"]["attempt_number"],
+            })
+            return {
+                "run": run,
+                "campaign": self.get_network_campaign(campaign_id),
+            }
 
     def submit_run(self, request: dict[str, Any]) -> dict[str, Any]:
         with self._submission_lock:
@@ -783,6 +897,10 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(200, report["provider_observations"])
             elif path == "/api/v1/profiles":
                 self._send(200, all_profiles())
+            elif path == "/api/v1/network-campaigns":
+                self._send(200, {"items": self.controller.list_network_campaigns()})
+            elif path.startswith("/api/v1/network-campaigns/"):
+                self._send(200, self.controller.get_network_campaign(path.rsplit("/", 1)[-1]))
             elif path == "/api/v1/runs":
                 self._send(200, {"items": self.controller.database.list_runs()})
             elif path.startswith("/api/v1/runs/"):
@@ -836,6 +954,11 @@ class Handler(BaseHTTPRequestHandler):
             elif path.startswith("/api/v1/runs/") and path.endswith("/cancel"):
                 run_id = path.split("/")[-2]
                 self._send(202, self.controller.cancel_run(run_id))
+            elif path == "/api/v1/network-campaigns":
+                self._send(201, self.controller.create_network_campaign(body))
+            elif path.startswith("/api/v1/network-campaigns/") and path.endswith("/runs"):
+                campaign_id = path.split("/")[-2]
+                self._send(202, self.controller.start_network_campaign_window(campaign_id, body))
             elif path == "/api/v1/sessions":
                 self._send(
                     201,

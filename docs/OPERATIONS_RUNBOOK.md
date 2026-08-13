@@ -148,6 +148,14 @@ or source-route identity changes between the pre-load and post-load boundary.
 Review the retained hop and address-class evidence as descriptive only; it does
 not prove provider ownership or public-Internet transit.
 
+For a repeated network campaign, keep the same Target/Generator pair and
+topology declaration for the entire contract. In the Network dashboard select
+`Provider Internal Network`, create a three-day campaign, and manually select
+**Run next campaign window** during each authorized UTC-day test window. Review
+the previous attempt before retrying a failed window. CloudMark does not run a
+campaign on a timer, counts at most one comparison-eligible Run per UTC day,
+and does not treat a completed fixed-pair campaign as a provider rating.
+
 For PostgreSQL peer profiles, install the database pack on both Agents, run the
 Target Agent as a non-root account, and allow TCP `55432` only from the paired
 Generator. Verify `cleanup_verified` before treating a completed database run
@@ -189,6 +197,18 @@ can become the limiting component.
 - confirm free space and tool versions;
 - do not immediately rerun a write-heavy or saturation profile;
 - verify cleanup before the next run.
+
+### A repeated network campaign window is blocked
+
+- read the dashboard reason code or `GET /network-campaigns/{id}`;
+- confirm both contracted Agents are online and still belong to the same
+  pairing session;
+- confirm the selected profile is `network-peer-standard` and still reports
+  the contract's profile and methodology versions;
+- wait until the next UTC day when the current day already has a valid window;
+- cancel or finish the existing campaign Run before another dispatch;
+- create a new campaign instead of editing SQLite when pair identity or
+  topology evidence changed.
 
 ### A PostgreSQL peer run cannot start
 

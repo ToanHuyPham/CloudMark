@@ -103,6 +103,9 @@ Required topology: Controller + Agent A + Agent B.
 - topology-aware practical ceiling and bufferbloat classification — planned;
 - read-only TCP congestion-control, NIC driver, and selected offload evidence — available in `network-v6`;
 - pre/post route-derived interface byte, packet, error, and drop deltas — available in `network-v6`;
+- immutable fixed-pair campaigns, manual per-window confirmation, and one
+  comparison-eligible Run per UTC day — available in `network-campaign-v1`;
+- unattended campaign schedules and cross-pair orchestration — planned;
 - per-queue NIC counters and interrupt-affinity evidence — planned;
 - operator-declared same-host, same-zone, cross-zone, cross-region, and
   public-Internet labels — available;

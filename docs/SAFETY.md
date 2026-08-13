@@ -66,6 +66,15 @@ systems.
 - Servers use one-shot mode and an independent watchdog deadline.
 - Cancelling a run prevents queued work from starting; active child processes
   retain bounded task and watchdog timeouts.
+- Repeated campaigns are manual-dispatch only. Creating a campaign does not
+  start a Run, and every window requires both `confirm_network_load=true` and
+  `confirm_campaign_window=true`.
+- A campaign locks one Agent pair, topology evidence class, profile, and
+  methodology. Only completed comparison-eligible Runs count, at most once per
+  UTC day. Failed or cancelled attempts remain visible and never consume a
+  valid window.
+- Campaign completion is temporal evidence for one pair, not provider-wide
+  quality evidence and not authorization for unattended scheduling.
 - Public DDoS, spoofing, reflection, and amplification are outside project
   scope. Future resilience tests require authenticated, operator-owned targets
   with enforced rate and duration caps.

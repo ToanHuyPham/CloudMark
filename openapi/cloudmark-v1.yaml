@@ -108,6 +108,70 @@ components:
         join_token: { type: string, writeOnly: true }
         expires_at: { type: string, format: date-time }
         topology: { $ref: "#/components/schemas/PairTopology" }
+    NetworkCampaignCreateRequest:
+      type: object
+      required: [session_id, profile, target_windows]
+      properties:
+        label: { type: string, maxLength: 120 }
+        session_id: { type: string }
+        profile: { type: string, const: network-peer-standard }
+        target_windows: { type: integer, minimum: 3, maximum: 30 }
+    NetworkCampaignDispatchRequest:
+      type: object
+      required: [confirm_network_load, confirm_campaign_window]
+      properties:
+        confirm_network_load: { type: boolean, const: true }
+        confirm_campaign_window: { type: boolean, const: true }
+    NetworkCampaign:
+      type: object
+      required: [id, label, status, contract, progress, next_window, evidence_status, claim]
+      properties:
+        id: { type: string }
+        label: { type: string }
+        status: { type: string, enum: [active, completed] }
+        created_at: { type: string, format: date-time }
+        contract_version: { type: string, const: network-campaign-v1 }
+        profile: { type: string, const: network-peer-standard }
+        profile_version: { type: string }
+        methodology_version: { type: string }
+        session_id: { type: string }
+        contract:
+          type: object
+          description: Immutable Agent-pair, topology, profile, methodology, and UTC-window identity.
+          additionalProperties: true
+        progress:
+          type: object
+          required: [valid_windows, target_windows, remaining_windows, attempts, failed_attempts]
+          properties:
+            valid_windows: { type: integer, minimum: 0 }
+            target_windows: { type: integer, minimum: 3, maximum: 30 }
+            remaining_windows: { type: integer, minimum: 0 }
+            distinct_utc_days:
+              type: array
+              items: { type: string, format: date }
+            valid_run_ids:
+              type: array
+              items: { type: string }
+            attempts: { type: integer, minimum: 0 }
+            failed_attempts: { type: integer, minimum: 0 }
+            active_run_id: { type: [string, "null"] }
+        next_window:
+          type: object
+          required: [eligible, reason_code, window_number, attempt_number, window_day]
+          properties:
+            eligible: { type: boolean }
+            reason_code: { type: string }
+            earliest_at: { type: [string, "null"], format: date-time }
+            window_number: { type: integer, minimum: 1 }
+            attempt_number: { type: integer, minimum: 1 }
+            window_day: { type: string, format: date }
+        attempts:
+          type: array
+          items: { type: object, additionalProperties: true }
+        evidence_status: { type: string, enum: [partial, complete] }
+        claim:
+          type: string
+          description: Explicitly limits the result to temporal evidence for one fixed Agent pair.
 paths:
   /health:
     get:
@@ -146,6 +210,63 @@ paths:
       summary: Benchmark and suitability profiles
       responses:
         "200": { description: Profiles }
+  /network-campaigns:
+    get:
+      summary: List repeated network evidence campaigns
+      responses:
+        "200": { description: Network campaign collection }
+    post:
+      summary: Create an immutable repeated network evidence contract
+      description: Requires a ready Target and Generator pair and the network-peer-standard profile. Creation does not start traffic.
+      security: [{ controllerToken: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/NetworkCampaignCreateRequest" }
+      responses:
+        "201":
+          description: Campaign created without dispatching a Run
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/NetworkCampaign" }
+        "400": { description: Invalid or unready immutable contract }
+        "401": { description: Missing controller token }
+  /network-campaigns/{campaignId}:
+    get:
+      summary: Read one projected network campaign
+      parameters:
+        - in: path
+          name: campaignId
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Campaign state and validated UTC-day progress
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/NetworkCampaign" }
+        "404": { description: Network campaign not found }
+  /network-campaigns/{campaignId}/runs:
+    post:
+      summary: Manually dispatch the next eligible campaign window
+      description: Never scheduled automatically. At most one comparison-eligible standard Run can count per UTC day; failed attempts may be retried.
+      security: [{ controllerToken: [] }]
+      parameters:
+        - in: path
+          name: campaignId
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/NetworkCampaignDispatchRequest" }
+      responses:
+        "202": { description: Guarded peer Run accepted and campaign projection returned }
+        "400": { description: Confirmation missing, UTC window closed, active Run present, or contract changed }
+        "401": { description: Missing controller token }
+        "404": { description: Network campaign not found }
   /runs:
     get:
       summary: List recent benchmark runs

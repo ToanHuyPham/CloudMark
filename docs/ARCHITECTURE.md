@@ -93,6 +93,16 @@ The minimum comparable cohort is nine samples across three targets and three
 windows. Smaller cohorts remain visible as observations; no relative provider
 ranking is computed.
 
+`network-campaign-v1` is the durable acquisition contract for one fixed
+Target/Generator pair. It locks the pairing session, participant identities,
+topology evidence class, `network-peer-standard` profile version, and
+`network-v6` methodology. The Controller projects progress from linked Runs
+and counts at most one comparison-eligible Run per UTC calendar day. Campaign
+creation never starts traffic, and each window requires a separate
+operator-confirmed API action. A completed fixed-pair campaign is temporal
+evidence only; it does not satisfy the independent-target requirement for a
+provider rating.
+
 ## Local saturation executors
 
 CPU, memory, and storage share one exclusive Controller admission group. A
@@ -178,6 +188,8 @@ SQLite tables:
 - `sessions`: short-lived distributed assessment sessions;
 - `agents`: participants and their inventory evidence.
 - `agent_tasks`: durable per-agent task lifecycle, payload, result, and error.
+- `campaigns`: immutable repeated-network contracts and target window counts;
+  progress is derived from linked immutable Runs rather than duplicated state.
 
 WAL mode permits dashboard reads while a benchmark updates its job state.
 The frequently polled dashboard endpoint returns presentation summaries: only
@@ -185,8 +197,8 @@ the newest completed result per suite/target, active partial results, no raw
 tool output, and a bounded storage chart series. SQLite and `/runs/{id}` retain
 the complete immutable evidence. Presentation compaction never mutates the
 objects returned by the persistence layer.
-Indexes exist only for current query patterns: run status/start time and agents
-by session.
+Indexes exist only for current query patterns: run status/start time, agents by
+session, Agent task claims, and campaign creation order.
 
 ## Trust boundaries
 

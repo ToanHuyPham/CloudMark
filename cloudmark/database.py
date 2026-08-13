@@ -48,6 +48,7 @@ class Database:
                 started_at TEXT,
                 finished_at TEXT,
                 request_json TEXT NOT NULL,
+                campaign_id TEXT,
                 result_json TEXT,
                 error TEXT
             )
@@ -100,10 +101,21 @@ class Database:
                 FOREIGN KEY(agent_id) REFERENCES agents(id) ON DELETE CASCADE
             )
             """,
+            """
+            CREATE TABLE IF NOT EXISTS campaigns (
+                id TEXT PRIMARY KEY,
+                label TEXT NOT NULL,
+                status TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                target_windows INTEGER NOT NULL,
+                contract_json TEXT NOT NULL
+            )
+            """,
             "CREATE INDEX IF NOT EXISTS idx_runs_status_started ON runs(status, started_at)",
             "CREATE INDEX IF NOT EXISTS idx_agents_session_id ON agents(session_id)",
             "CREATE INDEX IF NOT EXISTS idx_agent_tasks_next ON agent_tasks(agent_id, status, created_at)",
             "CREATE INDEX IF NOT EXISTS idx_agent_tasks_run ON agent_tasks(run_id, created_at)",
+            "CREATE INDEX IF NOT EXISTS idx_campaigns_created ON campaigns(created_at)",
         ]
         with self._lock, self._connection() as connection:
             for statement in statements:
@@ -120,10 +132,14 @@ class Database:
                 "runner_version": "TEXT",
                 "methodology_version": "TEXT",
                 "tool_version": "TEXT",
+                "campaign_id": "TEXT",
             }
             for column, definition in migrations.items():
                 if column not in run_columns:
                     connection.execute(f"ALTER TABLE runs ADD COLUMN {column} {definition}")
+            connection.execute(
+                "CREATE INDEX IF NOT EXISTS idx_runs_campaign_id ON runs(campaign_id, started_at)"
+            )
             agent_columns = {row[1] for row in connection.execute("PRAGMA table_info(agents)").fetchall()}
             agent_migrations = {
                 "token_hash": "TEXT NOT NULL DEFAULT ''",
@@ -172,9 +188,9 @@ class Database:
                 INSERT INTO runs(
                     id, suite, profile, status, request_json, progress, phase,
                     completed_steps, total_steps, runner_version,
-                    methodology_version, tool_version
+                    methodology_version, tool_version, campaign_id
                 )
-                VALUES (?, ?, ?, 'queued', ?, 0, 'queued', 0, ?, ?, ?, ?)
+                VALUES (?, ?, ?, 'queued', ?, 0, 'queued', 0, ?, ?, ?, ?, ?)
                 """,
                 (
                     run_id,
@@ -185,6 +201,7 @@ class Database:
                     runner_version,
                     methodology_version,
                     tool_version,
+                    str(request.get("campaign_id") or "") or None,
                 ),
             )
 
@@ -328,6 +345,63 @@ class Database:
                 (max(1, min(limit, 5000)),),
             ).fetchall()
         return [self._run_row(row) for row in rows]
+
+    def list_campaign_runs(self, campaign_id: str | None = None) -> list[dict[str, Any]]:
+        with self._connection() as connection:
+            if campaign_id is None:
+                rows = connection.execute(
+                    "SELECT * FROM runs WHERE campaign_id IS NOT NULL "
+                    "ORDER BY COALESCE(started_at, '') ASC, rowid ASC"
+                ).fetchall()
+            else:
+                rows = connection.execute(
+                    "SELECT * FROM runs WHERE campaign_id = ? "
+                    "ORDER BY COALESCE(started_at, '') ASC, rowid ASC",
+                    (campaign_id,),
+                ).fetchall()
+        return [self._run_row(row) for row in rows]
+
+    def create_campaign(
+        self,
+        campaign_id: str,
+        label: str,
+        target_windows: int,
+        contract: dict[str, Any],
+    ) -> None:
+        with self._lock, self._connection() as connection:
+            connection.execute(
+                """
+                INSERT INTO campaigns(
+                    id, label, status, created_at, target_windows, contract_json
+                ) VALUES (?, ?, 'active', ?, ?, ?)
+                """,
+                (
+                    campaign_id,
+                    label,
+                    utc_now(),
+                    target_windows,
+                    json.dumps(contract, ensure_ascii=False),
+                ),
+            )
+
+    @staticmethod
+    def _campaign_row(row: sqlite3.Row) -> dict[str, Any]:
+        item = dict(row)
+        item["contract"] = json.loads(item.pop("contract_json"))
+        return item
+
+    def get_campaign(self, campaign_id: str) -> dict[str, Any] | None:
+        with self._connection() as connection:
+            row = connection.execute("SELECT * FROM campaigns WHERE id = ?", (campaign_id,)).fetchone()
+        return self._campaign_row(row) if row else None
+
+    def list_campaigns(self, limit: int = 50) -> list[dict[str, Any]]:
+        with self._connection() as connection:
+            rows = connection.execute(
+                "SELECT * FROM campaigns ORDER BY created_at DESC, rowid DESC LIMIT ?",
+                (max(1, min(limit, 500)),),
+            ).fetchall()
+        return [self._campaign_row(row) for row in rows]
 
     def create_session(
         self,

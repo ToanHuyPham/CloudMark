@@ -90,6 +90,13 @@ independently checked when trusted provider metadata can establish a placement
 scope; contradictions remain observational. Globally routable addresses alone
 never prove public-Internet traversal.
 
+`network-campaign-v1` persists an immutable acquisition contract for one fixed
+Target/Generator pair and counts at most one comparison-eligible
+`network-peer-standard` Run per UTC day. Campaign creation is side-effect free;
+each window requires explicit operator confirmation. Its completion is
+time-separated evidence for that pair, not a provider rating or a substitute
+for independent targets.
+
 ## Repository map
 
 - `cloudmark/`: Python Controller, Agent, inventory, provider detection, and

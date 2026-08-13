@@ -19,6 +19,10 @@ X-CloudMark-Token: <token printed by cloudmark serve>
 | GET | `/suitability` | Versioned target-scoped workload gates and provider-readiness evidence |
 | GET | `/provider-comparisons` | Exact-cohort repeated-window descriptive statistics |
 | GET | `/profiles` | Benchmark and scenario profiles |
+| GET | `/network-campaigns` | Repeated network campaign projections |
+| POST | `/network-campaigns` | Create an immutable fixed-pair campaign without starting traffic |
+| GET | `/network-campaigns/{id}` | One campaign, attempts, and UTC-day progress |
+| POST | `/network-campaigns/{id}/runs` | Manually dispatch the next eligible campaign window |
 | GET | `/runs` | Run history |
 | GET | `/runs/{id}` | One run and its complete raw evidence |
 | POST | `/runs` | Submit an asynchronous run |
@@ -153,6 +157,45 @@ stable pre/post routes, destination-reaching bounded traces, a complete
 NIC/TCP-control/counter window, and Generator CPU/scaling headroom. Address
 class and observed hops never prove public-Internet transit. No performance
 traffic is sent to the Controller.
+
+## Create and run a repeated network campaign
+
+Create the contract only after the same Target and Generator are online and
+the pairing topology is correct:
+
+```http
+POST /api/v1/network-campaigns
+Content-Type: application/json
+X-CloudMark-Token: ...
+
+{
+  "label": "Provider same-zone repeated network evidence",
+  "session_id": "session_123",
+  "profile": "network-peer-standard",
+  "target_windows": 3
+}
+```
+
+Creation returns `201` and never starts network traffic. The immutable
+`network-campaign-v1` contract records the pair, topology evidence class,
+profile version, `network-v6` methodology, and a 3-30 day target. Dispatch the
+next eligible window explicitly:
+
+```http
+POST /api/v1/network-campaigns/campaign_123/runs
+Content-Type: application/json
+X-CloudMark-Token: ...
+
+{"confirm_network_load":true,"confirm_campaign_window":true}
+```
+
+The response is `202`. CloudMark counts no more than one completed,
+comparison-eligible standard Run per UTC calendar day. Failed and cancelled
+attempts remain auditable and may be retried on the same day. A window is
+blocked when a campaign Run is active, a valid Run already exists for that UTC
+day, either Agent is offline, or the immutable pair/topology/profile contract
+no longer matches. This campaign establishes time-separated evidence for one
+fixed pair only; it does not rate a provider.
 
 ## Create a PostgreSQL peer run
 

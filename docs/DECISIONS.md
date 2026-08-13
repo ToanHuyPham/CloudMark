@@ -252,3 +252,19 @@ reproducibility facts, but neither establishes administrative ownership or
 proves that traffic crossed the public Internet. Bounded destination-reaching
 traces and stable route boundaries improve provider comparison evidence while
 keeping the claim narrower than the measurement.
+
+## D-021: Repeated network campaigns are immutable and manually dispatched
+
+**Decision:** `network-campaign-v1` binds one pairing session, Target/Generator
+identity, topology evidence class, `network-peer-standard` profile version,
+and methodology for 3-30 distinct UTC-day windows. Creation is side-effect
+free. Every attempt requires explicit network-load and campaign-window
+confirmation. Progress is projected from immutable Runs; only completed
+comparison-eligible results count, with at most one valid result per UTC day.
+Failures may be retried and remain visible. Completion is temporal evidence for
+one pair and never enables a provider rating.
+
+**Reason:** Repeated sampling is useful only when the measurement contract stays
+stable and an operator controls every load window. Separating acquisition from
+provider inference prevents a scheduler, duplicate Run, failed attempt, or
+single repeatedly tested pair from overstating evidence quality.

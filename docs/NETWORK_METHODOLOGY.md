@@ -129,6 +129,17 @@ The Controller refuses to start Network v6 unless both Agents advertise
 capabilities. This prevents an expensive load run that can never satisfy the
 v6 comparison contract.
 
+## Repeated campaign acquisition
+
+`network-campaign-v1` binds one fixed Target/Generator pair, topology evidence
+class, standard profile version, and Network v6 methodology for 3-30 distinct
+UTC-day windows. Creating the campaign does not generate traffic. The operator
+must explicitly confirm each window, and CloudMark counts at most one completed
+comparison-eligible Run per UTC day. Failed and cancelled attempts remain
+visible and may be retried without becoming valid windows. Campaign completion
+is temporal evidence for one pair; provider-level comparison still requires
+independent targets in the same exact cohort.
+
 ## Validity and remaining limitations
 
 Two VMs on the same physical host measure the virtual switch and hypervisor,
@@ -138,8 +149,8 @@ fresh instances, several time windows, and preserved directional results.
 
 The network domain remains `Partial`. CloudMark does not yet provide per-queue
 NIC counters, DNS coverage, administrative route-ownership verification,
-repeated-window campaign automation, physical-fabric verification, or mTLS
-Agent identity. Windows
+unattended campaign scheduling, cross-pair orchestration, physical-fabric
+verification, or mTLS Agent identity. Windows
 latency parsing currently supports English `ping` output, while Windows route
 and MTU evidence is unavailable. Missing evidence is never converted to a zero
 score.

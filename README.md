@@ -31,9 +31,10 @@ timestamp, and raw result.
 | Partial | Guarded two-Agent Nginx/ApacheBench HTTP, API, TLS, connection-churn, tail-latency, and static-transfer profiles |
 | Available | Target-scoped, versioned Essential/Standard/Demanding workload gates with per-check run provenance and explicit unknown evidence |
 | Available | Exact-cohort repeated-window provider observations with median, P10/P90, best/worst, spread, topology/evidence-class contracts, and guarded comparison eligibility |
-| Roadmap | Repeated network windows, physical-fabric verification, per-queue NIC evidence, public-path classification, and mTLS enrollment |
+| Available | Immutable, manually dispatched repeated network campaigns with one comparison-eligible window per UTC day |
+| Roadmap | Unattended sampling schedules, physical-fabric verification, per-queue NIC evidence, public-path classification, and mTLS enrollment |
 | Roadmap | Remaining CPU, memory/NUMA, GPU, application, platform, operations, and provider executors |
-| Roadmap | Sampling campaigns, cross-zone analysis, timestamped cost, operations, and final provider ratings |
+| Roadmap | Cross-target campaign orchestration, cross-zone analysis, timestamped cost, operations, and final provider ratings |
 
 `Partial` and `Roadmap` capabilities never receive an artificial zero score.
 The dashboard reports insufficient evidence until the required executor and

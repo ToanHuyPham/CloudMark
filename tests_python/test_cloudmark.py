@@ -28,6 +28,7 @@ from cloudmark.agent import (
 )
 from cloudmark.benchmarks import _metrics, _parse_fio_log, run_storage
 from cloudmark.bootstrap import create_plan
+from cloudmark.campaigns import build_network_campaign_contract, project_network_campaign
 from cloudmark.compute import ComputeError, parse_sysbench_cpu, run_system_benchmark, system_preflight
 from cloudmark.database import Database
 from cloudmark.database_benchmark import (
@@ -575,6 +576,190 @@ class CloudMarkTests(unittest.TestCase):
             run = database.get_run("run_stale")
             self.assertEqual(run["status"], "failed")
             self.assertEqual(run["phase"], "interrupted")
+
+    def test_database_round_trips_immutable_network_campaign_contract(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            database = Database(Path(directory) / "test.sqlite3")
+            contract = {
+                "version": "network-campaign-v1",
+                "session_id": "session_campaign",
+                "profile": "network-peer-standard",
+            }
+            database.create_campaign("campaign_test", "Repeated pair", 3, contract)
+            campaign = database.get_campaign("campaign_test")
+            self.assertEqual(campaign["status"], "active")
+            self.assertEqual(campaign["target_windows"], 3)
+            self.assertEqual(campaign["contract"], contract)
+            self.assertEqual(database.list_campaigns()[0]["id"], "campaign_test")
+            database.create_run(
+                "run_campaign_indexed",
+                "network",
+                "network-peer-standard",
+                {"suite": "network", "campaign_id": "campaign_test"},
+            )
+            self.assertEqual(database.list_campaign_runs("campaign_test")[0]["id"], "run_campaign_indexed")
+            self.assertEqual(database.list_campaign_runs()[0]["campaign_id"], "campaign_test")
+
+    def test_network_campaign_counts_only_one_comparable_run_per_utc_day(self) -> None:
+        session = {
+            "id": "session_campaign",
+            "status": "ready",
+            "topology": {
+                "scope": "same-zone",
+                "source": "operator-declared",
+                "verification": {"status": "confirmed"},
+            },
+            "agents": [
+                {
+                    "id": "agent_target",
+                    "name": "target-a",
+                    "role": "target",
+                    "system": {"inventory": {"os": {"system": "Linux", "release": "test"}}},
+                },
+                {
+                    "id": "agent_generator",
+                    "name": "generator-a",
+                    "role": "generator",
+                    "system": {"inventory": {"os": {"system": "Linux", "release": "test"}}},
+                },
+            ],
+        }
+        contract = build_network_campaign_contract(session, "network-peer-standard", 3)
+        campaign = {
+            "id": "campaign_test",
+            "label": "Repeated pair",
+            "status": "active",
+            "created_at": "2026-08-11T00:00:00+00:00",
+            "target_windows": 3,
+            "contract": contract,
+        }
+
+        def run(run_id: str, day: str, *, status: str = "completed", eligible: bool = True) -> dict[str, object]:
+            return {
+                "id": run_id,
+                "status": status,
+                "request": {
+                    "campaign_id": "campaign_test",
+                    "campaign_contract_version": "network-campaign-v1",
+                    "session_id": "session_campaign",
+                    "profile": "network-peer-standard",
+                    "campaign_window_day": day,
+                    "campaign_window_number": 1,
+                    "campaign_attempt_number": 1,
+                },
+                "result": {
+                    "profile_version": contract["profile_version"],
+                    "methodology_version": contract["methodology_version"],
+                    "analysis": {"validity": {"comparison_eligible": eligible}},
+                },
+            }
+
+        view = project_network_campaign(
+            campaign,
+            [
+                run("run_valid", "2026-08-12"),
+                run("run_duplicate", "2026-08-12"),
+                run("run_failed", "2026-08-13", status="failed"),
+                run("run_incomplete", "2026-08-11", eligible=False),
+            ],
+            session=session,
+            now=datetime(2026, 8, 13, 12, tzinfo=timezone.utc),
+        )
+        self.assertEqual(view["progress"]["valid_windows"], 1)
+        self.assertEqual(view["progress"]["attempts"], 4)
+        self.assertTrue(view["next_window"]["eligible"])
+        self.assertEqual(view["next_window"]["reason_code"], "ready-for-manual-dispatch")
+
+        today = project_network_campaign(
+            campaign,
+            [run("run_valid", "2026-08-12"), run("run_today", "2026-08-13")],
+            session=session,
+            now=datetime(2026, 8, 13, 12, tzinfo=timezone.utc),
+        )
+        self.assertEqual(today["progress"]["valid_windows"], 2)
+        self.assertFalse(today["next_window"]["eligible"])
+        self.assertEqual(today["next_window"]["reason_code"], "utc-window-already-complete")
+
+        changed_session = json.loads(json.dumps(session))
+        changed_session["agents"][0]["name"] = "replacement-target"
+        changed = project_network_campaign(
+            campaign,
+            [run("run_valid", "2026-08-12")],
+            session=changed_session,
+            now=datetime(2026, 8, 13, 12, tzinfo=timezone.utc),
+        )
+        self.assertFalse(changed["next_window"]["eligible"])
+        self.assertEqual(changed["next_window"]["reason_code"], "campaign-session-contract-mismatch")
+
+    def test_controller_creates_and_manually_dispatches_network_campaign_window(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            controller = CloudMarkController(Path(directory))
+            controller.database.create_session(
+                "session_campaign",
+                "same-zone pair",
+                "hash",
+                "2099-01-01T00:00:00+00:00",
+                {"scope": "same-zone", "source": "operator-declared"},
+            )
+            system = {
+                "inventory": {
+                    "os": {"system": "Linux", "release": "test"},
+                    "capabilities": {
+                        "iperf3": True,
+                        "iproute2": True,
+                        "tracepath": True,
+                        "ethtool": True,
+                        "tcp_congestion_control": True,
+                    },
+                },
+                "provider": {
+                    "provider": "Test Cloud",
+                    "confidence": 0.99,
+                    "source": "trusted test metadata",
+                    "instance_type": "standard-4",
+                    "region": "region-a",
+                    "zone": "region-a-1",
+                },
+            }
+            controller.database.add_agent(
+                "agent_target", "session_campaign", "target-a", "target", system, endpoint={"address": "10.0.0.10"}
+            )
+            controller.database.add_agent(
+                "agent_generator", "session_campaign", "generator-a", "generator", system, endpoint={"address": "10.0.0.11"}
+            )
+            campaign = controller.create_network_campaign({
+                "label": "Three-day same-zone evidence",
+                "session_id": "session_campaign",
+                "profile": "network-peer-standard",
+                "target_windows": 3,
+            })
+            self.assertEqual(campaign["contract_version"], "network-campaign-v1")
+            self.assertEqual(campaign["contract"]["topology"]["evidence_class"], "confirmed")
+            self.assertFalse(campaign["contract"]["claims"]["provider_rating_enabled"])
+            with self.assertRaisesRegex(ValueError, "active repeated network campaign"):
+                controller.create_network_campaign({
+                    "session_id": "session_campaign",
+                    "profile": "network-peer-standard",
+                    "target_windows": 3,
+                })
+            with self.assertRaisesRegex(ValueError, "requires confirm_network_load"):
+                controller.start_network_campaign_window(campaign["id"], {})
+
+            with patch.object(
+                controller,
+                "_submit_run_locked",
+                return_value={"id": "run_campaign", "status": "queued"},
+            ) as submit:
+                dispatched = controller.start_network_campaign_window(
+                    campaign["id"],
+                    {"confirm_network_load": True, "confirm_campaign_window": True},
+                )
+            self.assertEqual(dispatched["run"]["id"], "run_campaign")
+            request = submit.call_args.args[0]
+            self.assertEqual(request["campaign_id"], campaign["id"])
+            self.assertEqual(request["profile"], "network-peer-standard")
+            self.assertEqual(request["campaign_window_number"], 1)
+            self.assertRegex(request["campaign_window_day"], r"^\d{4}-\d{2}-\d{2}$")
 
     def test_pairing_is_ready_only_after_two_agents_join(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -2530,6 +2715,7 @@ max: 1.50
                 self.assertIn("postgres-peer-quick", dashboard["profiles"]["database"])
                 self.assertIn("web-peer-quick", dashboard["profiles"]["web"])
                 self.assertIn("sessions", dashboard)
+                self.assertEqual(dashboard["network_campaigns"], [])
                 self.assertEqual(dashboard["suitability"]["engine_version"], "suitability-v1")
                 self.assertFalse(dashboard["suitability"]["policy"]["missing_evidence_is_zero"])
                 with urllib.request.urlopen(f"{base}/suitability", timeout=5) as response:
@@ -2540,6 +2726,78 @@ max: 1.50
                 self.assertEqual(provider_observations["version"], "provider-observations-v3")
                 self.assertEqual(provider_observations["rating_status"], "not-rated")
                 self.assertFalse(provider_observations["policy"]["provider_ranking"])
+                with urllib.request.urlopen(f"{base}/network-campaigns", timeout=5) as response:
+                    campaigns = json.load(response)
+                self.assertEqual(campaigns["items"], [])
+                controller.database.create_session(
+                    "session_http_campaign",
+                    "HTTP campaign pair",
+                    "hash",
+                    "2099-01-01T00:00:00+00:00",
+                    {"scope": "same-zone", "source": "operator-declared"},
+                )
+                network_system = {
+                    "inventory": {
+                        "os": {"system": "Linux", "release": "test"},
+                        "capabilities": {
+                            "iperf3": True,
+                            "iproute2": True,
+                            "tracepath": True,
+                            "ethtool": True,
+                            "tcp_congestion_control": True,
+                        },
+                    }
+                }
+                controller.database.add_agent(
+                    "agent_http_target",
+                    "session_http_campaign",
+                    "http-target",
+                    "target",
+                    network_system,
+                    endpoint={"address": "10.0.0.20"},
+                )
+                controller.database.add_agent(
+                    "agent_http_generator",
+                    "session_http_campaign",
+                    "http-generator",
+                    "generator",
+                    network_system,
+                    endpoint={"address": "10.0.0.21"},
+                )
+                create_campaign = urllib.request.Request(
+                    f"{base}/network-campaigns",
+                    data=json.dumps({
+                        "label": "HTTP repeated pair",
+                        "session_id": "session_http_campaign",
+                        "profile": "network-peer-standard",
+                        "target_windows": 3,
+                    }).encode("utf-8"),
+                    method="POST",
+                    headers={
+                        "Content-Type": "application/json",
+                        "X-CloudMark-Token": controller.token,
+                    },
+                )
+                with urllib.request.urlopen(create_campaign, timeout=5) as response:
+                    created_campaign = json.load(response)
+                self.assertEqual(created_campaign["contract_version"], "network-campaign-v1")
+                with urllib.request.urlopen(
+                    f"{base}/network-campaigns/{created_campaign['id']}", timeout=5
+                ) as response:
+                    read_campaign = json.load(response)
+                self.assertEqual(read_campaign["id"], created_campaign["id"])
+                refused_dispatch = urllib.request.Request(
+                    f"{base}/network-campaigns/{created_campaign['id']}/runs",
+                    data=b"{}",
+                    method="POST",
+                    headers={
+                        "Content-Type": "application/json",
+                        "X-CloudMark-Token": controller.token,
+                    },
+                )
+                with self.assertRaises(urllib.error.HTTPError) as dispatch_error:
+                    urllib.request.urlopen(refused_dispatch, timeout=5)
+                self.assertEqual(dispatch_error.exception.code, 400)
                 request = urllib.request.Request(
                     f"{base}/runs/run_http/cancel",
                     data=b"{}",

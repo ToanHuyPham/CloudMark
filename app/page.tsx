@@ -410,6 +410,47 @@ type Session = {
   agents: Agent[];
 };
 
+type NetworkCampaign = {
+  id: string;
+  label: string;
+  status: "active" | "completed";
+  created_at: string;
+  contract_version: string;
+  profile: string;
+  profile_version: string;
+  methodology_version: string;
+  session_id: string;
+  contract: {
+    topology: { scope: TopologyScope; source: string; evidence_class: string };
+    window_policy: {
+      dispatch: "manual-confirmation-only";
+      calendar: "UTC";
+      maximum_valid_windows_per_day: 1;
+      target_distinct_utc_days: number;
+    };
+  };
+  progress: {
+    valid_windows: number;
+    target_windows: number;
+    remaining_windows: number;
+    distinct_utc_days: string[];
+    valid_run_ids: string[];
+    attempts: number;
+    failed_attempts: number;
+    active_run_id?: string | null;
+  };
+  next_window: {
+    eligible: boolean;
+    reason_code: string;
+    earliest_at?: string | null;
+    window_number: number;
+    attempt_number: number;
+    window_day: string;
+  };
+  evidence_status: "partial" | "complete";
+  claim: string;
+};
+
 type Scenario = { id: string; label: string; status: "available" | "partial" | "roadmap"; primary: string; coverage: string };
 type AssessmentDomain = { id: string; label: string; status: "available" | "partial" | "roadmap"; summary: string };
 
@@ -553,6 +594,7 @@ type Dashboard = {
   system: { inventory: Inventory; provider: Provider };
   runs: Run[];
   sessions: Session[];
+  network_campaigns: NetworkCampaign[];
   suitability?: SuitabilityReport;
   profiles: {
     compute: Record<string, { label: string; description: string; estimated_minutes: number; profile_version: string; methodology_version: string; jobs: { name: string }[] }>;
@@ -652,6 +694,19 @@ function coverageLabel(status: Scenario["status"]) {
     partial: "Partially supported",
     roadmap: "Planned",
   }[status];
+}
+
+function campaignReasonLabel(reason: string) {
+  return {
+    "ready-for-manual-dispatch": "Ready for operator-confirmed dispatch",
+    "utc-window-already-complete": "Today's valid UTC window is complete",
+    "campaign-run-active": "A campaign run is active",
+    "campaign-complete": "Target sampling is complete",
+    "campaign-not-active": "Campaign is not active",
+    "campaign-session-unavailable": "Pairing session is unavailable",
+    "campaign-session-contract-mismatch": "Pair identity or topology changed",
+    "campaign-agents-not-ready": "Both contracted Agents must be online",
+  }[reason] || reason.replaceAll("-", " ");
 }
 
 function suitabilityVerdictLabel(verdict: SuitabilityScenario["verdict"]) {
@@ -778,6 +833,9 @@ export default function Home() {
             && capabilities.tcp_congestion_control
             && (selectedNetworkMethodology !== "network-v6" || capabilities.tracepath)));
     });
+  const selectedNetworkCampaign = dashboard?.network_campaigns.find(
+    (campaign) => campaign.session_id === selectedSession?.id && campaign.profile === selectedNetworkProfile,
+  );
   const networkMeasurements = latestNetwork?.result?.measurements || [];
   const latencyMeasurements = latestNetwork?.result?.latency_measurements || [];
   const udpMeasurements = latestNetwork?.result?.udp_measurements || [];
@@ -1073,6 +1131,61 @@ export default function Home() {
       await loadDashboard();
     } catch (error) {
       setNotice(error instanceof Error ? error.message : "Network assessment failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function createNetworkCampaign() {
+    if (!requireToken()) return;
+    if (!selectedSession || selectedSession.status !== "ready") {
+      setNotice("Join one target and one generator Agent before creating a repeated campaign.");
+      return;
+    }
+    if (selectedNetworkProfile !== "network-peer-standard") {
+      setNotice("Repeated campaigns require the Provider Internal Network standard profile.");
+      return;
+    }
+    setBusy(true);
+    setNotice(null);
+    try {
+      const response = await fetch(`${API}/network-campaigns`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-CloudMark-Token": token },
+        body: JSON.stringify({
+          label: `${selectedSession.label} repeated network evidence`,
+          session_id: selectedSession.id,
+          profile: selectedNetworkProfile,
+          target_windows: 3,
+        }),
+      });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || "Unable to create the network campaign");
+      setNotice(`Created ${payload.id}. Each valid window requires a separate UTC day and manual confirmation.`);
+      await loadDashboard();
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Unable to create the network campaign");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function startNetworkCampaignWindow() {
+    if (!selectedNetworkCampaign || !requireToken()) return;
+    setBusy(true);
+    setNotice(null);
+    try {
+      const response = await fetch(`${API}/network-campaigns/${selectedNetworkCampaign.id}/runs`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-CloudMark-Token": token },
+        body: JSON.stringify({ confirm_network_load: true, confirm_campaign_window: true }),
+      });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || "Unable to start the campaign window");
+      setNotice(`Created ${payload.run.id} for UTC window ${selectedNetworkCampaign.next_window.window_day}.`);
+      await loadDashboard();
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Unable to start the campaign window");
     } finally {
       setBusy(false);
     }
@@ -1507,6 +1620,18 @@ export default function Home() {
               <div className="panel-head"><div><span className="section-kicker">AGENT CONTROL PLANE</span><h3>Pairing readiness</h3></div><label className="compact-select"><span>SESSION</span><select value={selectedSession?.id || ""} onChange={(event) => setSelectedSessionId(event.target.value)}>{dashboard?.sessions.map((session) => <option key={session.id} value={session.id}>{session.label} · {session.topology.scope} / {session.topology.verification.status} · {session.status}</option>)}</select></label></div>
               {selectedSession ? <div className="agent-roster">{["target", "generator"].map((role) => { const agent = selectedSession.agents.find((item) => item.role === role); const capabilities = agent?.system.inventory?.capabilities || {}; const standardProfile = ["network-v4", "network-v5", "network-v6"].includes(selectedNetworkMethodology || ""); const agentReady = capabilities.iperf3 && (!standardProfile || (capabilities.iproute2 && capabilities.ethtool && capabilities.tcp_congestion_control && (selectedNetworkMethodology !== "network-v6" || capabilities.tracepath))); return <article key={role} className={agent && agentReady ? "connected" : "waiting"}><span>{role.toUpperCase()}</span><strong>{agent?.name || `Waiting for ${role}`}</strong><small>{agent ? `${agent.endpoint.address || "No advertised IP"} · ${agentReady ? standardProfile ? "Network standard ready" : "iperf3 ready" : "Network prerequisites missing"}` : "Join command has not connected"}</small></article>; })}</div> : <div className="empty-row">Create a session, then connect both provider agents.</div>}
               <div className="session-actions"><p><strong>{selectedSession?.status !== "ready" ? "Two agents required" : selectedSessionNetworkReady ? "Ready to measure" : "Network prerequisites missing"}</strong><small>Network v6 requires iperf3, iproute2, tracepath, ethtool, and Linux TCP-control evidence on both Agents.</small></p><button className="button primary" onClick={startNetwork} disabled={busy || Boolean(activeNetwork) || selectedSession?.status !== "ready" || !selectedSessionNetworkReady}>Run network assessment</button></div>
+            </section>
+            <section className="panel campaign-panel">
+              <div className="panel-head"><div><span className="section-kicker">REPEATED UTC-DAY EVIDENCE</span><h3>{selectedNetworkCampaign?.label || "Create a fixed-pair campaign"}</h3></div><span className="run-id">{selectedNetworkCampaign?.contract_version?.toUpperCase() || "STANDARD PROFILE ONLY"}</span></div>
+              {selectedNetworkCampaign ? <>
+                <div className="campaign-progress">
+                  <div><span>VALID WINDOWS</span><strong>{selectedNetworkCampaign.progress.valid_windows} / {selectedNetworkCampaign.progress.target_windows}</strong><small>Maximum one comparison-eligible Run per UTC day</small></div>
+                  <div><span>ATTEMPTS</span><strong>{selectedNetworkCampaign.progress.attempts}</strong><small>{selectedNetworkCampaign.progress.failed_attempts} failed or cancelled</small></div>
+                  <div><span>CONTRACT</span><strong>{selectedNetworkCampaign.profile_version} · {selectedNetworkCampaign.methodology_version}</strong><small>{selectedNetworkCampaign.contract.topology.scope} · {selectedNetworkCampaign.contract.topology.evidence_class}</small></div>
+                  <div><span>NEXT WINDOW</span><strong>{selectedNetworkCampaign.next_window.window_day} UTC</strong><small>{campaignReasonLabel(selectedNetworkCampaign.next_window.reason_code)}</small></div>
+                </div>
+                <div className="campaign-actions"><p><strong>{selectedNetworkCampaign.evidence_status === "complete" ? "Temporal sample complete" : `Window ${selectedNetworkCampaign.next_window.window_number} awaits operator action`}</strong><small>{selectedNetworkCampaign.claim} Dispatch is never scheduled silently.</small></p><button className="button primary" onClick={startNetworkCampaignWindow} disabled={busy || Boolean(activeNetwork) || !selectedNetworkCampaign.next_window.eligible}>Run next campaign window</button></div>
+              </> : <div className="campaign-empty"><div><strong>{selectedNetworkProfile === "network-peer-standard" ? "Lock this Agent pair, topology, profile, and methodology." : "Select Provider Internal Network standard first."}</strong><small>CloudMark requires at least three comparison-eligible Runs on distinct UTC days. Failed attempts can be retried without consuming a valid window.</small></div><button className="button secondary" onClick={createNetworkCampaign} disabled={busy || selectedNetworkProfile !== "network-peer-standard" || selectedSession?.status !== "ready" || !selectedSessionNetworkReady}>Create 3-day campaign</button></div>}
             </section>
             {activeNetwork && <section className="panel run-progress" aria-live="polite"><div><span className="section-kicker">ACTIVE NETWORK RUN / {activeNetwork.id}</span><strong>{activeNetwork.current_job || activeNetwork.phase || "Waiting for agents"}</strong><small>{activeNetwork.completed_steps || 0} of {activeNetwork.total_steps || 1} measurements · {Math.round((activeNetwork.progress || 0) * 100)}%</small></div><div className="progress-track"><i style={{ width: `${Math.max(2, (activeNetwork.progress || 0) * 100)}%` }} /></div><button className="button danger" onClick={cancelNetwork} disabled={busy || activeNetwork.cancel_requested}>{activeNetwork.cancel_requested ? "Cancelling" : "Cancel run"}</button></section>}
             <section className="panel network-results">

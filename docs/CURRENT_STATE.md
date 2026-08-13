@@ -38,6 +38,14 @@ baseline is still the repository head.
   until the complete project is ready for operator testing; the milestone
   passes 90 Python tests, 3 rendered-dashboard tests, dashboard lint, and the
   production build without running a real load;
+- `network-campaign-v1` durable fixed-pair acquisition contracts with immutable
+  Agent/topology/profile/methodology identity, 3-30 distinct UTC-day targets,
+  explicit per-window confirmation, retryable failed attempts, and strict
+  comparison-eligibility counting; campaign creation is side-effect free and a
+  completed campaign remains one-pair temporal evidence rather than a provider
+  rating; the complete development head passes 93 Python tests, 3 rendered-
+  dashboard tests, dashboard lint, and the production build without starting
+  provider load;
 - simulation-verified `database-postgresql-v1` paired executor with isolated
   Target clusters, Generator-side built-in pgbench workloads, durable settings,
   progress/control heartbeat, fixed safety limits, and verified cleanup; the
@@ -72,7 +80,7 @@ baseline is still the repository head.
 - dashboard polling uses non-mutating Run summaries, compact JSON, no raw tool
   output, and a 90-point presentation timeline while `/runs/{id}` and SQLite
   preserve complete evidence; expected client disconnects no longer produce
-  misleading server tracebacks; the complete development head passes 88 Python
+  misleading server tracebacks; the complete development head passes 93 Python
   tests, 3 rendered-dashboard tests, dashboard lint, and the production build.
 
 ## Last verified provider target
@@ -145,9 +153,9 @@ Controller run: `run_1c572100e8704843`.
   topology claims are now independently checked when trusted provider metadata
   permits it, while address class and observed hops do not prove administrative
   ownership or a public path, and same-host placement and the physical provider fabric cannot yet be
-  proven; repeated topology-aware
-  windows, per-queue NIC counters, Windows route parity, and mTLS remain
-  unimplemented;
+  proven; manual fixed-pair repeated UTC-day campaigns are implemented, while
+  unattended scheduling, cross-pair orchestration, per-queue NIC counters,
+  Windows route parity, and mTLS remain unimplemented;
 - PostgreSQL database coverage is Partial: read-only, durable read/write,
   concurrency, and connection churn are implemented; transaction tail
   percentiles, replication, recovery, MySQL/MariaDB, Redis, and managed-service
@@ -161,7 +169,8 @@ Controller run: `run_1c572100e8704843`.
   implemented; generator-saturation validation, dynamic applications,
   HTTP/2/3, CDN, WAF, autoscaling, and DDoS resilience remain unavailable;
 - GPU evidence and GPU benchmarks are not complete;
-- scheduled sampling campaigns, cross-zone analysis, timestamped cost,
+- scheduled sampling campaigns, cross-pair orchestration, cross-zone analysis,
+  timestamped cost,
   operational domains, and final provider ratings remain Roadmap; suitability
   evaluates individual targets while provider observations remain descriptive;
 - Windows is suitable for the Controller and inventory, but benchmark executor
@@ -170,8 +179,9 @@ Controller run: `run_1c572100e8704843`.
 
 ## Next priorities
 
-1. Add repeated network windows, physical-host/fabric and administrative-path
-   verification, per-queue NIC counters, DNS coverage, and Windows route parity
+1. Add physical-host/fabric and administrative-path verification, per-queue
+   NIC counters, DNS coverage, unattended campaign scheduling, and Windows
+   route parity
    before promoting the network domain from Partial.
 2. Add Web generator-saturation validation and dynamic application,
    HTTP/2/3, reverse-proxy, CDN, WAF, and autoscaling evidence.
@@ -179,8 +189,8 @@ Controller run: `run_1c572100e8704843`.
    Redis, replication, backup/restore, and recovery evidence.
 4. Complete remaining compute, memory/NUMA, GPU, security, reliability,
    observability, container, and control-plane executors.
-5. Add explicit sampling campaigns, timestamped price inputs, and cohort
-   export before any final provider-rating methodology.
+5. Extend campaigns across independent targets, then add timestamped price
+   inputs and cohort export before any final provider-rating methodology.
 6. Calibrate and version requirement thresholds across regional clouds, global
    clouds, and self-operated bare metal before treating them as stable policy.
 7. Run provider-machine validation only after the development milestones are
