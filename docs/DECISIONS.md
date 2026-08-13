@@ -160,11 +160,27 @@ validity evidence prevents false precision.
 **Decision:** Pairing sessions accept an explicit topology scope: same-host,
 same-zone, cross-zone, cross-region, public-internet, or undeclared. The scope
 is stored with the session and every paired network, database, and web result.
-Only `operator-declared` topology is accepted as comparison evidence; an
-undeclared run remains usable for target diagnosis but is observational in
-provider cohorts. Provider observation contracts include topology so runs from
-different fabrics cannot be merged.
+An `operator-declared` topology is accepted as a visibly labelled comparison
+contract; an undeclared run remains usable for target diagnosis but is
+observational in provider cohorts. Provider observation contracts include
+topology so runs from different fabrics cannot be merged.
 
 **Reason:** Provider SKU and region labels do not prove the path between two
 instances. Treating topology as an explicit evidence field prevents a fast
 same-zone result from being presented as cross-zone or public-path capacity.
+
+## D-016: Topology claims and independent observations stay separate
+
+**Decision:** After both Agents join, CloudMark derives a placement observation
+only from trusted provider region/zone metadata. Globally routable advertised
+peer endpoints are retained as address-class evidence but never prove
+public-Internet traversal. The result records the operator declaration, the
+independent observation, its source, and a status. Matching scopes are
+confirmed; conflicting scopes are contradicted and remain observational.
+Operator-declared and independently derived provider metrics use different
+comparison contracts.
+
+**Reason:** Smaller providers and self-operated clouds may have no metadata
+service, so an operator claim must remain usable and visibly labelled. Where
+independent facts do exist, silently ignoring a contradiction would allow
+misclassified same-zone, cross-zone, cross-region, or public-Internet evidence.

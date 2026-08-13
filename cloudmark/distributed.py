@@ -7,6 +7,7 @@ from typing import Any
 
 from .database import Database
 from .runner import JobContext
+from .topology import enrich_pairing_session
 
 
 class DistributedError(RuntimeError):
@@ -36,6 +37,7 @@ def validate_pair(
     session = database.get_session(session_id)
     if not session:
         raise ValueError("Distributed run requires an existing pairing session.")
+    session = enrich_pairing_session(session)
     target = next((item for item in session["agents"] if item["role"] == "target"), None)
     generator = next((item for item in session["agents"] if item["role"] == "generator"), None)
     if not target or not generator:

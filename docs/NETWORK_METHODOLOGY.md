@@ -16,6 +16,13 @@ advertised peer address, direction, tool version, duration, and raw tool output.
 The operator must record whether the pair is same-host, same-zone, cross-zone,
 or cross-region. CloudMark does not infer fabric scope from throughput alone.
 
+Once both Agents join, CloudMark independently derives a placement scope when
+trusted provider metadata identifies both regions/zones. The declaration is
+marked confirmed, compatible, contradicted, or unavailable. Globally routable
+advertised peer endpoints are address-class evidence only; they do not prove
+public-Internet traversal. This does not prove same-host placement or the
+physical provider fabric.
+
 ## Profiles
 
 | Profile | Methodology | Measurements |
@@ -92,8 +99,8 @@ identical shapes, placement or anti-affinity evidence, matching tool versions,
 fresh instances, several time windows, and preserved directional results.
 
 The network domain remains `Partial`. CloudMark does not yet provide NIC-offload
-capture, DNS coverage, public-path classification, repeated-window campaign
-automation, topology verification, or mTLS Agent identity. Path MTU depends on
+capture, DNS coverage, richer public-path routing evidence, repeated-window
+campaign automation, physical-fabric verification, or mTLS Agent identity. Path MTU depends on
 `tracepath`; otherwise only the egress interface MTU is observed. Windows
 latency parsing currently supports English `ping` output, while Windows route
 and MTU evidence is unavailable. Missing evidence is never converted to a zero

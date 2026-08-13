@@ -99,12 +99,20 @@ own documents or controlled drills; VM performance cannot substitute for them.
 
 ### Repeated-window descriptive observations
 
-`provider-observations-v2` implements the non-rating portion of that
+`provider-observations-v3` implements the non-rating portion of that
 aggregation. It creates an exact cohort from provider, product/SKU, region, and
 operating system, then separates every metric again by profile, methodology,
-unit, and paired topology. Cross-SKU, cross-region, cross-OS,
-cross-methodology, and cross-topology merging is forbidden. A paired network Run is one observation even when both endpoints
+unit, paired topology, and topology evidence class. Cross-SKU, cross-region,
+cross-OS, cross-methodology, cross-topology, and cross-evidence-class merging is
+forbidden. A paired network Run is one observation even when both endpoints
 belong to the same cohort.
+
+Topology evidence is `operator-declared`, `independently-derived`,
+`contradicted`, or `unavailable`. Trusted provider metadata can derive
+same-zone, cross-zone, or cross-region placement. Globally routable advertised
+peer endpoints do not prove public-Internet traversal. A contradiction makes
+the metric observational. An operator declaration remains a separate contract for
+providers without trusted metadata and is never relabelled as verified.
 
 One UTC calendar day derived from the completed Run timestamp is one
 measurement window. A metric cohort is labelled `comparable` only when it has:

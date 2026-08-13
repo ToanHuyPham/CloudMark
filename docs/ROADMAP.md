@@ -102,7 +102,10 @@ Required topology: Controller + Agent A + Agent B.
 - topology-aware practical ceiling and bufferbloat classification — planned;
 - congestion control and NIC-offload evidence — planned;
 - operator-declared same-host, same-zone, cross-zone, cross-region, and
-  public-Internet labels — available; independent topology verification remains planned;
+  public-Internet labels — available;
+- trusted-metadata placement checks and globally routable address
+  classification — available; public-path, physical-host, and provider-fabric
+  verification remain planned;
 - short-burst and sustained runs;
 - mTLS enrollment and policy-configurable rate limits — planned.
 
@@ -165,8 +168,9 @@ Demanding hard gates to all 12 use cases, preserves per-check run provenance,
 and reports missing/stale evidence, blockers, limitations, and next actions.
 It deliberately does not publish a provider rating.
 
-`provider-observations-v2` is also available at development head. It reports
-exact provider/SKU/region/OS/topology and profile/methodology cohorts with descriptive
+`provider-observations-v3` is also available at development head. It reports
+exact provider/SKU/region/OS/topology/evidence-class and profile/methodology
+cohorts with descriptive
 median, P10/P90, actual best/worst, and spread. Nine samples across three
 targets and three UTC-day windows are required before a metric is marked
 comparable; this remains distinct from a provider rating.
@@ -202,7 +206,8 @@ matching control-plane drills.
 ## Recommended implementation order
 
 1. Complete M1 and the time-series schema because storage is the most mature executor.
-2. Complete M2 with mTLS, repeated windows, topology verification, NIC-offload evidence, and public-path classification.
+2. Complete M2 with mTLS, repeated windows, physical-fabric verification,
+   NIC-offload evidence, and richer public-path classification.
 3. Complete M3 beyond the available integer CPU and memory-bandwidth subsets.
 4. Build M4 on the stable runner.
 5. Add provider adapters and M5 drills.

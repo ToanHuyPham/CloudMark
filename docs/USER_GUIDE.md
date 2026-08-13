@@ -161,7 +161,7 @@ In the dashboard:
 - **Distributed Testing** creates an authenticated multi-agent topology and
   runs guarded path evidence, TCP, UDP, idle-latency, and simultaneous
   bidirectional profiles. Network remains `Partial` because repeated-window
-  aggregation, topology verification, NIC-offload evidence, public-path
+  aggregation, physical-fabric verification, NIC-offload evidence, public-path
   classification, and mTLS enrollment are incomplete.
 - **Database Assessment** uses the same paired Agents for an isolated
   PostgreSQL service and guarded pgbench workloads. PostgreSQL remains
@@ -430,9 +430,12 @@ deadline. Linux network-v3 runs capture route, egress-interface and
 interface-MTU evidence; optional path MTU requires `tracepath`. CloudMark
 rejects v3 comparison evidence when Generator CPU or scaling headroom is
 insufficient. Overall network coverage remains `Partial` because
-repeated-window aggregation, topology verification, NIC-offload evidence,
-public-path classification, Windows route parity, and mTLS Agent enrollment are
-not complete.
+repeated-window aggregation, physical-fabric verification, NIC-offload
+evidence, richer public-path classification, Windows route parity, and mTLS
+Agent enrollment are not complete. Session topology declarations are already
+checked against trusted region/zone metadata when those facts are available;
+the dashboard keeps claims and independent observations separate. Public IP
+address class is not treated as proof of public-Internet traversal.
 
 ## 11. Run a PostgreSQL peer assessment
 

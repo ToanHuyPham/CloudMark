@@ -53,6 +53,7 @@ from cloudmark.provider import _declared_manifest
 from cloudmark.runner import CancellationToken, JobContext, ProcessResult, RunCancelled, RunTimedOut
 from cloudmark.server import CloudMarkController, Server
 from cloudmark.suitability import SCENARIO_REQUIREMENTS, _run_valid, evaluate_suitability
+from cloudmark.topology import assess_pairing_topology
 from cloudmark.web_benchmark import (
     WebBenchmarkError,
     parse_ab_output,
@@ -326,8 +327,9 @@ class CloudMarkTests(unittest.TestCase):
 
         report = evaluate_suitability(runs, self._suitability_system("controller"), agents.get)
         observations = report["provider_observations"]
-        self.assertEqual(observations["version"], "provider-observations-v2")
+        self.assertEqual(observations["version"], "provider-observations-v3")
         self.assertTrue(observations["policy"]["exact_pair_topology"])
+        self.assertTrue(observations["policy"]["exact_pair_topology_evidence"])
         self.assertFalse(observations["policy"]["provider_ranking"])
         group = observations["groups"][0]
         self.assertEqual(group["target_count"], 3)
@@ -465,7 +467,28 @@ class CloudMarkTests(unittest.TestCase):
             if item["key"] == "network.directional_floor_bps"
         ]
         self.assertEqual({item["topology_scope"] for item in metrics}, {"same-zone", "cross-zone"})
+        self.assertEqual({item["topology_evidence"] for item in metrics}, {"operator-declared"})
         self.assertTrue(all(item["sample_count"] == 1 for item in metrics))
+
+        contradicted = network_run("run_contradicted", "same-zone", 300_000_000)
+        contradicted["result"]["session"]["topology"]["verification"] = {
+            "status": "contradicted",
+            "observed_scope": "cross-zone",
+            "source": "provider-metadata",
+        }
+        contradicted_report = evaluate_suitability(
+            [contradicted],
+            self._suitability_system("controller"),
+            systems.get,
+        )
+        contradicted_metric = next(
+            item
+            for item in contradicted_report["provider_observations"]["groups"][0]["metric_cohorts"]
+            if item["key"] == "network.directional_floor_bps"
+        )
+        self.assertEqual(contradicted_metric["topology_scope"], "undeclared")
+        self.assertEqual(contradicted_metric["topology_evidence"], "contradicted")
+        self.assertEqual(contradicted_metric["status"], "observational")
 
     def test_storage_metrics_keep_tail_latency_percentiles(self) -> None:
         section = {
@@ -559,10 +582,67 @@ class CloudMarkTests(unittest.TestCase):
                 {"scope": "same-zone", "source": "operator-declared"},
             )
             session = controller.database.get_session(created["id"])
-            self.assertEqual(created["topology"], {"scope": "same-zone", "source": "operator-declared"})
-            self.assertEqual(session["topology"], created["topology"])
+            self.assertEqual(created["topology"]["scope"], "same-zone")
+            self.assertEqual(created["topology"]["source"], "operator-declared")
+            self.assertEqual(created["topology"]["verification"]["status"], "pending")
+            self.assertEqual(session["topology"], {"scope": "same-zone", "source": "operator-declared"})
             with self.assertRaisesRegex(ValueError, "topology scope"):
                 controller.create_session("invalid", {"scope": "nearby", "source": "operator-declared"})
+
+    def test_pairing_topology_verification_distinguishes_claims_from_observations(self) -> None:
+        def agent(role: str, region: str, zone: str, address: str) -> dict[str, object]:
+            return {
+                "role": role,
+                "endpoint": {"address": address},
+                "system": {
+                    "provider": {
+                        "provider": "Test Cloud",
+                        "confidence": 0.99,
+                        "source": "trusted test metadata",
+                        "region": region,
+                        "zone": zone,
+                    }
+                },
+            }
+
+        same_zone_agents = [
+            agent("target", "region-a", "region-a-1", "10.0.0.10"),
+            agent("generator", "region-a", "region-a-1", "10.0.0.11"),
+        ]
+        confirmed = assess_pairing_topology({
+            "topology": {"scope": "same-zone", "source": "operator-declared"},
+            "agents": same_zone_agents,
+        })
+        self.assertEqual(confirmed["verification"]["status"], "confirmed")
+        self.assertEqual(confirmed["verification"]["observed_scope"], "same-zone")
+
+        contradicted = assess_pairing_topology({
+            "topology": {"scope": "cross-zone", "source": "operator-declared"},
+            "agents": same_zone_agents,
+        })
+        self.assertEqual(contradicted["verification"]["status"], "contradicted")
+
+        derived = assess_pairing_topology({
+            "topology": {"scope": "undeclared", "source": "unavailable"},
+            "agents": [
+                agent("target", "region-a", "region-a-1", "10.0.0.10"),
+                agent("generator", "region-b", "region-b-1", "10.1.0.11"),
+            ],
+        })
+        self.assertEqual(derived["verification"]["status"], "derived")
+        self.assertEqual(derived["verification"]["observed_scope"], "cross-region")
+
+        with patch("cloudmark.topology._global_endpoint", return_value=True):
+            public_addresses_only = assess_pairing_topology({
+                "topology": {"scope": "undeclared", "source": "unavailable"},
+                "agents": [
+                    {"role": "target", "endpoint": {"address": "192.0.2.10"}, "system": {}},
+                    {"role": "generator", "endpoint": {"address": "192.0.2.11"}, "system": {}},
+                ],
+            })
+        self.assertEqual(public_addresses_only["verification"]["status"], "unavailable")
+        self.assertIsNone(public_addresses_only["verification"]["observed_scope"])
+        self.assertIn("does not prove", " ".join(public_addresses_only["verification"]["reasons"]))
 
     def test_agent_task_queue_is_scoped_and_persistent(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -2095,7 +2175,7 @@ max: 1.50
                 self.assertEqual(suitability["requirements_version"], "workload-requirements-1.0")
                 with urllib.request.urlopen(f"{base}/provider-comparisons", timeout=5) as response:
                     provider_observations = json.load(response)
-                self.assertEqual(provider_observations["version"], "provider-observations-v2")
+                self.assertEqual(provider_observations["version"], "provider-observations-v3")
                 self.assertEqual(provider_observations["rating_status"], "not-rated")
                 self.assertFalse(provider_observations["policy"]["provider_ranking"])
                 request = urllib.request.Request(

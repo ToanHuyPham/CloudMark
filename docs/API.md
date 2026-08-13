@@ -209,6 +209,13 @@ results, and changes the run state to `cancelled`.
    Accepted scopes are `same-host`, `same-zone`, `cross-zone`, `cross-region`,
    `public-internet`, and `undeclared`. Undeclared sessions remain diagnostic
    only for provider cohorts.
+
+   Session responses add `topology.verification`. Its status is `pending`,
+   `unavailable`, `derived`, `confirmed`, `compatible`, or `contradicted`.
+   Independent placement observations use trusted provider metadata. Globally
+   routable advertised peer endpoints are recorded only as address-class
+   evidence because they do not prove that traffic traversed the public
+   Internet. Verification summaries do not expose peer addresses.
 2. Copy the returned session ID and short-lived join token to each agent.
 3. Each persistent agent calls `/sessions/{id}/join`. The response includes a
    unique `agent_id` and an agent credential that is never returned again.
@@ -246,9 +253,10 @@ are satisfied.
 GET /api/v1/provider-comparisons
 ```
 
-The `provider-observations-v2` response groups fresh valid evidence only when
+The `provider-observations-v3` response groups fresh valid evidence only when
 provider, product/SKU, region, operating system, profile, methodology, metric,
-unit, and paired topology match. A UTC calendar day is one measurement window. Each metric
+unit, paired topology, and topology evidence class match. A UTC calendar day is
+one measurement window. Each metric
 cohort exposes sample, target, window, and Run ID sets plus median, P10, P90,
 actual minimum/maximum, direction-aware best/worst, and P10-P90 relative
 spread.
@@ -257,7 +265,9 @@ Statistics are `comparable` only with at least nine samples from three targets
 and three UTC-day windows and a verified provider identity. Smaller cohorts
 remain `observational`. The endpoint never merges incompatible profiles and
 never returns a provider ranking; `rating_status` remains `not-rated`. Paired
-network, database, and web runs with undeclared topology remain observational.
+network, database, and web runs with undeclared or contradictory topology remain
+observational. Operator-declared and independently derived topology remain
+separate metric contracts.
 
 The complete machine-readable contract is in
 [`openapi/cloudmark-v1.yaml`](../openapi/cloudmark-v1.yaml).

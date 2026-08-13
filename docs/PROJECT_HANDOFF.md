@@ -81,10 +81,13 @@ provenance. It produces target observations only; provider status stays
 `not-rated` until multi-target, repeated-window, operational, and cost evidence
 is implemented.
 
-`provider-observations-v2` now produces descriptive exact-cohort distributions
+`provider-observations-v3` now produces descriptive exact-cohort distributions
 for repeated evidence. It requires matching provider/SKU/region/OS and exact
-profile/methodology/topology compatibility, exposes Run IDs and sampling counts, and
-does not enable provider ratings.
+profile/methodology/topology/evidence-class compatibility, exposes Run IDs and
+sampling counts, and does not enable provider ratings. Pair declarations are
+independently checked when trusted provider metadata can establish a placement
+scope; contradictions remain observational. Globally routable addresses alone
+never prove public-Internet traversal.
 
 ## Repository map
 

@@ -46,6 +46,7 @@ from .provider import detect_provider
 from .remote import RemoteError, remote_default_timeout, remote_total_steps, run_remote_benchmark, validate_remote_agent
 from .runner import RUNNER_VERSION, CancellationToken, JobContext, RunCancelled, RunTimedOut
 from .suitability import evaluate_suitability
+from .topology import PAIRING_TOPOLOGY_SCOPES, assess_pairing_topology, enrich_pairing_session
 from .web_benchmark import (
     WebBenchmarkError,
     run_web,
@@ -53,16 +54,6 @@ from .web_benchmark import (
     web_default_timeout,
     web_total_steps,
 )
-
-
-PAIRING_TOPOLOGY_SCOPES = {
-    "undeclared",
-    "same-host",
-    "same-zone",
-    "cross-zone",
-    "cross-region",
-    "public-internet",
-}
 
 
 def _json_bytes(value: Any) -> bytes:
@@ -105,7 +96,7 @@ class CloudMarkController:
             "version": __version__,
             "system": system,
             "runs": self.database.list_runs(10),
-            "sessions": self.database.list_sessions(10),
+            "sessions": [enrich_pairing_session(session) for session in self.database.list_sessions(10)],
             "profiles": all_profiles(),
             "suitability": evaluate_suitability(
                 self.database.list_runs(2000),
@@ -333,6 +324,15 @@ class CloudMarkController:
             token=token,
             on_progress=update_progress,
         )
+
+        def finish_run(**updates: Any) -> None:
+            # A terminal Run state is also the public signal that the worker no
+            # longer needs its durable task rows. Complete that cleanup first
+            # so callers can safely snapshot or remove a temporary runtime as
+            # soon as they observe the terminal state.
+            self.database.cancel_queued_run_tasks(run_id)
+            self.database.update_run(run_id, **updates)
+
         try:
             if request["suite"] == "inventory":
                 context.report("collecting", "system-inventory")
@@ -403,8 +403,7 @@ class CloudMarkController:
             else:
                 raise ValueError(f"No executor is registered for suite {request['suite']}.")
             result_tool = result.get("tool") if isinstance(result, dict) else None
-            self.database.update_run(
-                run_id,
+            finish_run(
                 status="completed",
                 result=result,
                 phase="completed",
@@ -412,56 +411,49 @@ class CloudMarkController:
                 tool_version=str(result_tool.get("version")) if isinstance(result_tool, dict) and result_tool.get("version") else None,
             )
         except RunCancelled as exc:
-            self.database.update_run(
-                run_id,
+            finish_run(
                 status="cancelled",
                 result=exc.partial_result,
                 error=str(exc),
                 phase="cancelled",
             )
         except RunTimedOut as exc:
-            self.database.update_run(
-                run_id,
+            finish_run(
                 status="failed",
                 result=exc.partial_result,
                 error=str(exc),
                 phase="timed-out",
             )
         except NetworkError as exc:
-            self.database.update_run(
-                run_id,
+            finish_run(
                 status="failed",
                 result=exc.partial_result,
                 error=str(exc),
                 phase="failed",
             )
         except RemoteError as exc:
-            self.database.update_run(
-                run_id,
+            finish_run(
                 status="failed",
                 result=exc.partial_result,
                 error=str(exc),
                 phase="failed",
             )
         except (DatabaseBenchmarkError, DistributedError, WebBenchmarkError) as exc:
-            self.database.update_run(
-                run_id,
+            finish_run(
                 status="failed",
                 result=getattr(exc, "partial_result", None),
                 error=str(exc),
                 phase="failed",
             )
         except (BenchmarkError, ComputeError, OSError, ValueError, json.JSONDecodeError) as exc:
-            self.database.update_run(run_id, status="failed", error=str(exc), phase="failed")
+            finish_run(status="failed", error=str(exc), phase="failed")
         except Exception as exc:  # defensive runner boundary
-            self.database.update_run(
-                run_id,
+            finish_run(
                 status="failed",
                 error=f"Unexpected runner failure: {exc}",
                 phase="failed",
             )
         finally:
-            self.database.cancel_queued_run_tasks(run_id)
             with self._active_runs_lock:
                 self._active_runs.pop(run_id, None)
 
@@ -510,7 +502,7 @@ class CloudMarkController:
             "id": session_id,
             "join_token": join_token,
             "expires_at": expires.isoformat(),
-            "topology": topology_evidence,
+            "topology": assess_pairing_topology({"topology": topology_evidence, "agents": []}),
         }
 
     def join_session(self, session_id: str, request: dict[str, Any]) -> dict[str, Any]:
@@ -548,7 +540,7 @@ class CloudMarkController:
         return {
             "agent_id": agent_id,
             "agent_token": agent_token,
-            "session": self.database.get_session(session_id),
+            "session": enrich_pairing_session(self.database.get_session(session_id) or {}),
         }
 
     def authenticate_agent(self, agent_id: str, token: str) -> bool:
@@ -729,7 +721,10 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(200 if run else 404, run or {"error": "Run not found"})
             elif path.startswith("/api/v1/sessions/"):
                 session = self.controller.database.get_session(path.rsplit("/", 1)[-1])
-                self._send(200 if session else 404, session or {"error": "Session not found"})
+                self._send(
+                    200 if session else 404,
+                    enrich_pairing_session(session) if session else {"error": "Session not found"},
+                )
             else:
                 self._send(404, {"error": "Not found"})
         except Exception as exc:  # defensive API boundary

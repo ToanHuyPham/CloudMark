@@ -10,6 +10,7 @@ from typing import Any
 from .database import Database
 from .profiles import NETWORK_PROFILES
 from .runner import JobContext, RunStopped
+from .topology import enrich_pairing_session
 
 
 ALLOWED_PORT_MIN = 5201
@@ -53,6 +54,7 @@ def validate_network_run(
     session = database.get_session(session_id)
     if not session:
         raise ValueError("Network run requires an existing pairing session.")
+    session = enrich_pairing_session(session)
     agents = session["agents"]
     target = next((item for item in agents if item["role"] == "target"), None)
     generator = next((item for item in agents if item["role"] == "generator"), None)

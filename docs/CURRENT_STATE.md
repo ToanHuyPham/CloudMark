@@ -1,6 +1,6 @@
 # CloudMark current state
 
-Last updated: 2026-08-12
+Last updated: 2026-08-13
 
 ## Repository baseline
 
@@ -53,15 +53,18 @@ baseline is still the repository head.
   converted to zero and provider status remains `not-rated`; the milestone
   passes 70 Python tests, 3 rendered-dashboard tests, dashboard lint, and the
   production build without starting provider load;
-- `provider-observations-v2` exact provider/SKU/region/OS/operator-declared
-  topology cohorts with strict profile/methodology/topology compatibility, UTC-day windows, network Run
+- `provider-observations-v3` exact provider/SKU/region/OS/topology/evidence-class
+  cohorts with strict profile/methodology/topology compatibility, UTC-day
+  windows, network Run
   de-duplication, median/P10/P90/best/worst/spread statistics, and a guarded
   nine-sample/three-target/three-window comparable state; the milestone passes
-  80 Python tests, 3 rendered-dashboard tests, dashboard lint, and the
+  81 Python tests, 3 rendered-dashboard tests, dashboard lint, and the
   production build without starting provider load;
 - repository-level Codex guidance, durable handoff documentation, consistent
   SQLite runtime snapshots, guarded secret backup, recoverable restore, and
-  safe Windows local-process launch/stop scripts.
+  safe Windows local-process launch/stop scripts;
+- terminal Run states are published only after durable task cleanup, preventing
+  callers from observing completion while the worker still holds SQLite state.
 
 ## Last verified provider target
 
@@ -127,8 +130,12 @@ Controller run: `run_1c572100e8704843`.
   egress-interface, interface-MTU and optional path-MTU evidence, idle latency,
   directional TCP scaling, adaptive UDP jitter/loss sweeps, loaded TCP RTT,
   simultaneous bidirectional throughput, and Generator headroom rejection;
-  repeated topology-aware windows, NIC-offload evidence, public-path
-  classification, Windows route parity, and mTLS remain unimplemented;
+  topology claims are now independently checked when trusted provider metadata
+  permits it, while globally routable addresses alone do not prove a public
+  path, and same-host placement and the physical provider fabric cannot yet be
+  proven; repeated topology-aware
+  windows, NIC-offload evidence, Windows route parity, and mTLS remain
+  unimplemented;
 - PostgreSQL database coverage is Partial: read-only, durable read/write,
   concurrency, and connection churn are implemented; transaction tail
   percentiles, replication, recovery, MySQL/MariaDB, Redis, and managed-service
@@ -151,9 +158,9 @@ Controller run: `run_1c572100e8704843`.
 
 ## Next priorities
 
-1. Add repeated network windows, topology verification, NIC-offload evidence,
-   public-path classification, and Windows route parity before promoting the
-   network domain from Partial.
+1. Add repeated network windows, physical-host/fabric verification,
+   NIC-offload evidence, richer public-path evidence, and Windows route parity
+   before promoting the network domain from Partial.
 2. Add Web generator-saturation validation and dynamic application,
    HTTP/2/3, reverse-proxy, CDN, WAF, and autoscaling evidence.
 3. Extend database coverage with transaction tail latency, MySQL/MariaDB,

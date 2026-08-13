@@ -17,7 +17,7 @@ from .profiles import (
 
 SUITABILITY_ENGINE_VERSION = "suitability-v1"
 REQUIREMENTS_VERSION = "workload-requirements-1.0"
-PROVIDER_OBSERVATION_VERSION = "provider-observations-v2"
+PROVIDER_OBSERVATION_VERSION = "provider-observations-v3"
 EVIDENCE_MAX_AGE_DAYS = 30
 EVIDENCE_FUTURE_SKEW_SECONDS = 86_400
 COMPARISON_MIN_SAMPLES = 9
@@ -557,16 +557,24 @@ def _provider_identity_verified(provider: dict[str, Any]) -> bool:
     )
 
 
-def _run_topology_scope(run: dict[str, Any]) -> str:
+def _run_topology_contract(run: dict[str, Any]) -> tuple[str, str]:
     if str(run.get("suite") or "") not in {"network", "database", "web"}:
-        return "single-target"
-    scope = str(_nested(run, "result", "session", "topology", "scope") or "undeclared")
-    source = str(_nested(run, "result", "session", "topology", "source") or "unavailable")
-    if source != "operator-declared":
-        return "undeclared"
-    if scope not in {"same-host", "same-zone", "cross-zone", "cross-region", "public-internet"}:
-        return "undeclared"
-    return scope
+        return "single-target", "single-target"
+    topology = _nested(run, "result", "session", "topology")
+    topology = topology if isinstance(topology, dict) else {}
+    scope = str(topology.get("scope") or "undeclared")
+    source = str(topology.get("source") or "unavailable")
+    verification = topology.get("verification") if isinstance(topology.get("verification"), dict) else {}
+    verification_status = str(verification.get("status") or "legacy")
+    observed_scope = str(verification.get("observed_scope") or "undeclared")
+    valid_scopes = {"same-host", "same-zone", "cross-zone", "cross-region", "public-internet"}
+    if verification_status in {"confirmed", "derived"} and observed_scope in valid_scopes:
+        return observed_scope, "independently-derived"
+    if verification_status == "contradicted":
+        return "undeclared", "contradicted"
+    if source == "operator-declared" and scope in valid_scopes:
+        return scope, "operator-declared"
+    return "undeclared", "unavailable"
 
 
 def _percentile(values: list[float], fraction: float) -> float:
@@ -622,7 +630,7 @@ def _provider_observations(targets: list[dict[str, Any]]) -> dict[str, Any]:
         peer_ids = {peer["id"] for peer in peers}
         identity_verified = all(_provider_identity_verified(peer["provider"]) for peer in peers)
         runs_by_id: dict[str, dict[str, Any]] = {}
-        metric_builders: dict[tuple[str, str, str, str, str], dict[str, Any]] = {}
+        metric_builders: dict[tuple[str, str, str, str, str, str], dict[str, Any]] = {}
         for peer in peers:
             for run in peer["_runs"]:
                 if not _run_is_fresh(run):
@@ -646,8 +654,8 @@ def _provider_observations(targets: list[dict[str, Any]]) -> dict[str, Any]:
                     profile = str(item.get("profile") or "")
                     methodology = str(item.get("methodology_version") or "")
                     unit = str(item.get("unit") or "")
-                    topology_scope = _run_topology_scope(run)
-                    contract_key = (metric_key, profile, methodology, unit, topology_scope)
+                    topology_scope, topology_evidence = _run_topology_contract(run)
+                    contract_key = (metric_key, profile, methodology, unit, topology_scope, topology_evidence)
                     builder = metric_builders.setdefault(contract_key, {
                         "values": [],
                         "run_ids": [],
@@ -670,7 +678,7 @@ def _provider_observations(targets: list[dict[str, Any]]) -> dict[str, Any]:
 
         metric_cohorts: list[dict[str, Any]] = []
         for contract_key, builder in sorted(metric_builders.items()):
-            metric_key, profile, methodology, unit, topology_scope = contract_key
+            metric_key, profile, methodology, unit, topology_scope, topology_evidence = contract_key
             values = builder["values"]
             median = _percentile(values, 0.5)
             p10 = _percentile(values, 0.1)
@@ -687,7 +695,9 @@ def _provider_observations(targets: list[dict[str, Any]]) -> dict[str, Any]:
                 reasons.append(f"At least {COMPARISON_MIN_TARGETS} targets are required.")
             if window_count < COMPARISON_MIN_WINDOWS:
                 reasons.append(f"At least {COMPARISON_MIN_WINDOWS} UTC-day windows are required.")
-            if topology_scope == "undeclared":
+            if topology_evidence == "contradicted":
+                reasons.append("Paired benchmark topology evidence contradicts the operator declaration.")
+            elif topology_scope == "undeclared":
                 reasons.append("Paired benchmark topology is not declared.")
             relative_spread, stability = _stability(values, median, p10, p90)
             metric_cohorts.append({
@@ -700,6 +710,7 @@ def _provider_observations(targets: list[dict[str, Any]]) -> dict[str, Any]:
                 "profile": profile,
                 "methodology_version": methodology,
                 "topology_scope": topology_scope,
+                "topology_evidence": topology_evidence,
                 "status": "comparable" if not reasons else "observational",
                 "reasons": reasons,
                 "sample_count": len(values),
@@ -770,6 +781,7 @@ def _provider_observations(targets: list[dict[str, Any]]) -> dict[str, Any]:
         "policy": {
             "exact_profile_and_methodology": True,
             "exact_pair_topology": True,
+            "exact_pair_topology_evidence": True,
             "cross_sku_aggregation": False,
             "cross_region_aggregation": False,
             "cross_os_aggregation": False,

@@ -278,7 +278,7 @@ ASSESSMENT_DOMAINS: list[dict[str, Any]] = [
     {"id": "compute", "label": "CPU & Compute", "status": "partial", "summary": "Versioned integer single-, multi-core and sustained profiles available; floating point, crypto and compilation pending"},
     {"id": "memory", "label": "Memory & NUMA", "status": "partial", "summary": "Versioned userspace bandwidth profiles available; true latency, STREAM and NUMA penalties pending"},
     {"id": "storage", "label": "Storage, Filesystem & Object", "status": "available", "summary": "Safe block/filesystem profiles available; object and snapshot tests pending"},
-    {"id": "network", "label": "Network & Connectivity", "status": "partial", "summary": "Two-Agent TCP, UDP, idle latency, loaded RTT, path evidence, topology declaration, and Generator validity available; repeated windows and fabric verification pending"},
+    {"id": "network", "label": "Network & Connectivity", "status": "partial", "summary": "Two-Agent TCP, UDP, idle latency, loaded RTT, path evidence, metadata-aware topology checks, and Generator validity available; repeated windows and physical-fabric verification pending"},
     {"id": "gpu", "label": "GPU & Accelerators", "status": "roadmap", "summary": "GPU inventory, VRAM, transfer, compute and framework profiles"},
     {"id": "web", "label": "Web, API & TLS", "status": "partial", "summary": "Guarded two-Agent Nginx HTTP/TLS concurrency, tail latency, connection churn, and transfer profiles available"},
     {"id": "database", "label": "Database & Cache", "status": "partial", "summary": "Guarded two-Agent PostgreSQL/pgbench profiles available; MySQL/MariaDB, Redis, replication, and recovery pending"},

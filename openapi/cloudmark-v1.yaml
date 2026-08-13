@@ -69,6 +69,45 @@ components:
         request: { type: object, additionalProperties: true }
         result: { type: [object, "null"], additionalProperties: true }
         error: { type: [string, "null"] }
+    PairTopology:
+      type: object
+      required: [scope, source, verification]
+      properties:
+        scope: { type: string, enum: [undeclared, same-host, same-zone, cross-zone, cross-region, public-internet] }
+        source: { type: string, enum: [unavailable, operator-declared] }
+        verification:
+          type: object
+          required: [status, observed_scope, source, reasons]
+          properties:
+            status: { type: string, enum: [pending, unavailable, derived, confirmed, compatible, contradicted] }
+            observed_scope:
+              type: [string, "null"]
+              enum: [same-zone, cross-zone, cross-region, null]
+            source: { type: string, enum: [unavailable, provider-metadata, advertised-endpoint-classification] }
+            reasons:
+              type: array
+              items: { type: string }
+    Session:
+      type: object
+      required: [id, label, status, created_at, expires_at, topology, agents]
+      properties:
+        id: { type: string }
+        label: { type: string }
+        status: { type: string, enum: [waiting, ready] }
+        created_at: { type: string, format: date-time }
+        expires_at: { type: string, format: date-time }
+        topology: { $ref: "#/components/schemas/PairTopology" }
+        agents:
+          type: array
+          items: { type: object, additionalProperties: true }
+    PairingCredential:
+      type: object
+      required: [id, join_token, expires_at, topology]
+      properties:
+        id: { type: string }
+        join_token: { type: string, writeOnly: true }
+        expires_at: { type: string, format: date-time }
+        topology: { $ref: "#/components/schemas/PairTopology" }
 paths:
   /health:
     get:
@@ -99,7 +138,7 @@ paths:
   /provider-comparisons:
     get:
       summary: Same-cohort repeated-window provider observations
-      description: Returns descriptive median, P10, P90, worst-value, and stability statistics only for exact provider, SKU, region, operating-system, profile, and methodology cohorts. Provider ratings remain disabled.
+      description: Returns descriptive median, P10, P90, worst-value, and stability statistics only for exact provider, SKU, region, operating-system, profile, methodology, topology, and topology-evidence cohorts. Provider ratings remain disabled.
       responses:
         "200": { description: Versioned provider observation report }
   /profiles:
@@ -182,7 +221,11 @@ paths:
                     scope: { type: string, enum: [undeclared, same-host, same-zone, cross-zone, cross-region, public-internet] }
                     source: { type: string, enum: [unavailable, operator-declared] }
       responses:
-        "201": { description: Session and short-lived join token }
+        "201":
+          description: Session and short-lived join token
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PairingCredential" }
   /sessions/{sessionId}:
     get:
       summary: Read session and participants
@@ -192,7 +235,11 @@ paths:
           required: true
           schema: { type: string }
       responses:
-        "200": { description: Session }
+        "200":
+          description: Session
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Session" }
         "404": { description: Not found }
   /sessions/{sessionId}/join:
     post:
