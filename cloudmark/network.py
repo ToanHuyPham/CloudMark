@@ -43,6 +43,9 @@ QUEUE_COUNTER_FIELDS = (
     "tx_errors",
     "tx_dropped",
 )
+STEERING_QUEUE_LIMIT = 128
+STEERING_IRQ_LIMIT = 256
+STEERING_TEXT_LIMIT = 4096
 
 
 class NetworkError(RuntimeError):
@@ -87,13 +90,13 @@ def validate_network_run(
         if not capabilities.get("iperf3"):
             raise ValueError(f"Agent {agent['name']} does not report the iperf3 capability.")
         methodology_version = str(NETWORK_PROFILES[profile_name]["methodology_version"])
-        if methodology_version in {"network-v4", "network-v5", "network-v6", "network-v7", "network-v8"}:
+        if methodology_version in {"network-v4", "network-v5", "network-v6", "network-v7", "network-v8", "network-v9"}:
             missing = [
                 capability
                 for capability in ("iproute2", "ethtool", "tcp_congestion_control")
                 if not capabilities.get(capability)
             ]
-            if methodology_version in {"network-v6", "network-v7", "network-v8"} and not capabilities.get("tracepath"):
+            if methodology_version in {"network-v6", "network-v7", "network-v8", "network-v9"} and not capabilities.get("tracepath"):
                 missing.append("tracepath")
             if missing:
                 raise ValueError(
@@ -302,6 +305,7 @@ def _path_measurement(
     receiver: dict[str, Any],
     phase: str = "pre-load",
     resolver_probe: bool = False,
+    steering_probe: bool = False,
 ) -> dict[str, Any]:
     receiver_address = _address(receiver)
     label = f"{sender['name']} to {receiver['name']} - {phase} route, NIC, and interface evidence"
@@ -312,7 +316,11 @@ def _path_measurement(
         session_id,
         sender["id"],
         "network-path-probe",
-        {"target_address": receiver_address, "resolver_probe": resolver_probe},
+        {
+            "target_address": receiver_address,
+            "resolver_probe": resolver_probe,
+            "steering_probe": steering_probe,
+        },
     )
     task = _wait_task(database, task_id, context, 120)
     evidence = task.get("result") or {}
@@ -786,6 +794,194 @@ def _network_analysis(result: dict[str, Any]) -> dict[str, Any]:
         resolver_status = "partial"
     else:
         resolver_status = "unavailable"
+    steering_observations: list[dict[str, Any]] = []
+    steering_statuses: list[str] = []
+    for item in path_items:
+        steering = (item.get("evidence") or {}).get("steering") or {}
+        if not isinstance(steering, dict):
+            steering = {}
+        def bounded_count(value: Any, maximum: int) -> int:
+            if isinstance(value, int) and not isinstance(value, bool) and 0 <= value <= maximum:
+                return value
+            return 0
+
+        def component(name: str, *, irq: bool = False) -> dict[str, Any]:
+            value = steering.get(name) or {}
+            if not isinstance(value, dict):
+                value = {}
+            component_status = str(value.get("status", "unavailable"))
+            if component_status not in {"observed", "partial", "unavailable"}:
+                component_status = "unavailable"
+            normalized: dict[str, Any] = {
+                "status": component_status,
+                "source": str(value.get("source", ""))[:128] or None,
+                "reason": str(value.get("reason", ""))[:256] or None,
+                "truncated": value.get("truncated") is True,
+            }
+            if irq:
+                affinities: list[dict[str, Any]] = []
+                raw_affinities = value.get("affinities")
+                if not isinstance(raw_affinities, list):
+                    raw_affinities = []
+                for affinity in raw_affinities[:STEERING_IRQ_LIMIT]:
+                    if not isinstance(affinity, dict):
+                        continue
+                    irq_number = affinity.get("irq")
+                    cpu_count = affinity.get("cpu_count")
+                    cpu_list = affinity.get("cpu_list")
+                    if (
+                        isinstance(irq_number, int)
+                        and not isinstance(irq_number, bool)
+                        and 0 <= irq_number <= 2_147_483_647
+                        and isinstance(cpu_count, int)
+                        and not isinstance(cpu_count, bool)
+                        and 0 <= cpu_count <= 8192
+                        and isinstance(cpu_list, str)
+                        and len(cpu_list) <= STEERING_TEXT_LIMIT
+                    ):
+                        affinities.append({"irq": irq_number, "cpu_list": cpu_list, "cpu_count": cpu_count})
+                normalized.update({
+                    "msi_irq_count": bounded_count(value.get("msi_irq_count"), STEERING_IRQ_LIMIT),
+                    "observed_affinity_count": bounded_count(
+                        value.get("observed_affinity_count"), STEERING_IRQ_LIMIT
+                    ),
+                    "distinct_affinity_count": bounded_count(
+                        value.get("distinct_affinity_count"), STEERING_IRQ_LIMIT
+                    ),
+                    "affinities": affinities,
+                })
+                return normalized
+            queues: list[dict[str, Any]] = []
+            raw_queues = value.get("queues")
+            if not isinstance(raw_queues, list):
+                raw_queues = []
+            for queue_item in raw_queues[:STEERING_QUEUE_LIMIT]:
+                if not isinstance(queue_item, dict):
+                    continue
+                queue = queue_item.get("queue")
+                cpu_count = queue_item.get("cpu_count")
+                cpu_mask = queue_item.get("mask")
+                if (
+                    isinstance(queue, int)
+                    and not isinstance(queue, bool)
+                    and 0 <= queue < STEERING_QUEUE_LIMIT
+                    and isinstance(cpu_count, int)
+                    and not isinstance(cpu_count, bool)
+                    and 0 <= cpu_count <= 8192
+                    and isinstance(cpu_mask, str)
+                    and len(cpu_mask) <= STEERING_TEXT_LIMIT
+                ):
+                    row = {
+                        "queue": queue,
+                        "mask": cpu_mask,
+                        "cpu_count": cpu_count,
+                        "configured": queue_item.get("configured") is True,
+                    }
+                    flow_count = queue_item.get("flow_count")
+                    if isinstance(flow_count, int) and not isinstance(flow_count, bool) and flow_count >= 0:
+                        row["flow_count"] = flow_count
+                    queues.append(row)
+            normalized.update({
+                "total_queue_count": bounded_count(value.get("total_queue_count"), STEERING_QUEUE_LIMIT),
+                "configured_queue_count": bounded_count(
+                    value.get("configured_queue_count"), STEERING_QUEUE_LIMIT
+                ),
+                "unreadable_queue_count": bounded_count(
+                    value.get("unreadable_queue_count"), STEERING_QUEUE_LIMIT
+                ),
+                "queues": queues,
+            })
+            return normalized
+
+        rss_value = steering.get("rss") or {}
+        if not isinstance(rss_value, dict):
+            rss_value = {}
+        rss_distribution: list[dict[str, Any]] = []
+        raw_distribution = rss_value.get("queue_distribution")
+        if not isinstance(raw_distribution, list):
+            raw_distribution = []
+        for distribution in raw_distribution[:STEERING_QUEUE_LIMIT]:
+            if not isinstance(distribution, dict):
+                continue
+            queue = distribution.get("queue")
+            entries = distribution.get("entries")
+            share = distribution.get("share_percent")
+            if (
+                isinstance(queue, int)
+                and not isinstance(queue, bool)
+                and 0 <= queue < STEERING_QUEUE_LIMIT
+                and isinstance(entries, int)
+                and not isinstance(entries, bool)
+                and entries >= 0
+                and isinstance(share, (int, float))
+                and not isinstance(share, bool)
+                and 0 <= float(share) <= 100
+            ):
+                rss_distribution.append({
+                    "queue": queue,
+                    "entries": entries,
+                    "share_percent": round(float(share), 6),
+                })
+        rss_status = str(rss_value.get("status", "unavailable"))
+        if rss_status not in {"observed", "partial", "unavailable"}:
+            rss_status = "unavailable"
+        rps_component = component("rps")
+        xps_component = component("xps")
+        irq_component = component("irq_affinity", irq=True)
+        component_statuses = [
+            rss_status,
+            rps_component["status"],
+            xps_component["status"],
+            irq_component["status"],
+        ]
+        if all(component_status == "observed" for component_status in component_statuses):
+            status = "complete"
+        elif any(component_status in {"observed", "partial"} for component_status in component_statuses):
+            status = "partial"
+        else:
+            status = "unavailable"
+        steering_statuses.append(status)
+        hash_functions = rss_value.get("hash_functions")
+        if not isinstance(hash_functions, dict):
+            hash_functions = {}
+        busiest_rss = max(rss_distribution, key=lambda value: value["entries"], default=None)
+        steering_observations.append({
+            "direction": item.get("direction"),
+            "agent": item.get("sender"),
+            "status": status,
+            "observed_at": steering.get("observed_at"),
+            "interface": str(steering.get("interface", ""))[:64] or None,
+            "rss": {
+                "status": rss_status,
+                "source": str(rss_value.get("source", ""))[:128] or None,
+                "table_entry_count": bounded_count(rss_value.get("table_entry_count"), 4096),
+                "active_queue_count": bounded_count(rss_value.get("active_queue_count"), STEERING_QUEUE_LIMIT),
+                "busiest_queue": busiest_rss["queue"] if busiest_rss else None,
+                "busiest_queue_percent": busiest_rss["share_percent"] if busiest_rss else None,
+                "queue_distribution": rss_distribution,
+                "hash_functions": {
+                    key: value is True
+                    for key, value in hash_functions.items()
+                    if key in {"toeplitz", "xor", "crc32"}
+                },
+                "hash_key_persisted": False,
+                "truncated": rss_value.get("truncated") is True,
+                "reason": str(rss_value.get("reason", ""))[:256] or None,
+            },
+            "rps": rps_component,
+            "xps": xps_component,
+            "irq_affinity": irq_component,
+            "limitations": [
+                "Guest-visible steering does not establish physical-host NIC or provider-fabric configuration.",
+                "Unavailable virtual-NIC controls remain missing evidence rather than a zero score.",
+            ],
+        })
+    if len(steering_statuses) >= 2 and all(status == "complete" for status in steering_statuses):
+        steering_status = "complete"
+    elif any(status in {"complete", "partial"} for status in steering_statuses):
+        steering_status = "partial"
+    else:
+        steering_status = "unavailable"
     pre_by_direction = {str(item.get("direction", "")): item for item in path_items if item.get("direction")}
     post_by_direction = {
         str(item.get("direction", "")): item
@@ -979,16 +1175,16 @@ def _network_analysis(result: dict[str, Any]) -> dict[str, Any]:
     if generator_status != "adequate":
         validity_reasons.append(f"generator-headroom-{generator_status}")
     methodology_version = str(result.get("methodology_version", ""))
-    nic_evidence_required = methodology_version in {"network-v4", "network-v5", "network-v6", "network-v7", "network-v8"}
+    nic_evidence_required = methodology_version in {"network-v4", "network-v5", "network-v6", "network-v7", "network-v8", "network-v9"}
     if nic_evidence_required and nic_status != "complete":
         validity_reasons.append("nic-offload-and-tcp-control-evidence-incomplete")
-    counter_evidence_required = methodology_version in {"network-v5", "network-v6", "network-v7", "network-v8"}
+    counter_evidence_required = methodology_version in {"network-v5", "network-v6", "network-v7", "network-v8", "network-v9"}
     if counter_evidence_required and counter_status != "complete":
         validity_reasons.append("interface-counter-window-evidence-incomplete")
-    path_trace_required = methodology_version in {"network-v6", "network-v7", "network-v8"}
+    path_trace_required = methodology_version in {"network-v6", "network-v7", "network-v8", "network-v9"}
     if path_trace_required and path_trace_status != "complete":
         validity_reasons.append("bounded-path-trace-evidence-incomplete")
-    route_stability_required = methodology_version in {"network-v6", "network-v7", "network-v8"}
+    route_stability_required = methodology_version in {"network-v6", "network-v7", "network-v8", "network-v9"}
     if route_stability_required and route_stability_status != "complete":
         validity_reasons.append(
             "route-stability-evidence-changed"
@@ -1008,6 +1204,7 @@ def _network_analysis(result: dict[str, Any]) -> dict[str, Any]:
         "interface_counter_deltas": interface_counter_deltas,
         "queue_counter_deltas": queue_counter_deltas,
         "resolver_observations": resolver_observations,
+        "steering_observations": steering_observations,
         "path_stability": path_stability,
         "path_claims": {
             "public_internet_traversal_proven": False,
@@ -1024,6 +1221,8 @@ def _network_analysis(result: dict[str, Any]) -> dict[str, Any]:
             "queue_counter_evidence_required": False,
             "resolver_evidence_status": resolver_status,
             "resolver_evidence_required": False,
+            "steering_evidence_status": steering_status,
+            "steering_evidence_required": False,
             "path_trace_evidence_status": path_trace_status,
             "path_trace_evidence_required": path_trace_required,
             "route_stability_status": route_stability_status,
@@ -1054,6 +1253,7 @@ def run_network(
     path_probe = profile.get("path_probe") is True
     post_path_probe = profile.get("post_path_probe") is True
     resolver_probe = profile.get("resolver_probe") is True
+    steering_probe = profile.get("steering_probe") is True
     result: dict[str, Any] = {
         "suite": "network",
         "profile": profile_name,
@@ -1075,6 +1275,7 @@ def run_network(
             "read_only_pre_post_interface_counters": post_path_probe,
             "bounded_numeric_path_trace": path_probe,
             "bounded_system_resolver_diagnostic": resolver_probe,
+            "bounded_queue_steering_and_irq_evidence": steering_probe,
             "public_internet_traversal_inferred": False,
             "port_range": [ALLOWED_PORT_MIN, ALLOWED_PORT_MAX],
         },
@@ -1103,6 +1304,7 @@ def run_network(
                     sender=sender,
                     receiver=receiver,
                     resolver_probe=resolver_probe,
+                    steering_probe=steering_probe,
                 )
                 result["path_measurements"].append(measurement)
                 result["analysis"] = _network_analysis(result)

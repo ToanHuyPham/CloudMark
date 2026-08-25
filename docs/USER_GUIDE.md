@@ -160,10 +160,11 @@ In the dashboard:
   Sustained profiles with live progress and cancellation.
 - **Distributed Testing** creates an authenticated multi-agent topology and
   runs guarded path evidence, TCP, UDP, idle-latency, and simultaneous
-  bidirectional profiles plus read-only NIC, driver per-queue counters, and
-  TCP-control evidence. Manual repeated UTC-day campaigns are available.
+  bidirectional profiles plus read-only NIC, driver per-queue counters,
+  guest-visible RSS/RPS/XPS/MSI IRQ affinity, and TCP-control evidence. Manual
+  repeated UTC-day campaigns are available.
   Network remains `Partial` because cross-pair automation, physical-fabric
-  verification, wider queue/affinity normalization, administrative public-path
+  verification, wider vendor queue normalization, administrative public-path
   classification, and mTLS enrollment are incomplete.
 - **Database Assessment** uses the same paired Agents for an isolated
   PostgreSQL service and guarded pgbench workloads. PostgreSQL remains
@@ -427,7 +428,7 @@ loss and jitter sweeps at 25/50/90% of the measured directional TCP peak, and a
 simultaneous bidirectional TCP measurement. The Controller never becomes a
 performance endpoint.
 
-The standard Network v8 profile also requires `iproute2`, `tracepath`,
+The standard Network v9 profile also requires `iproute2`, `tracepath`,
 `ethtool`, and Linux TCP congestion-control evidence on both Agents. The dashboard keeps the run
 button disabled until both refreshed Agent inventories report those
 capabilities. The Quick profile requires only `iperf3`.
@@ -435,14 +436,14 @@ capabilities. The Quick profile requires only `iperf3`.
 The executor accepts only paired-agent addresses, ports 5201–5210, durations up
 to 60 seconds, an allow-list of stream counts, capped UDP rates, and bounded
 ping parameters. Each server is one-shot and has an independent watchdog
-deadline. Linux network-v8 runs capture pre/post route, bounded numeric path
+deadline. Linux network-v9 runs capture pre/post route, bounded numeric path
 traces, and structured aggregate interface
 byte/packet/error/drop counters, egress-interface, interface-MTU, NIC driver,
 selected offload states, active TCP congestion-control evidence, and path MTU
 when exposed by `tracepath`. These are fixed read-only queries against the
 route-derived interface. Counter deltas cover all traffic on that interface
 during the Run, so CloudMark reports this scope explicitly. Observed drops and
-errors remain evidence; they do not make a poor result disappear. Network v8
+errors remain evidence; they do not make a poor result disappear. Network v9
 also records bounded common driver per-queue counters from `ethtool -S`, showing
 active queue distribution and busiest-queue share when supported. Those names
 vary by NIC, so missing per-queue evidence remains observational rather than a
@@ -450,7 +451,10 @@ failure. At the pre-load boundary, each Agent also records bounded resolver
 configuration and, when `dig` is present, one A and one AAAA result for the
 fixed `example.com.` name. Search-domain names and answer addresses are not
 persisted. Cache state and upstream ownership remain unknown, so resolver
-evidence is diagnostic and not a comparison gate. CloudMark rejects v8
+evidence is diagnostic and not a comparison gate. The same pre-load boundary
+records bounded RSS indirection, RPS/XPS CPU masks, and MSI IRQ affinity when
+the guest exposes them. The RSS hash key is never stored, no setting is changed,
+and guest evidence does not prove physical-host placement. CloudMark rejects v9
 comparison evidence when pre/post route stability, destination-reaching
 bounded traces, NIC/TCP-control/counter evidence, or Generator CPU and scaling
 headroom is insufficient. Address class and observed hops do not prove public
@@ -458,7 +462,7 @@ Internet transit.
 
 For time-separated evidence, keep `Provider Internal Network` selected and use
 **Create 3-day campaign**. The campaign permanently binds the current Target,
-Generator, topology evidence class, standard profile version, and Network v8
+Generator, topology evidence class, standard profile version, and Network v9
 methodology. Select **Run next campaign window** once in each authorized UTC
 day. CloudMark never schedules these Runs silently, failed attempts can be
 retried, and no more than one comparison-eligible Run counts per UTC day. The
@@ -470,7 +474,7 @@ pair across time; provider comparison still requires independent targets.
 Overall network coverage remains `Partial`
 because controlled authoritative DNS and repeated cache-cold resolver testing,
 unattended campaign scheduling, physical-fabric verification, wider
-per-queue NIC normalization and queue/interrupt affinity, administrative path verification, Windows route
+vendor per-queue NIC normalization, administrative path verification, Windows route
 parity, and mTLS Agent enrollment are not complete. Session topology declarations are already
 checked against trusted region/zone metadata when those facts are available;
 the dashboard keeps claims and independent observations separate. Public IP

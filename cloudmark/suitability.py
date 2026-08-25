@@ -125,8 +125,8 @@ SCENARIO_REQUIREMENTS: dict[str, dict[str, Any]] = {
             ("network.udp_loss_pct", "Worst adaptive UDP loss", "<=", _threshold(2.0, 1.0, 0.25), "%"),
             ("network.udp_jitter_ms", "Worst adaptive UDP jitter", "<=", _threshold(10, 3, 1), "ms"),
         ],
-        "limitations": ["DNS, administrative path ownership, cross-zone/region topology, per-queue NIC behavior, and repeated windows are not fully validated."],
-        "next_actions": ["Run Provider Internal Network (network-v8) between equivalent provider instances."],
+        "limitations": ["DNS ownership, administrative path ownership, cross-zone/region topology, physical-host queue behavior, and independent repeated pairs are not fully validated."],
+        "next_actions": ["Run Provider Internal Network (network-v9) between equivalent provider instances."],
     },
     "big-data": {
         "rules": [
@@ -186,11 +186,11 @@ EXPECTED_METHODOLOGIES = {
     "database": {str(profile["methodology_version"]) for profile in DATABASE_PROFILES.values()},
     "web": {str(profile["methodology_version"]) for profile in WEB_PROFILES.values()},
 }
-# Completed network-v2 through network-v7 evidence remains readable after the
-# standard profile moves to network-v8. Version 8 adds bounded system-resolver
-# diagnostics without turning externally dependent DNS observations into a gate.
+# Completed network-v2 through network-v8 evidence remains readable after the
+# standard profile moves to network-v9. Version 9 adds bounded guest-visible
+# steering and IRQ affinity without turning virtual-NIC support into a gate.
 EXPECTED_METHODOLOGIES["network"].update(
-    {"network-v2", "network-v3", "network-v4", "network-v5", "network-v6", "network-v7"}
+    {"network-v2", "network-v3", "network-v4", "network-v5", "network-v6", "network-v7", "network-v8"}
 )
 
 
@@ -282,6 +282,7 @@ def _run_valid(run: dict[str, Any]) -> tuple[bool, str | None]:
         "network-v6",
         "network-v7",
         "network-v8",
+        "network-v9",
     }:
         if _nested(result, "analysis", "validity", "comparison_eligible") is not True:
             return False, "Network route, bounded path-trace, NIC, TCP-control, interface-counter, or Generator headroom evidence is insufficient for comparison."

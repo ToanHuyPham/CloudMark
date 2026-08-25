@@ -1,6 +1,6 @@
 # CloudMark current state
 
-Last updated: 2026-08-14
+Last updated: 2026-08-23
 
 ## Repository baseline
 
@@ -63,6 +63,17 @@ baseline is still the repository head.
   complete development head passes 98 Python tests, 3 rendered-dashboard
   tests, dashboard lint, and the production build without starting provider
   load;
+- simulation-verified `network-v9` standard orchestration with bounded,
+  read-only guest-visible queue-placement evidence on the route-derived Linux
+  interface: at most 4,096 RSS indirection entries across queue indexes 0-127,
+  RPS/XPS CPU masks for at most 128 RX/TX queues, and affinity for at most 256
+  interface-exposed MSI IRQs. RSS hash keys are not persisted, every control
+  file read is capped at 4,096 bytes, Agent evidence is independently bounded
+  and normalized by the Controller, and no NIC/kernel setting is changed.
+  Steering/affinity evidence is observational and does not claim physical-host
+  configuration or alter comparison validity. The complete development head
+  passes 102 Python tests, 3 rendered-dashboard tests, dashboard lint, and the
+  production build without starting provider load;
 - simulation-verified `database-postgresql-v1` paired executor with isolated
   Target clusters, Generator-side built-in pgbench workloads, durable settings,
   progress/control heartbeat, fixed safety limits, and verified cleanup; the
@@ -163,7 +174,7 @@ Controller run: `run_1c572100e8704843`.
 
 ## Known limitations
 
-- network coverage is Partial: `network-v8` implements Linux pre/post
+- network coverage is Partial: `network-v9` implements Linux pre/post
   route-derived interface counters, egress-interface, interface-MTU and
   path-MTU evidence, bounded destination-reaching numeric traces, endpoint/hop
   address classification, route-stability evidence, read-only NIC driver and selected offload state,
@@ -174,8 +185,9 @@ Controller run: `run_1c572100e8704843`.
   permits it, while address class and observed hops do not prove administrative
   ownership or a public path, and same-host placement and the physical provider
   fabric cannot yet be proven; bounded common driver per-queue counters are
-  observational but are not normalized across every NIC family and do not
-  include interrupt/RSS/RPS/XPS affinity; fixed system-resolver configuration
+  observational but are not normalized across every NIC family; guest-visible
+  RSS/RPS/XPS and MSI IRQ affinity is now bounded and observational but does not
+  verify physical-host NIC/interrupt placement; fixed system-resolver configuration
   and A/AAAA diagnostics are observational, with no controlled authoritative
   server, cache-cold repetition, DNSSEC, TCP fallback, or Windows parity;
   manual fixed-pair repeated UTC-day campaigns are implemented, while
@@ -204,8 +216,8 @@ Controller run: `run_1c572100e8704843`.
 
 ## Next priorities
 
-1. Add physical-host/fabric and administrative-path verification, wider NIC
-   queue-counter normalization plus interrupt/RSS/RPS/XPS affinity, controlled
+1. Add physical-host/fabric and administrative-path verification, wider vendor
+   NIC queue-counter normalization, controlled
    authoritative/cache-cold/DNSSEC resolver coverage, unattended campaign
    scheduling, and Windows route parity
    before promoting the network domain from Partial.

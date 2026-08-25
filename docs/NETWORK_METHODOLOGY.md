@@ -28,13 +28,14 @@ physical provider fabric.
 | Profile | Methodology | Measurements |
 |---|---|---|
 | `network-peer-quick` | `network-v1` | TCP A→B and B→A, 1 and 4 streams, 10 seconds each |
-| `network-peer-standard` | `network-v8` | Pre/post route, bounded path-trace, aggregate interface-counter, and driver per-queue snapshots; route/interface/MTU, NIC driver/offload, TCP congestion-control, and system-resolver evidence; idle latency; TCP scaling; adaptive UDP sweeps; simultaneous bidirectional TCP; and Generator headroom validation |
+| `network-peer-standard` | `network-v9` | Pre/post route, bounded path-trace, aggregate interface-counter, and driver per-queue snapshots; route/interface/MTU, NIC driver/offload, TCP congestion-control, system-resolver, and guest RSS/RPS/XPS/MSI IRQ-affinity evidence; idle latency; TCP scaling; adaptive UDP sweeps; simultaneous bidirectional TCP; and Generator headroom validation |
 
 The standard profile contains 21 evidence steps:
 
 1. allow-listed pre-load route, egress-interface, structured aggregate and driver per-queue counter,
    interface-MTU, path-MTU, bounded numeric path trace, NIC driver/offload, active TCP
-   congestion-control, and fixed system-resolver diagnostics on both Agents;
+   congestion-control, fixed system-resolver diagnostics, and bounded guest-visible
+   RSS/RPS/XPS/MSI IRQ-affinity observations on both Agents;
 2. bounded idle ICMP latency in both directions: 20 probes at 100 ms intervals;
 3. TCP A→B and B→A at 1, 4, 8, and 16 streams for 15 seconds;
 4. UDP A→B and B→A at 25%, 50%, and 90% of that direction's measured peak TCP receiver rate for 15 seconds; and
@@ -62,12 +63,12 @@ different protocols and sampling mechanisms. CloudMark reports the absolute and
 percentage change as diagnostic evidence but deliberately does not assign a
 bufferbloat score.
 
-`network-v8` evaluates Generator headroom independently in each
+`network-v9` evaluates Generator headroom independently in each
 direction. The iperf3 client is the sender, so CloudMark selects local or
 remote CPU evidence according to which endpoint has the `generator` role. A
 direction is constrained when Generator CPU reaches 90%, or when throughput
 scaling stalls below 5% while Generator CPU is at least 85%. Missing CPU data
-produces `unknown`, not a passing result. Network-v8 evidence is eligible for
+produces `unknown`, not a passing result. Network-v9 evidence is eligible for
 suitability and provider comparison only when both route/interface/MTU probes,
 destination-reaching bounded traces, NIC driver/offload observations, and TCP
 congestion-control observations are complete, the route interface/gateway/source
@@ -92,8 +93,8 @@ and filter feature states. The active TCP congestion-control algorithm is read
 from Linux procfs. CloudMark does not enable or disable offloads, change the
 congestion-control algorithm, or accept an interface name from the Controller.
 Missing tools or unsupported virtual NIC features remain `unavailable`; they
-are not converted to zero. Network-v2 through network-v7 results remain
-readable under their original contracts and do not gain v8 claims.
+are not converted to zero. Network-v2 through network-v8 results remain
+readable under their original contracts and do not gain v9 claims.
 
 Each pre/post snapshot retains cumulative RX/TX bytes, packets, errors, and
 drops from structured `ip -s -j link` output. CloudMark computes a delta only
@@ -105,7 +106,7 @@ Agent control traffic when data and control share one NIC. Observed drops and
 errors remain comparable measured evidence; CloudMark never rejects a poor
 result merely because those values are non-zero.
 
-Network v8 also executes fixed read-only `ethtool -S` against that same
+Network v9 also executes fixed read-only `ethtool -S` against that same
 route-derived interface at both boundaries. Because driver statistic names are
 not standardized, CloudMark recognizes only a bounded set of common queue
 counter shapes, limits queue indexes to 0-127, and examines at most 4,096 lines
@@ -116,7 +117,7 @@ support remains unavailable. Per-queue evidence is observational and is not a
 comparison gate; making vendor-specific availability a hard requirement would
 systematically exclude otherwise valid NICs and clouds.
 
-At the pre-load boundary, Network v8 reads at most 64 KiB of Linux
+At the pre-load boundary, Network v9 reads at most 64 KiB of Linux
 `/etc/resolv.conf`, persists configured nameserver address/family/class,
 redacts search-domain names while retaining their count, and accepts only a
 small allow-list of resolver options. When `dig` is installed, each Agent makes
@@ -134,6 +135,22 @@ service to the provider, and never gates network comparison eligibility.
 Missing `dig` produces configuration-only partial evidence rather than a zero
 or a rejected throughput Run. Windows resolver parity is not implemented.
 
+At that same pre-load boundary, Network v9 reads guest-visible queue placement
+only for the route-derived Linux interface. A fixed read-only `ethtool -x`
+query records at most 4,096 RSS indirection entries across queue indexes 0-127,
+the active queue distribution, and the enabled hash-function name. The RSS hash
+key is deliberately never persisted. Linux sysfs contributes bounded RPS and
+XPS CPU masks for at most 128 RX/TX queues; procfs contributes affinity lists
+for at most 256 MSI IRQs exposed by that interface. Every control file is capped
+at 4,096 bytes.
+
+RSS, RPS, XPS, and IRQ-affinity evidence is observational. A virtual NIC may
+hide some or all controls, and guest-visible placement cannot establish the
+physical host NIC, hardware RSS table, interrupt isolation, or provider fabric.
+Missing support therefore remains `unavailable` rather than zero and never
+invalidates an otherwise comparison-eligible Network v9 Run. CloudMark does
+not run `ethtool -X`, write a sysfs/procfs file, or change NIC/kernel settings.
+
 ## Safety gates
 
 - peer destinations come only from the paired Agent records;
@@ -148,6 +165,9 @@ or a rejected throughput Run. Windows resolver parity is not implemented.
   route-derived egress interface, fixed arguments, and read-only kernel state;
 - resolver queries use only the fixed `example.com.` name and A/AAAA record types,
   and search-domain names and returned answer addresses are not persisted;
+- guest queue placement is bounded to 128 queues, 4,096 RSS entries, and 256
+  MSI IRQs; the RSS hash key is not persisted and no steering or affinity value
+  is written;
 - arbitrary commands and raw shell input are never accepted; and
 - only one saturation suite may target an Agent at a time.
 
@@ -155,17 +175,17 @@ The standard profile can saturate a provider link. It requires explicit
 `confirm_network_load` authorization and may incur provider egress or traffic
 charges, particularly across zones or regions.
 
-The Controller refuses to start Network v8 unless both Agents advertise
+The Controller refuses to start Network v9 unless both Agents advertise
 `iperf3`, `iproute2`, `tracepath`, `ethtool`, and Linux TCP congestion-control
 capabilities. This prevents an expensive load run that can never satisfy the
-v8 comparison contract. `dig` is installed by the Network bootstrap pack and
+v9 comparison contract. `dig` is installed by the Network bootstrap pack and
 reported as a capability, but remains optional because resolver evidence is
 observational.
 
 ## Repeated campaign acquisition
 
 `network-campaign-v1` binds one fixed Target/Generator pair, topology evidence
-class, standard profile version, and Network v8 methodology for 3-30 distinct
+class, standard profile version, and Network v9 methodology for 3-30 distinct
 UTC-day windows. Creating the campaign does not generate traffic. The operator
 must explicitly confirm each window, and CloudMark counts at most one completed
 comparison-eligible Run per UTC day. Failed and cancelled attempts remain
@@ -183,7 +203,8 @@ identical shapes, placement or anti-affinity evidence, matching tool versions,
 fresh instances, several time windows, and preserved directional results.
 
 The network domain remains `Partial`. Driver-exposed per-queue NIC counters are
-observational and not yet normalized across every NIC family. System-resolver
+observational and not yet normalized across every NIC family. Guest-visible
+steering and IRQ affinity do not verify physical-host placement. System-resolver
 diagnostics do not yet cover controlled authoritative DNS, repeated cache-cold
 resolution, DNSSEC, TCP fallback, or Windows. CloudMark does not yet provide
 administrative route-ownership verification,

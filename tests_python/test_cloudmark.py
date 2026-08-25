@@ -19,14 +19,17 @@ from cloudmark.agent import (
     AgentBenchmarkFailure,
     AgentWorker,
     _address_class,
+    _collect_sysfs_queue_steering,
     _link_counters,
     _parse_ethtool_driver,
     _parse_ethtool_features,
     _parse_ethtool_queue_statistics,
+    _parse_ethtool_rss_indirection,
     _parse_dig_response,
     _parse_resolver_config,
     _parse_tracepath,
     _resolver_evidence,
+    _steering_evidence,
     _tcp_congestion_control,
     join_session,
 )
@@ -1311,6 +1314,136 @@ device_packets: 400
         unavailable = _parse_ethtool_queue_statistics("device_packets: 100\n")
         self.assertEqual(unavailable["status"], "unavailable")
 
+    def test_agent_normalizes_rss_without_persisting_hash_key(self) -> None:
+        evidence = _parse_ethtool_rss_indirection(
+            """
+RX flow hash indirection table for ens4 with 4 RX ring(s):
+    0:      0     1     2     3     0     1     2     3
+RSS hash key:
+de:ad:be:ef:do:not:persist
+RSS hash function:
+    toeplitz: on
+    xor: off
+"""
+        )
+        self.assertEqual(evidence["status"], "observed")
+        self.assertEqual(evidence["table_entry_count"], 8)
+        self.assertEqual(evidence["active_queue_count"], 4)
+        self.assertEqual(evidence["queue_distribution"][0]["share_percent"], 25.0)
+        self.assertTrue(evidence["hash_functions"]["toeplitz"])
+        self.assertFalse(evidence["hash_key_persisted"])
+        self.assertNotIn("de:ad:be:ef", json.dumps(evidence))
+
+    def test_agent_collects_bounded_sysfs_steering_and_msi_affinity(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            sys_net = root / "sys" / "class" / "net"
+            proc_irq = root / "proc" / "irq"
+            for queue in ("rx-0", "rx-1", "tx-0", "tx-1"):
+                (sys_net / "ens4" / "queues" / queue).mkdir(parents=True)
+            (sys_net / "ens4" / "queues" / "rx-0" / "rps_cpus").write_text("00000003\n", encoding="utf-8")
+            (sys_net / "ens4" / "queues" / "rx-0" / "rps_flow_cnt").write_text("4096\n", encoding="utf-8")
+            (sys_net / "ens4" / "queues" / "rx-1" / "rps_cpus").write_text("00000000\n", encoding="utf-8")
+            (sys_net / "ens4" / "queues" / "rx-1" / "rps_flow_cnt").write_text("0\n", encoding="utf-8")
+            (sys_net / "ens4" / "queues" / "tx-0" / "xps_cpus").write_text("0000000c\n", encoding="utf-8")
+            (sys_net / "ens4" / "queues" / "tx-1" / "xps_cpus").write_text("00000000\n", encoding="utf-8")
+            for irq, affinity in ((32, "0-1\n"), (33, "2-3\n")):
+                (sys_net / "ens4" / "device" / "msi_irqs" / str(irq)).mkdir(parents=True)
+                (proc_irq / str(irq)).mkdir(parents=True)
+                (proc_irq / str(irq) / "smp_affinity_list").write_text(affinity, encoding="utf-8")
+            evidence = _collect_sysfs_queue_steering(
+                "ens4",
+                sys_class_net=sys_net,
+                proc_irq=proc_irq,
+            )
+        self.assertEqual(evidence["status"], "complete")
+        self.assertEqual(evidence["rps"]["configured_queue_count"], 1)
+        self.assertEqual(evidence["rps"]["queues"][0]["cpu_count"], 2)
+        self.assertEqual(evidence["rps"]["queues"][0]["flow_count"], 4096)
+        self.assertEqual(evidence["xps"]["configured_queue_count"], 1)
+        self.assertEqual(evidence["irq_affinity"]["observed_affinity_count"], 2)
+        self.assertEqual(evidence["irq_affinity"]["distinct_affinity_count"], 2)
+
+    def test_agent_steering_probe_uses_only_read_only_ethtool_rss_query(self) -> None:
+        sysfs = {
+            "status": "complete",
+            "rps": {"status": "observed", "queues": [], "total_queue_count": 0, "configured_queue_count": 0},
+            "xps": {"status": "observed", "queues": [], "total_queue_count": 0, "configured_queue_count": 0},
+            "irq_affinity": {
+                "status": "observed",
+                "msi_irq_count": 0,
+                "observed_affinity_count": 0,
+                "distinct_affinity_count": 0,
+                "affinities": [],
+            },
+            "bounds": {},
+        }
+        response = SimpleNamespace(
+            returncode=0,
+            stdout="RX flow hash indirection table for ens4:\n0: 0 1\nRSS hash key:\nsecret\n",
+            stderr="",
+        )
+        with patch("cloudmark.agent._collect_sysfs_queue_steering", return_value=sysfs), patch(
+            "cloudmark.agent.subprocess.run", return_value=response
+        ) as run:
+            evidence = _steering_evidence("ens4", ethtool="/usr/sbin/ethtool", environment={"LC_ALL": "C"})
+        self.assertEqual(run.call_args.args[0], ["/usr/sbin/ethtool", "-x", "ens4"])
+        self.assertFalse(run.call_args.kwargs["shell"])
+        self.assertFalse(evidence["policy"]["network_configuration_changed"])
+        self.assertFalse(evidence["policy"]["rss_hash_key_persisted"])
+
+    def test_controller_bounds_and_rederives_agent_steering_evidence(self) -> None:
+        distribution = [
+            {"queue": index % 2, "entries": 2, "share_percent": 50.0}
+            for index in range(200)
+        ]
+        affinities = [
+            {"irq": 32 + index, "cpu_list": "0-1", "cpu_count": 2}
+            for index in range(300)
+        ]
+        analysis = _network_analysis({
+            "methodology_version": "network-v9",
+            "path_measurements": [{
+                "direction": "agent-a-to-agent-b",
+                "sender": {"id": "agent-a", "name": "Agent A", "role": "target"},
+                "evidence": {
+                    "status": "partial",
+                    "steering": {
+                        "status": "complete",
+                        "interface": "ens4",
+                        "rss": {
+                            "status": "observed",
+                            "table_entry_count": 400,
+                            "active_queue_count": 2,
+                            "queue_distribution": distribution,
+                            "hash_functions": ["malformed"],
+                            "hash_key": "must-not-pass-controller-normalization",
+                        },
+                        "rps": {"status": "observed", "queues": "malformed"},
+                        "xps": "malformed",
+                        "irq_affinity": {
+                            "status": "observed",
+                            "msi_irq_count": 300,
+                            "observed_affinity_count": 300,
+                            "affinities": affinities,
+                        },
+                    },
+                },
+            }],
+            "post_path_measurements": [],
+            "measurements": [],
+            "latency_measurements": [],
+            "udp_measurements": [],
+            "validity_policy": {},
+        })
+        observation = analysis["steering_observations"][0]
+        self.assertEqual(analysis["validity"]["steering_evidence_status"], "partial")
+        self.assertEqual(len(observation["rss"]["queue_distribution"]), 128)
+        self.assertEqual(len(observation["irq_affinity"]["affinities"]), 256)
+        self.assertEqual(observation["rss"]["hash_functions"], {})
+        self.assertNotIn("hash_key", observation["rss"])
+        self.assertFalse(analysis["validity"]["steering_evidence_required"])
+
     def test_agent_normalizes_only_complete_nonnegative_link_counters(self) -> None:
         complete = _link_counters({
             "stats64": {
@@ -1681,7 +1814,7 @@ device_packets: 400
             self.assertFalse(result["policy"]["controller_in_data_path"])
             self.assertEqual(result["tool"]["version"], "iperf 3.17")
 
-    def test_standard_network_orchestrator_captures_all_v8_measurement_classes(self) -> None:
+    def test_standard_network_orchestrator_captures_all_v9_measurement_classes(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             database = Database(Path(directory) / "test.sqlite3")
             database.create_session("session_test", "pair", "hash", "2099-01-01T00:00:00+00:00")
@@ -1700,7 +1833,7 @@ device_packets: 400
             database.add_agent("agent_b", "session_test", "generator", "generator", system, endpoint={"address": "10.0.0.11"})
             total_steps = network_total_steps("network-peer-standard")
             database.create_run(
-                "run_network_v8",
+                "run_network_v9",
                 "network",
                 "network-peer-standard",
                 {"suite": "network"},
@@ -1786,6 +1919,55 @@ device_packets: 400
                                     "cache_state": "unknown",
                                     "provider_dns_service_attributed": False,
                                 }
+                            if payload.get("steering_probe") is True:
+                                result["steering"] = {
+                                    "status": "complete",
+                                    "observed_at": "2026-08-13T00:00:00+00:00",
+                                    "interface": "ens4",
+                                    "rss": {
+                                        "status": "observed",
+                                        "source": "ethtool-rss-indirection",
+                                        "table_entry_count": 4,
+                                        "active_queue_count": 2,
+                                        "busiest_queue": 0,
+                                        "busiest_queue_percent": 50.0,
+                                        "queue_distribution": [
+                                            {"queue": 0, "entries": 2, "share_percent": 50.0},
+                                            {"queue": 1, "entries": 2, "share_percent": 50.0},
+                                        ],
+                                        "hash_functions": {"toeplitz": True},
+                                        "hash_key_persisted": False,
+                                    },
+                                    "rps": {
+                                        "status": "observed",
+                                        "source": "linux-sysfs-rps",
+                                        "total_queue_count": 2,
+                                        "configured_queue_count": 1,
+                                        "queues": [
+                                            {"queue": 0, "mask": "3", "cpu_count": 2, "configured": True}
+                                        ],
+                                    },
+                                    "xps": {
+                                        "status": "observed",
+                                        "source": "linux-sysfs-xps",
+                                        "total_queue_count": 2,
+                                        "configured_queue_count": 1,
+                                        "queues": [
+                                            {"queue": 0, "mask": "c", "cpu_count": 2, "configured": True}
+                                        ],
+                                    },
+                                    "irq_affinity": {
+                                        "status": "observed",
+                                        "source": "linux-procfs-msi-affinity",
+                                        "msi_irq_count": 2,
+                                        "observed_affinity_count": 2,
+                                        "distinct_affinity_count": 2,
+                                        "affinities": [
+                                            {"irq": 32, "cpu_list": "0-1", "cpu_count": 2},
+                                            {"irq": 33, "cpu_list": "2-3", "cpu_count": 2},
+                                        ],
+                                    },
+                                }
                             result["interface"].update({
                                 "driver": {"status": "observed", "driver": "gve", "version": "1.0"},
                                 "offloads": {
@@ -1870,10 +2052,10 @@ device_packets: 400
             worker = threading.Thread(target=complete_tasks, daemon=True)
             worker.start()
             try:
-                context = JobContext("run_network_v8", total_steps=total_steps, timeout_seconds=60)
+                context = JobContext("run_network_v9", total_steps=total_steps, timeout_seconds=60)
                 result = run_network(
                     database,
-                    "run_network_v8",
+                    "run_network_v9",
                     "session_test",
                     "network-peer-standard",
                     context=context,
@@ -1899,6 +2081,10 @@ device_packets: 400
             self.assertEqual(result["analysis"]["validity"]["resolver_evidence_status"], "complete")
             self.assertFalse(result["analysis"]["validity"]["resolver_evidence_required"])
             self.assertEqual(len(result["analysis"]["resolver_observations"]), 2)
+            self.assertEqual(result["analysis"]["validity"]["steering_evidence_status"], "complete")
+            self.assertFalse(result["analysis"]["validity"]["steering_evidence_required"])
+            self.assertEqual(len(result["analysis"]["steering_observations"]), 2)
+            self.assertTrue(result["policy"]["bounded_queue_steering_and_irq_evidence"])
             self.assertTrue(all(value == 2 for value in path_snapshots.values()))
             self.assertEqual(result["analysis"]["validity"]["path_trace_evidence_status"], "complete")
             self.assertEqual(result["analysis"]["validity"]["route_stability_status"], "complete")
@@ -1924,7 +2110,7 @@ device_packets: 400
         profile = NETWORK_PROFILES["network-peer-standard"]
         self.assertFalse(profile["cloud_to_controller"])
         self.assertEqual(profile["requires_agents"], 2)
-        self.assertEqual(profile["methodology_version"], "network-v8")
+        self.assertEqual(profile["methodology_version"], "network-v9")
         self.assertEqual(network_total_steps("network-peer-quick"), 4)
         self.assertEqual(network_total_steps("network-peer-standard"), 21)
 

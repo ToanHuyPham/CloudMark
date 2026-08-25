@@ -61,15 +61,22 @@ systems.
   from that same route-derived interface. CloudMark never resets counters, and
   a counter decrease is reported as unavailable evidence rather than coerced
   into a delta.
-- Network v8 reads `ethtool -S` only for the route-derived interface. It
+- Network v9 reads `ethtool -S` only for the route-derived interface. It
   examines at most 4,096 lines, accepts queue indexes 0-127, recognizes only a
   bounded common counter-name set, and never changes queue, RSS, RPS, XPS, IRQ,
   or NIC configuration. Unknown driver counters remain unclassified.
-- Network v8 resolver diagnostics read at most 64 KiB from Linux
+- Network v9 resolver diagnostics read at most 64 KiB from Linux
   `/etc/resolv.conf` and, when `dig` is present, query only `example.com.` for
   A and AAAA once per Agent with fixed retry and timeout bounds. The Controller
   cannot submit a hostname. Search-domain names and answer addresses are not
   persisted, and the diagnostic never claims provider DNS ownership.
+- Network v9 runs `ethtool -x` only for the route-derived interface and parses
+  at most 4,096 RSS entries with queue indexes 0-127. It never persists the RSS
+  hash key. Linux sysfs RPS/XPS masks are limited to 128 queues, procfs affinity
+  is limited to 256 interface-exposed MSI IRQs, and each control-file read is
+  capped at 4,096 bytes. CloudMark never runs `ethtool -X`, writes queue/IRQ
+  controls, or claims that guest-visible placement proves physical-host or
+  provider-fabric configuration.
 - Address classes and observed IP hops remain descriptive. They never establish
   path ownership or prove that traffic crossed the public Internet.
 - Servers use one-shot mode and an independent watchdog deadline.

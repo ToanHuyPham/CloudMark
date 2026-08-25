@@ -55,7 +55,8 @@ test("keeps production metadata and project policy explicit", async () => {
   assert.match(page, /REPEATED-WINDOW OBSERVATIONS/);
   assert.match(page, /COMPARISON CONTRACT/);
   assert.match(page, /SYSTEM RESOLVER/);
-  assert.match(page, /network-v8/i);
+  assert.match(page, /QUEUE STEERING/);
+  assert.match(page, /network-v9/i);
   assert.match(page, /Provider Comparison/);
   assert.match(page, /CloudMark does not rank providers/);
   assert.match(page, /profiles\.database\?\.\[selectedDatabaseProfile\]/);

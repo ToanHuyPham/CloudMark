@@ -142,21 +142,22 @@ Supported storage profiles are `disk-quick`, `disk-standard`, `disk-database`,
 ```
 
 The session must contain an online `target` and `generator`. Both must advertise
-a peer-reachable IP and report `iperf3`. Network v8 additionally requires both
+a peer-reachable IP and report `iperf3`. Network v9 additionally requires both
 Agents to report `iproute2`, `tracepath`, `ethtool`, and Linux TCP
 congestion-control evidence before load starts. `confirm_network_load` is
 mandatory.
 Supported profiles are `network-peer-quick` (`network-v1`) and
-`network-peer-standard` (`network-v8`). Quick executes directional TCP only.
+`network-peer-standard` (`network-v9`). Quick executes directional TCP only.
 Standard executes 21 bounded peer evidence steps: two pre-load and two
 post-load route/interface/MTU and numeric path-trace, read-only NIC driver/offload,
 TCP congestion-control, structured aggregate interface counters, and bounded
-driver-exposed per-queue counters and one fixed A/AAAA system-resolver
-diagnostic per Agent; idle latency;
+driver-exposed per-queue counters, one fixed A/AAAA system-resolver diagnostic,
+and bounded guest RSS/RPS/XPS/MSI IRQ-affinity observations per Agent; idle latency;
 directional TCP scaling; UDP rate sweeps derived from each direction's TCP
 baseline; and one simultaneous bidirectional TCP measurement. Its result
 includes aggregate byte/packet/error/drop deltas, observational queue traffic
-distribution when the NIC driver exposes recognized counters, resolver
+distribution when the NIC driver exposes recognized counters, guest-visible
+steering/IRQ placement when Linux exposes it, resolver
 configuration and bounded query outcomes when available, and comparison eligibility based on
 stable pre/post routes, destination-reaching bounded traces, a complete
 NIC/TCP-control/counter window, and Generator CPU/scaling headroom. Address
@@ -183,7 +184,7 @@ X-CloudMark-Token: ...
 
 Creation returns `201` and never starts network traffic. The immutable
 `network-campaign-v1` contract records the pair, topology evidence class,
-profile version, `network-v8` methodology, and a 3-30 day target. Dispatch the
+profile version, `network-v9` methodology, and a 3-30 day target. Dispatch the
 next eligible window explicitly:
 
 ```http

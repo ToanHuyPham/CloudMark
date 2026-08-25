@@ -306,3 +306,26 @@ cannot isolate cache effects, split DNS, local stubs, authoritative service, or
 provider ownership. Keeping the probe fixed and observational adds diagnostic
 coverage without inventing a provider DNS benchmark or allowing arbitrary
 outbound queries.
+
+## D-024: Network v9 keeps guest queue steering and IRQ affinity observational
+
+**Decision:** Advance the standard peer profile to `network-v9`. At the
+pre-load boundary, each Linux Agent queries only the route-derived interface.
+A fixed read-only `ethtool -x` call records a bounded RSS indirection
+distribution and enabled hash-function name without persisting the RSS hash
+key. Bounded Linux sysfs reads record RPS/XPS CPU masks, and bounded procfs
+reads record affinity for MSI IRQs exposed by that interface. CloudMark limits
+the evidence to 128 queues, 4,096 RSS entries, 256 IRQs, and 4,096 bytes per
+control file. It never changes RSS, RPS, XPS, IRQ, NIC, or kernel settings.
+Missing or partial guest-visible evidence remains observational and does not
+invalidate otherwise comparable Network v9 throughput. Older standard Runs
+remain readable, and unfinished campaigns bound to an older methodology become
+`superseded`.
+
+**Reason:** A multi-queue virtual NIC can still concentrate flows or interrupts
+on too few guest CPUs, obscuring why throughput scaling or latency degrades.
+The read-only configuration is useful diagnostic evidence, but virtualization
+may hide the hardware table and physical interrupt placement. Treating absence
+as failure would penalize providers for interface visibility rather than a
+measured performance defect, while claiming guest affinity represents the host
+fabric would exceed the evidence.

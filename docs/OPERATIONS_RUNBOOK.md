@@ -140,7 +140,7 @@ repository.
 7. Preserve failed runs; diagnose them before retrying.
 8. Repeat official profiles in multiple time windows.
 
-For Network v8, install the network pack on both Agents and restart them so
+For Network v9, install the network pack on both Agents and restart them so
 inventory reports `iperf3`, `iproute2`, `tracepath`, `ethtool`, and Linux TCP
 congestion-control support. The same pack installs `dig`; when it remains
 unavailable, the Run records configuration-only partial resolver evidence but
@@ -153,6 +153,11 @@ not prove provider ownership or public-Internet transit.
 Review driver queue distribution separately. An `unavailable` per-queue result
 usually means that the virtual NIC does not expose a recognized `ethtool -S`
 counter shape; it does not turn throughput into a failed or zero result.
+Review queue steering and IRQ evidence separately. Zero configured RPS/XPS
+queues can be a valid guest configuration, while `unavailable` RSS or MSI IRQ
+evidence commonly means that the virtual NIC hides the control. Neither state
+proves how the physical host distributes traffic, and neither invalidates the
+throughput Run.
 Review system-resolver observations as diagnostics only: a local stub, cache,
 split DNS, or unidentified upstream prevents provider attribution from a
 single fixed query.

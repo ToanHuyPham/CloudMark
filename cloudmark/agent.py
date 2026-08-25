@@ -75,6 +75,10 @@ RESOLVER_CONFIG_MAX_BYTES = 65_536
 NETWORK_INTERFACE_PATTERN = re.compile(r"^[A-Za-z0-9_.:@-]{1,64}$")
 NETWORK_QUEUE_MAX_INDEX = 127
 NETWORK_QUEUE_MAX_STAT_LINES = 4096
+NETWORK_STEERING_MAX_IRQS = 256
+NETWORK_STEERING_MAX_MASK_BYTES = 4096
+NETWORK_RSS_MAX_ENTRIES = 4096
+NETWORK_RSS_MAX_LINES = 4096
 NETWORK_QUEUE_METRIC_ALIASES = {
     "bytes": "bytes",
     "packets": "packets",
@@ -549,6 +553,370 @@ def _parse_ethtool_queue_statistics(stdout: str) -> dict[str, Any]:
     return result
 
 
+def _bounded_text(path: Path, maximum_bytes: int) -> tuple[str | None, bool]:
+    """Read a small text control file without allowing an unbounded evidence payload."""
+    try:
+        with path.open("r", encoding="utf-8", errors="replace") as handle:
+            value = handle.read(maximum_bytes + 1)
+    except OSError:
+        return None, False
+    return value[:maximum_bytes].strip(), len(value) > maximum_bytes
+
+
+def _parse_cpu_mask(value: str) -> dict[str, Any] | None:
+    normalized = value.strip().lower()
+    if not normalized or len(normalized.encode("utf-8")) > NETWORK_STEERING_MAX_MASK_BYTES:
+        return None
+    compact = normalized.replace(",", "")
+    if not compact or not re.fullmatch(r"[0-9a-f]+", compact):
+        return None
+    return {
+        "mask": normalized,
+        "cpu_count": int(compact, 16).bit_count(),
+    }
+
+
+def _parse_cpu_list(value: str) -> dict[str, Any] | None:
+    normalized = value.strip().lower()
+    if not normalized or len(normalized.encode("utf-8")) > NETWORK_STEERING_MAX_MASK_BYTES:
+        return None
+    if not re.fullmatch(r"\d+(?:-\d+)?(?:,\d+(?:-\d+)?)*", normalized):
+        return None
+    cpus: set[int] = set()
+    for part in normalized.split(","):
+        bounds = part.split("-", 1)
+        first = int(bounds[0])
+        last = int(bounds[-1])
+        if first > last or last > 8191:
+            return None
+        cpus.update(range(first, last + 1))
+    return {
+        "cpu_list": normalized,
+        "cpu_count": len(cpus),
+    }
+
+
+def _parse_ethtool_rss_indirection(stdout: str) -> dict[str, Any]:
+    """Normalize an RSS indirection table without retaining the NIC hash key."""
+    lines = stdout.splitlines()
+    entries: list[int] = []
+    hash_functions: dict[str, bool] = {}
+    in_table = False
+    in_hash_functions = False
+    incomplete = len(lines) > NETWORK_RSS_MAX_LINES
+    for line in lines[:NETWORK_RSS_MAX_LINES]:
+        lowered = line.strip().lower()
+        if "indirection table" in lowered:
+            in_table = True
+            in_hash_functions = False
+            continue
+        if lowered.startswith("rss hash key"):
+            in_table = False
+            in_hash_functions = False
+            continue
+        if lowered.startswith("rss hash function"):
+            in_table = False
+            in_hash_functions = True
+            continue
+        if in_table:
+            match = re.fullmatch(r"\s*\d+:\s+([0-9\s]+)", line)
+            if not match:
+                continue
+            for queue_text in match.group(1).split():
+                queue = int(queue_text)
+                if queue > NETWORK_QUEUE_MAX_INDEX:
+                    incomplete = True
+                    continue
+                if len(entries) >= NETWORK_RSS_MAX_ENTRIES:
+                    incomplete = True
+                    break
+                entries.append(queue)
+        elif in_hash_functions:
+            match = re.fullmatch(r"\s*([a-z0-9_-]+):\s+(on|off)\s*", lowered)
+            if match and match.group(1) in {"toeplitz", "xor", "crc32"}:
+                hash_functions[match.group(1)] = match.group(2) == "on"
+    if not entries:
+        return {
+            "status": "unavailable",
+            "source": "ethtool-rss-indirection",
+            "table_entry_count": 0,
+            "active_queue_count": 0,
+            "queue_distribution": [],
+            "hash_functions": hash_functions,
+            "hash_key_persisted": False,
+            "truncated": incomplete,
+            "reason": "ethtool did not expose a bounded RSS indirection table.",
+        }
+    counts: dict[int, int] = {}
+    for queue in entries:
+        counts[queue] = counts.get(queue, 0) + 1
+    distribution = [
+        {
+            "queue": queue,
+            "entries": count,
+            "share_percent": round(count / len(entries) * 100, 6),
+        }
+        for queue, count in sorted(counts.items())
+    ]
+    busiest = max(distribution, key=lambda item: item["entries"])
+    result: dict[str, Any] = {
+        "status": "partial" if incomplete else "observed",
+        "source": "ethtool-rss-indirection",
+        "table_entry_count": len(entries),
+        "active_queue_count": len(distribution),
+        "queue_distribution": distribution,
+        "busiest_queue": busiest["queue"],
+        "busiest_queue_percent": busiest["share_percent"],
+        "hash_functions": hash_functions,
+        "hash_key_persisted": False,
+        "maximum_queue_index": NETWORK_QUEUE_MAX_INDEX,
+        "maximum_table_entries": NETWORK_RSS_MAX_ENTRIES,
+        "truncated": incomplete,
+    }
+    if incomplete:
+        result["reason"] = "The RSS table exceeded a bounded parser limit or contained an out-of-policy queue index."
+    return result
+
+
+def _collect_sysfs_queue_steering(
+    interface_name: str,
+    *,
+    sys_class_net: Path = Path("/sys/class/net"),
+    proc_irq: Path = Path("/proc/irq"),
+) -> dict[str, Any]:
+    """Collect bounded Linux RPS/XPS and MSI IRQ affinity from a route-derived NIC."""
+    unavailable = {
+        "status": "unavailable",
+        "queues": [],
+        "total_queue_count": 0,
+        "configured_queue_count": 0,
+    }
+    if (
+        not NETWORK_INTERFACE_PATTERN.fullmatch(interface_name)
+        or interface_name in {".", ".."}
+    ):
+        return {
+            "status": "unavailable",
+            "source": "linux-sysfs-procfs",
+            "rps": {**unavailable, "source": "linux-sysfs-rps", "reason": "The interface name is outside policy."},
+            "xps": {**unavailable, "source": "linux-sysfs-xps", "reason": "The interface name is outside policy."},
+            "irq_affinity": {
+                "status": "unavailable",
+                "source": "linux-procfs-msi-affinity",
+                "msi_irq_count": 0,
+                "observed_affinity_count": 0,
+                "distinct_affinity_count": 0,
+                "affinities": [],
+                "reason": "The interface name is outside policy.",
+            },
+        }
+    interface_path = sys_class_net / interface_name
+    queue_path = interface_path / "queues"
+    queue_entries: list[Path] = []
+    queue_truncated = False
+    try:
+        for item in queue_path.iterdir():
+            match = re.fullmatch(r"(?:rx|tx)-(\d+)", item.name)
+            if not match:
+                continue
+            if int(match.group(1)) > NETWORK_QUEUE_MAX_INDEX:
+                queue_truncated = True
+                continue
+            if len(queue_entries) >= 2 * (NETWORK_QUEUE_MAX_INDEX + 1):
+                queue_truncated = True
+                continue
+            queue_entries.append(item)
+    except OSError:
+        queue_entries = []
+    queue_entries.sort(
+        key=lambda item: (item.name.split("-", 1)[0], int(item.name.split("-", 1)[1]))
+    )
+
+    def steering_rows(direction: str, filename: str, source: str) -> dict[str, Any]:
+        matching = [item for item in queue_entries if item.name.startswith(f"{direction}-")]
+        rows: list[dict[str, Any]] = []
+        unreadable = 0
+        for item in matching:
+            queue = int(item.name.split("-", 1)[1])
+            mask_text, mask_truncated = _bounded_text(item / filename, NETWORK_STEERING_MAX_MASK_BYTES)
+            parsed_mask = _parse_cpu_mask(mask_text or "")
+            if parsed_mask is None or mask_truncated:
+                unreadable += 1
+                continue
+            row: dict[str, Any] = {
+                "queue": queue,
+                **parsed_mask,
+                "configured": parsed_mask["cpu_count"] > 0,
+            }
+            if direction == "rx":
+                flow_text, flow_truncated = _bounded_text(item / "rps_flow_cnt", 64)
+                if flow_text is not None and not flow_truncated and re.fullmatch(r"\d+", flow_text):
+                    row["flow_count"] = int(flow_text)
+            rows.append(row)
+        if not matching:
+            return {
+                "status": "unavailable",
+                "source": source,
+                "queues": [],
+                "total_queue_count": 0,
+                "configured_queue_count": 0,
+                "reason": f"No {direction.upper()} queue directories were exposed for the route-derived interface.",
+            }
+        status = "observed" if len(rows) == len(matching) and not queue_truncated else "partial"
+        result: dict[str, Any] = {
+            "status": status,
+            "source": source,
+            "queues": rows,
+            "total_queue_count": len(matching),
+            "configured_queue_count": sum(1 for item in rows if item["configured"]),
+            "unreadable_queue_count": unreadable,
+            "truncated": queue_truncated,
+        }
+        if status == "partial":
+            result["reason"] = "One or more bounded queue steering files were unavailable, invalid, or truncated."
+        return result
+
+    rps = steering_rows("rx", "rps_cpus", "linux-sysfs-rps")
+    xps = steering_rows("tx", "xps_cpus", "linux-sysfs-xps")
+    msi_path = interface_path / "device" / "msi_irqs"
+    irq_values: list[int] = []
+    irq_truncated = False
+    try:
+        for item in msi_path.iterdir():
+            if not re.fullmatch(r"\d+", item.name):
+                continue
+            if len(irq_values) >= NETWORK_STEERING_MAX_IRQS:
+                irq_truncated = True
+                continue
+            irq_values.append(int(item.name))
+    except OSError:
+        irq_values = []
+    irq_values.sort()
+    affinities: list[dict[str, Any]] = []
+    for irq in irq_values:
+        affinity_text, affinity_truncated = _bounded_text(
+            proc_irq / str(irq) / "smp_affinity_list",
+            NETWORK_STEERING_MAX_MASK_BYTES,
+        )
+        parsed_affinity = _parse_cpu_list(affinity_text or "")
+        if parsed_affinity is not None and not affinity_truncated:
+            affinities.append({"irq": irq, **parsed_affinity})
+    if not irq_values:
+        irq_affinity: dict[str, Any] = {
+            "status": "unavailable",
+            "source": "linux-procfs-msi-affinity",
+            "msi_irq_count": 0,
+            "observed_affinity_count": 0,
+            "distinct_affinity_count": 0,
+            "affinities": [],
+            "truncated": False,
+            "reason": "The route-derived interface did not expose MSI IRQ entries.",
+        }
+    else:
+        irq_status = "observed" if len(affinities) == len(irq_values) and not irq_truncated else "partial"
+        irq_affinity = {
+            "status": irq_status,
+            "source": "linux-procfs-msi-affinity",
+            "msi_irq_count": len(irq_values),
+            "observed_affinity_count": len(affinities),
+            "distinct_affinity_count": len({item["cpu_list"] for item in affinities}),
+            "affinities": affinities,
+            "truncated": irq_truncated,
+        }
+        if irq_status == "partial":
+            irq_affinity["reason"] = "One or more bounded MSI IRQ affinity files were unavailable, invalid, or truncated."
+    component_statuses = [rps["status"], xps["status"], irq_affinity["status"]]
+    if all(status == "observed" for status in component_statuses):
+        status = "complete"
+    elif any(status in {"observed", "partial"} for status in component_statuses):
+        status = "partial"
+    else:
+        status = "unavailable"
+    return {
+        "status": status,
+        "source": "linux-sysfs-procfs",
+        "rps": rps,
+        "xps": xps,
+        "irq_affinity": irq_affinity,
+        "bounds": {
+            "maximum_queues": NETWORK_QUEUE_MAX_INDEX + 1,
+            "maximum_msi_irqs": NETWORK_STEERING_MAX_IRQS,
+            "maximum_control_file_bytes": NETWORK_STEERING_MAX_MASK_BYTES,
+        },
+    }
+
+
+def _steering_evidence(
+    interface_name: str,
+    *,
+    ethtool: str | None,
+    environment: dict[str, str],
+) -> dict[str, Any]:
+    sysfs = _collect_sysfs_queue_steering(interface_name)
+    rss: dict[str, Any] = {
+        "status": "unavailable",
+        "source": "ethtool-rss-indirection",
+        "table_entry_count": 0,
+        "active_queue_count": 0,
+        "queue_distribution": [],
+        "hash_key_persisted": False,
+        "reason": "ethtool is not installed or the interface name is outside policy.",
+    }
+    if ethtool and NETWORK_INTERFACE_PATTERN.fullmatch(interface_name) and interface_name not in {".", ".."}:
+        try:
+            rss_result = subprocess.run(
+                [ethtool, "-x", interface_name],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                check=False,
+                shell=False,
+                env=environment,
+            )
+            if rss_result.returncode == 0:
+                rss = _parse_ethtool_rss_indirection(rss_result.stdout)
+            else:
+                rss["reason"] = (
+                    rss_result.stderr.strip()[:256]
+                    or "ethtool did not expose an RSS indirection table for the route-derived interface."
+                )
+        except subprocess.TimeoutExpired:
+            rss["reason"] = "The bounded ethtool RSS query timed out."
+    component_statuses = [
+        str(rss.get("status", "unavailable")),
+        str((sysfs.get("rps") or {}).get("status", "unavailable")),
+        str((sysfs.get("xps") or {}).get("status", "unavailable")),
+        str((sysfs.get("irq_affinity") or {}).get("status", "unavailable")),
+    ]
+    if all(status == "observed" for status in component_statuses):
+        status = "complete"
+    elif any(status in {"observed", "partial"} for status in component_statuses):
+        status = "partial"
+    else:
+        status = "unavailable"
+    return {
+        "status": status,
+        "scope": "route-derived-interface-queue-steering-and-irq-affinity",
+        "observed_at": datetime.now(timezone.utc).isoformat(),
+        "interface": interface_name,
+        "rss": rss,
+        "rps": sysfs["rps"],
+        "xps": sysfs["xps"],
+        "irq_affinity": sysfs["irq_affinity"],
+        "policy": {
+            "read_only": True,
+            "network_configuration_changed": False,
+            "rss_hash_key_persisted": False,
+            "maximum_rss_entries": NETWORK_RSS_MAX_ENTRIES,
+            **(sysfs.get("bounds") or {}),
+        },
+        "limitations": [
+            "Guest-visible RSS, RPS, XPS, and IRQ affinity do not prove physical-host NIC or provider-fabric configuration.",
+            "Missing virtual-NIC controls remain unavailable evidence and do not become a zero score.",
+        ],
+    }
+
+
 def _tcp_congestion_control() -> dict[str, Any]:
     try:
         algorithm = Path("/proc/sys/net/ipv4/tcp_congestion_control").read_text(encoding="utf-8").strip()
@@ -944,6 +1312,7 @@ class AgentWorker:
         address = str(payload.get("target_address", ""))
         parsed = self._peer_address(address)
         collect_resolver = payload.get("resolver_probe") is True
+        collect_steering = payload.get("steering_probe") is True
         policy = {
             "passive_route_lookup": True,
             "path_probe_max_hops": PATH_PROBE_MAX_HOPS,
@@ -952,6 +1321,7 @@ class AgentWorker:
             "network_configuration_changed": False,
             "public_internet_traversal_inferred": False,
             "fixed_resolver_diagnostic": collect_resolver,
+            "bounded_queue_steering_and_irq_evidence": collect_steering,
         }
         if os.name == "nt":
             return {
@@ -1223,6 +1593,12 @@ class AgentWorker:
         }
         if collect_resolver:
             evidence["resolver"] = _resolver_evidence()
+        if collect_steering:
+            evidence["steering"] = _steering_evidence(
+                interface_name,
+                ethtool=ethtool,
+                environment=environment,
+            )
         return evidence
 
     def _collect_server(self, payload: dict[str, Any]) -> dict[str, Any]:
