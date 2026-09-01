@@ -4,10 +4,12 @@ import hashlib
 import ipaddress
 import json
 import os
+import platform
 import re
 import shutil
 import socket
 import subprocess
+import sys
 import threading
 import time
 import urllib.error
@@ -57,13 +59,16 @@ from .web_benchmark import (
     WEB_ALLOWED_PATHS,
     WEB_ALLOWED_PORTS,
     WEB_ALLOWED_SCHEMES,
+    WEB_APP_PORT,
     WEB_HTTP_PORT,
     WEB_HTTPS_PORT,
     WEB_MAX_DURATION,
     WEB_REQUEST_LIMIT,
     WebBenchmarkError,
     parse_ab_output,
+    parse_curl_protocol_output,
 )
+from .web_fixture import WEB_FIXTURE_BIND, WEB_FIXTURE_DYNAMIC_PATH
 
 
 SERVICE_CONTROLLER_CONTACT_TIMEOUT_SECONDS = 20
@@ -127,6 +132,74 @@ RESOLVER_BOOLEAN_OPTIONS = {
     "use-vc",
     "trust-ad",
 }
+
+
+def _linux_cpu_snapshot(pid: int, *, proc_root: Path = Path("/proc")) -> dict[str, int] | None:
+    try:
+        cpu_line = (proc_root / "stat").read_text(encoding="utf-8").splitlines()[0]
+        cpu_values = [int(value) for value in cpu_line.split()[1:9]]
+        process_line = (proc_root / str(pid) / "stat").read_text(encoding="utf-8")
+    except (OSError, UnicodeError, ValueError, IndexError):
+        return None
+    closing_parenthesis = process_line.rfind(")")
+    if closing_parenthesis < 0 or len(cpu_values) < 8:
+        return None
+    process_fields = process_line[closing_parenthesis + 2 :].split()
+    try:
+        process_ticks = int(process_fields[11]) + int(process_fields[12])
+    except (ValueError, IndexError):
+        return None
+    total = sum(cpu_values)
+    idle = cpu_values[3] + cpu_values[4]
+    return {
+        "total": total,
+        "busy": total - idle,
+        "steal": cpu_values[7],
+        "process": process_ticks,
+    }
+
+
+def _linux_cpu_interval(before: dict[str, int], after: dict[str, int]) -> dict[str, float] | None:
+    total_delta = after["total"] - before["total"]
+    busy_delta = after["busy"] - before["busy"]
+    steal_delta = after["steal"] - before["steal"]
+    process_delta = after["process"] - before["process"]
+    if total_delta <= 0 or min(busy_delta, steal_delta, process_delta) < 0:
+        return None
+    logical_cpus = max(1, os.cpu_count() or 1)
+    return {
+        "host_utilization_percent": round(min(100.0, busy_delta / total_delta * 100), 6),
+        "host_steal_percent": round(min(100.0, steal_delta / total_delta * 100), 6),
+        "process_cpu_percent_of_one_core": round(
+            process_delta / total_delta * logical_cpus * 100,
+            6,
+        ),
+    }
+
+
+def _generator_cpu_evidence(samples: list[dict[str, float]]) -> dict[str, Any]:
+    if not samples:
+        return {
+            "status": "unavailable",
+            "source": "linux-procfs",
+            "sample_count": 0,
+            "reason": "Bounded Generator process CPU samples were unavailable.",
+        }
+    process_values = [item["process_cpu_percent_of_one_core"] for item in samples]
+    host_values = [item["host_utilization_percent"] for item in samples]
+    steal_values = [item["host_steal_percent"] for item in samples]
+    return {
+        "status": "observed",
+        "source": "linux-procfs",
+        "sample_count": len(samples),
+        "peak_process_cpu_percent_of_one_core": round(max(process_values), 6),
+        "mean_process_cpu_percent_of_one_core": round(sum(process_values) / len(process_values), 6),
+        "peak_host_utilization_percent": round(max(host_values), 6),
+        "mean_host_utilization_percent": round(sum(host_values) / len(host_values), 6),
+        "peak_host_steal_percent": round(max(steal_values), 6),
+        "sampling_interval_seconds": 1,
+        "process_scope": "apachebench-load-generator",
+    }
 
 
 def _address_class(address: ipaddress.IPv4Address | ipaddress.IPv6Address) -> str:
@@ -1082,6 +1155,10 @@ class ActiveWebServer:
     openssl_version: str | None
     http_port: int
     https_port: int
+    application_process: subprocess.Popen[str] | None
+    application_log_path: Path | None
+    application_log_handle: Any | None
+    methodology_version: str
 
 
 class AgentBenchmarkFailure(RuntimeError):
@@ -1927,6 +2004,7 @@ class AgentWorker:
         current_job: str,
         completed_steps: int,
         total_steps: int,
+        cpu_samples: list[dict[str, float]] | None = None,
     ) -> tuple[int, str, str]:
         process = subprocess.Popen(
             command,
@@ -1941,6 +2019,8 @@ class AgentWorker:
             started = time.monotonic()
             last_contact = started
             next_update = started
+            previous_cpu = _linux_cpu_snapshot(process.pid) if cpu_samples is not None else None
+            next_cpu_sample = started + 1
             while process.poll() is None:
                 now = time.monotonic()
                 if now - started > expected_duration + 20:
@@ -1973,8 +2053,22 @@ class AgentWorker:
                                 "Service task cancelled by the Controller.", status="cancelled", result=None
                             )
                     next_update = time.monotonic() + 2
+                if cpu_samples is not None and now >= next_cpu_sample:
+                    current_cpu = _linux_cpu_snapshot(process.pid)
+                    if previous_cpu is not None and current_cpu is not None:
+                        interval = _linux_cpu_interval(previous_cpu, current_cpu)
+                        if interval is not None and len(cpu_samples) < 120:
+                            cpu_samples.append(interval)
+                    previous_cpu = current_cpu
+                    next_cpu_sample = now + 1
                 time.sleep(0.2)
             stdout, stderr = process.communicate()
+            if cpu_samples is not None and previous_cpu is not None:
+                current_cpu = _linux_cpu_snapshot(process.pid)
+                if current_cpu is not None:
+                    interval = _linux_cpu_interval(previous_cpu, current_cpu)
+                    if interval is not None and len(cpu_samples) < 120:
+                        cpu_samples.append(interval)
             return int(process.returncode or 0), stdout, stderr
         except BaseException:
             self._terminate_process(process)
@@ -2157,8 +2251,17 @@ class AgentWorker:
                 active.process.wait(timeout=10)
             except subprocess.TimeoutExpired:
                 self._terminate_process(active.process, timeout=5)
+        if active.application_process is not None and active.application_process.poll() is None:
+            self._terminate_process(active.application_process, timeout=5)
         active.log_handle.close()
+        if active.application_log_handle is not None:
+            active.application_log_handle.close()
         log_tail = self._tail_text(active.log_path)
+        application_log_tail = (
+            self._tail_text(active.application_log_path)
+            if active.application_log_path is not None
+            else None
+        )
         cleaned = self._remove_web_root(active.root)
         self.active_web_servers.pop(server_task_id, None)
         return {
@@ -2168,6 +2271,10 @@ class AgentWorker:
             "server_returncode": active.process.returncode,
             "graceful_stop_returncode": graceful_returncode,
             "nginx_log_tail": log_tail,
+            "application_returncode": (
+                active.application_process.returncode if active.application_process is not None else None
+            ),
+            "application_log_tail": application_log_tail,
         }
 
     def _start_web_server(self, task_id: str, payload: dict[str, Any]) -> dict[str, Any]:
@@ -2188,6 +2295,9 @@ class AgentWorker:
         self._peer_address(allowed_client)
         http_port = self._web_port(payload.get("http_port"))
         https_port = self._web_port(payload.get("https_port"))
+        methodology_version = str(payload.get("methodology_version") or "web-http-v1")
+        if methodology_version not in {"web-http-v1", "web-http-v2"}:
+            raise WebBenchmarkError("Web service methodology is outside the installed contract.")
         if http_port != WEB_HTTP_PORT or https_port != WEB_HTTPS_PORT:
             raise WebBenchmarkError("Web service ports do not match the methodology contract.")
         deadline_seconds = int(payload.get("deadline_seconds", 0))
@@ -2206,6 +2316,7 @@ class AgentWorker:
         certificate_path = root / "certificate.pem"
         key_path = root / "certificate.key"
         log_path = root / "nginx-process.log"
+        application_log_path = root / "application-process.log"
         error_log_path = root / "nginx-error.log"
         pid_path = root / "nginx.pid"
         disk = shutil.disk_usage(self.workspace)
@@ -2219,7 +2330,9 @@ class AgentWorker:
         environment = os.environ.copy()
         environment["LC_ALL"] = "C"
         log_handle: Any | None = None
+        application_log_handle: Any | None = None
         process: subprocess.Popen[str] | None = None
+        application_process: subprocess.Popen[str] | None = None
         try:
             health = b"ok\n"
             api_prefix = b'{"status":"ok","service":"cloudmark","payload":"'
@@ -2280,12 +2393,33 @@ class AgentWorker:
                 )
 
             listen_host = f"[{listen_address}]" if parsed_listen.version == 6 else listen_address
+            v2_enabled = methodology_version == "web-http-v2"
+            upstream_config = (
+                "  upstream cloudmark_dynamic_app {\n"
+                f"    server {WEB_FIXTURE_BIND}:{WEB_APP_PORT};\n"
+                "    keepalive 64;\n"
+                "  }\n"
+                if v2_enabled
+                else ""
+            )
+            dynamic_location = (
+                f"    location = {WEB_FIXTURE_DYNAMIC_PATH} {{\n"
+                "      proxy_http_version 1.1;\n"
+                "      proxy_set_header Connection \"\";\n"
+                "      proxy_set_header Host cloudmark.invalid;\n"
+                "      proxy_pass http://cloudmark_dynamic_app;\n"
+                "    }\n"
+                if v2_enabled
+                else ""
+            )
+            tls_listener = "ssl http2" if v2_enabled else "ssl"
             config_path.write_text(
                 "worker_processes auto;\n"
                 f'pid "{self._nginx_path(pid_path)}";\n'
                 f'error_log "{self._nginx_path(error_log_path)}" notice;\n'
                 "events { worker_connections 4096; }\n"
                 "http {\n"
+                f"{upstream_config}"
                 "  access_log off;\n"
                 "  default_type application/octet-stream;\n"
                 "  sendfile on;\n"
@@ -2296,7 +2430,7 @@ class AgentWorker:
                 "  server_tokens on;\n"
                 "  server {\n"
                 f"    listen {listen_host}:{http_port};\n"
-                f"    listen {listen_host}:{https_port} ssl;\n"
+                f"    listen {listen_host}:{https_port} {tls_listener};\n"
                 "    server_name cloudmark.invalid;\n"
                 f"    allow {allowed_client};\n"
                 f"    allow {listen_address};\n"
@@ -2308,7 +2442,7 @@ class AgentWorker:
                 "    ssl_session_tickets off;\n"
                 f'    ssl_certificate "{self._nginx_path(certificate_path)}";\n'
                 f'    ssl_certificate_key "{self._nginx_path(key_path)}";\n'
-                '    add_header X-CloudMark-Methodology "web-http-v1";\n'
+                f'    add_header X-CloudMark-Methodology "{methodology_version}";\n'
                 "    location = /health {\n"
                 "      default_type text/plain;\n"
                 f'      alias "{self._nginx_path(www / "health.txt")}";\n'
@@ -2321,6 +2455,7 @@ class AgentWorker:
                 "    location = /assets/256k.bin {\n"
                 f'      alias "{self._nginx_path(assets / "256k.bin")}";\n'
                 "    }\n"
+                f"{dynamic_location}"
                 "  }\n"
                 "}\n",
                 encoding="utf-8",
@@ -2338,6 +2473,44 @@ class AgentWorker:
             )
             if test_code != 0:
                 raise WebBenchmarkError(test_stderr.strip() or test_stdout.strip() or "Nginx config test failed.")
+
+            if v2_enabled:
+                application_log_handle = application_log_path.open("w", encoding="utf-8")
+                application_process = subprocess.Popen(
+                    [
+                        sys.executable,
+                        "-m",
+                        "cloudmark.web_fixture",
+                        "--bind",
+                        WEB_FIXTURE_BIND,
+                        "--port",
+                        str(WEB_APP_PORT),
+                    ],
+                    stdout=application_log_handle,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    shell=False,
+                    env=environment,
+                    creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+                )
+                application_deadline = time.monotonic() + 20
+                while time.monotonic() < application_deadline:
+                    if application_process.poll() is not None:
+                        raise WebBenchmarkError("The bundled dynamic application exited before becoming ready.")
+                    try:
+                        with socket.create_connection((WEB_FIXTURE_BIND, WEB_APP_PORT), timeout=1):
+                            break
+                    except OSError:
+                        self._service_control_update(
+                            task_id,
+                            phase="web-service-initialization",
+                            current_job="dynamic-application-readiness",
+                            completed_steps=completed_steps,
+                            total_steps=total_steps,
+                        )
+                        time.sleep(0.25)
+                else:
+                    raise WebBenchmarkError("The bundled dynamic application did not become ready within 20 seconds.")
 
             log_handle = log_path.open("w", encoding="utf-8")
             process = subprocess.Popen(
@@ -2387,6 +2560,10 @@ class AgentWorker:
                 openssl_version=web_tool_version("openssl", openssl),
                 http_port=http_port,
                 https_port=https_port,
+                application_process=application_process,
+                application_log_path=application_log_path if v2_enabled else None,
+                application_log_handle=application_log_handle,
+                methodology_version=methodology_version,
             )
             self.active_web_servers[task_id] = active
             return {
@@ -2399,17 +2576,31 @@ class AgentWorker:
                     "certificate": "ephemeral-self-signed",
                 },
                 "payloads": {"health_bytes": len(health), "api_bytes": len(api_payload), "asset_bytes": 262144},
+                "application": {
+                    "status": "observed" if v2_enabled else "not-applicable",
+                    "runtime": "python-standard-library" if v2_enabled else None,
+                    "listen_scope": "loopback-only" if v2_enabled else None,
+                    "port": WEB_APP_PORT if v2_enabled else None,
+                    "path": WEB_FIXTURE_DYNAMIC_PATH if v2_enabled else None,
+                    "response_bytes": 1024 if v2_enabled else None,
+                    "reverse_proxy": v2_enabled,
+                },
                 "access_policy": {"paired_generator_only": True, "allowed_client_address": allowed_client},
                 "tools": {
                     "nginx": active.nginx_version,
                     "openssl": active.openssl_version,
+                    "python": platform.python_version() if v2_enabled else None,
                 },
             }
         except BaseException:
             if process is not None:
                 self._terminate_process(process)
+            if application_process is not None:
+                self._terminate_process(application_process)
             if log_handle is not None:
                 log_handle.close()
+            if application_log_handle is not None:
+                application_log_handle.close()
             self._remove_web_root(root)
             raise
 
@@ -2426,6 +2617,11 @@ class AgentWorker:
         path = str(payload.get("path", ""))
         if path not in WEB_ALLOWED_PATHS:
             raise WebBenchmarkError("Web path is outside the CloudMark allow-list.")
+        methodology_version = str(payload.get("methodology_version") or "web-http-v1")
+        if methodology_version not in {"web-http-v1", "web-http-v2"}:
+            raise WebBenchmarkError("Web client methodology is outside the installed contract.")
+        if path == WEB_FIXTURE_DYNAMIC_PATH and methodology_version != "web-http-v2":
+            raise WebBenchmarkError("The dynamic application path requires the Web v2 methodology.")
         concurrency = int(payload.get("concurrency", 0))
         duration = int(payload.get("duration_seconds", 0))
         warmup = int(payload.get("warmup_seconds", 0))
@@ -2479,15 +2675,21 @@ class AgentWorker:
             )
             if code != 0:
                 raise WebBenchmarkError(stderr.strip() or stdout.strip() or "ApacheBench warm-up failed.")
+        cpu_samples: list[dict[str, float]] = []
+        measured_arguments = {
+            "environment": environment,
+            "expected_duration": duration,
+            "phase": "measuring-web",
+            "current_job": path,
+            "completed_steps": completed_steps,
+            "total_steps": total_steps,
+        }
+        if methodology_version == "web-http-v2":
+            measured_arguments["cpu_samples"] = cpu_samples
         code, stdout, stderr = self._guarded_service_process(
             task_id,
             command(duration),
-            environment=environment,
-            expected_duration=duration,
-            phase="measuring-web",
-            current_job=path,
-            completed_steps=completed_steps,
-            total_steps=total_steps,
+            **measured_arguments,
         )
         if code != 0:
             raise WebBenchmarkError(stderr.strip() or stdout.strip() or "ApacheBench workload failed.")
@@ -2499,8 +2701,72 @@ class AgentWorker:
                 "duration_seconds": duration,
                 "warmup_seconds": warmup,
                 "keep_alive": keep_alive,
+                "methodology_version": methodology_version,
                 "metrics": parse_ab_output(stdout, stderr),
+                "generator_cpu": _generator_cpu_evidence(cpu_samples),
                 "tool": {"name": "ab", "version": web_tool_version("ab", ab)},
+                "raw": {"stdout": stdout, "stderr": stderr},
+            }
+        }
+
+    def _run_web_protocol_probe(self, task_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+        address = str(payload.get("target_address", ""))
+        parsed_address = self._peer_address(address)
+        if str(payload.get("methodology_version", "")) != "web-http-v2":
+            raise WebBenchmarkError("HTTP/2 protocol evidence requires the Web v2 methodology.")
+        if str(payload.get("scheme", "")) != "https":
+            raise WebBenchmarkError("The HTTP/2 protocol probe permits only HTTPS.")
+        port = self._web_port(payload.get("port"))
+        if port != WEB_HTTPS_PORT:
+            raise WebBenchmarkError("The HTTP/2 protocol probe port is outside its fixed contract.")
+        path = str(payload.get("path", ""))
+        if path != WEB_FIXTURE_DYNAMIC_PATH:
+            raise WebBenchmarkError("The HTTP/2 protocol probe path is outside its fixed contract.")
+        completed_steps = int(payload.get("run_completed_steps", 0))
+        total_steps = int(payload.get("run_total_steps", 1))
+        if not 0 <= completed_steps < total_steps <= 64:
+            raise WebBenchmarkError("Web protocol progress metadata is invalid.")
+        curl = self._web_tool("curl")
+        host = f"[{address}]" if parsed_address.version == 6 else address
+        url = f"https://{host}:{port}{path}"
+        write_out = "%{http_version}\t%{response_code}\t%{time_connect}\t%{time_appconnect}\t%{time_starttransfer}\t%{time_total}\n"
+        command = [
+            curl,
+            "--http2",
+            "--insecure",
+            "--silent",
+            "--show-error",
+            "--max-time",
+            "10",
+            "--tlsv1.2",
+            "--tls-max",
+            "1.2",
+            "--output",
+            os.devnull,
+            "--write-out",
+            write_out,
+            url,
+        ]
+        environment = os.environ.copy()
+        environment["LC_ALL"] = "C"
+        code, stdout, stderr = self._guarded_service_process(
+            task_id,
+            command,
+            environment=environment,
+            expected_duration=10,
+            phase="observing-web-protocol",
+            current_job="https-http2-negotiation",
+            completed_steps=completed_steps,
+            total_steps=total_steps,
+        )
+        if code != 0:
+            raise WebBenchmarkError(stderr.strip() or stdout.strip() or "The fixed HTTP/2 protocol probe failed.")
+        return {
+            "protocol": {
+                **parse_curl_protocol_output(stdout),
+                "scheme": "https",
+                "path": path,
+                "tool": {"name": "curl", "version": web_tool_version("curl", curl)},
                 "raw": {"stdout": stdout, "stderr": stderr},
             }
         }
@@ -2656,6 +2922,8 @@ class AgentWorker:
             return self._start_web_server(str(task["id"]), payload)
         if kind == "web-client":
             return self._run_web_client(str(task["id"]), payload)
+        if kind == "web-protocol-probe":
+            return self._run_web_protocol_probe(str(task["id"]), payload)
         if kind == "web-service-stop":
             return self._stop_web_task(payload)
         if kind in {"benchmark-compute", "benchmark-memory", "benchmark-storage"}:

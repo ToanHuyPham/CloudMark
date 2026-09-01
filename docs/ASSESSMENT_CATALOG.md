@@ -57,13 +57,13 @@ workloads from a separate Generator. Transaction tail percentiles,
 MySQL/MariaDB, Redis, replication, backup/restore, and failover remain missing;
 database coverage therefore remains `Partial`.
 
-The current development head also implements the first domain 9 subset with an
-isolated Nginx service on a Target Agent and bounded ApacheBench HTTP/TLS jobs
-from a separate Generator. Fixed JSON/static payloads, connection churn,
-concurrency, P50–P99 latency, errors, transfer, TLS evidence, and cleanup are
-available. Generator-saturation validation, dynamic application runtimes,
-HTTP/2/3, reverse proxy, CDN, WAF, autoscaling, and resilience remain missing;
-web coverage therefore remains `Partial`.
+The current development head implements domain 9 through `web-http-v2`: an
+isolated Nginx service, fixed JSON/static payloads, a packaged Python dynamic
+application behind a loopback reverse proxy, bounded ApacheBench HTTP/TLS jobs,
+Linux Generator CPU-headroom validation, HTTP/2 negotiation, P50–P99 latency,
+errors, transfer, TLS evidence, and cleanup. Database-backed applications,
+HTTP/2 load, HTTP/3, CDN, WAF, autoscaling, and resilience remain missing; web
+coverage therefore remains `Partial`.
 
 ## Mapping evidence to intended use
 

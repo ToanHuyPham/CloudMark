@@ -150,8 +150,10 @@ own generators for CPU and network resources.
 - static web, JSON API, TLS 1.2, keep-alive, connection churn, concurrency
   ramps, P50–P99 latency, error rate, and static transfer — available in
   `web-http-v1`;
-- reverse proxy, compression, and HTTP/2 or HTTP/3 when supported;
-- generator-saturation validation, longer soak testing, and saturation point;
+- bundled dynamic application behind Nginx, bounded Linux Generator process/
+  host CPU validation, and HTTP/2 negotiation — available in `web-http-v2`;
+- HTTP/2 load, reverse-proxy variants, compression, HTTP/3, longer soak testing,
+  and calibrated saturation point — planned;
 - DDoS-style testing only as an **authorized resilience test** on operator-owned
   systems with rate and duration limits, never against third parties.
 

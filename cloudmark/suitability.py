@@ -90,7 +90,7 @@ SCENARIO_REQUIREMENTS: dict[str, dict[str, Any]] = {
             ("network.directional_floor_bps", "Peer TCP directional floor", ">=", _threshold(100_000_000, 500_000_000, 2_000_000_000), "bit/s"),
             ("network.idle_latency_ms", "Worst peer idle latency", "<=", _threshold(50, 20, 8), "ms"),
         ],
-        "limitations": ["Dynamic application runtime, upstream dependencies, HTTP/2/3, WAF, CDN, autoscaling, and public TLS trust are not measured."],
+        "limitations": ["A bundled dynamic reverse-proxy workload and HTTP/2 negotiation are measured; database-backed applications, HTTP/2 load, HTTP/3, WAF, CDN, autoscaling, and public TLS trust remain unavailable."],
         "next_actions": ["Run Compute Standard, Network Standard, and Web & TLS Peer Standard on the same Target."],
     },
     "dev-test": {
@@ -275,6 +275,9 @@ def _run_valid(run: dict[str, Any]) -> tuple[bool, str | None]:
         return False, "Storage cleanup is not verified."
     if suite in {"database", "web"} and _nested(result, "cleanup", "cleanup_verified") is not True:
         return False, "Ephemeral service cleanup is not verified."
+    if suite == "web" and str(result.get("methodology_version", "")) == "web-http-v2":
+        if _nested(result, "analysis", "validity", "comparison_eligible") is not True:
+            return False, "Web v2 Generator headroom, dynamic reverse-proxy, HTTP/2 negotiation, or cleanup evidence is insufficient for comparison."
     if suite == "network" and str(result.get("methodology_version", "")) in {
         "network-v3",
         "network-v4",

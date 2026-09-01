@@ -8,7 +8,7 @@ from pathlib import Path
 
 
 POSTGRES_TOOLS = {"initdb", "pgbench", "pg_isready", "postgres"}
-WEB_TOOLS = {"ab", "nginx", "openssl"}
+WEB_TOOLS = {"ab", "curl", "nginx", "openssl"}
 
 
 def find_postgres_binary(name: str) -> str | None:
@@ -84,18 +84,21 @@ def find_web_binary(name: str) -> str | None:
             candidates.append(drive_root / "nginx" / "nginx.exe")
         elif name == "ab":
             candidates.append(drive_root / "Apache24" / "bin" / "ab.exe")
+        elif name == "curl":
+            candidates.append(Path(os.environ.get("SystemRoot", "C:/Windows")) / "System32" / "curl.exe")
     else:
         known = {
             "nginx": [Path("/usr/sbin/nginx"), Path("/usr/local/sbin/nginx")],
             "ab": [Path("/usr/bin/ab"), Path("/usr/local/apache2/bin/ab")],
+            "curl": [Path("/usr/bin/curl"), Path("/usr/local/bin/curl")],
             "openssl": [Path("/usr/bin/openssl"), Path("/usr/local/bin/openssl")],
         }
         candidates.extend(known[name])
     return str(next((candidate for candidate in candidates if candidate.is_file()), "")) or None
 
 
-def web_tool_version(name: str, executable: str) -> str | None:
-    arguments = {"nginx": ["-v"], "ab": ["-V"], "openssl": ["version"]}
+def _web_tool_output(name: str, executable: str) -> str | None:
+    arguments = {"nginx": ["-V"], "ab": ["-V"], "curl": ["--version"], "openssl": ["version"]}
     if name not in arguments:
         raise ValueError(f"Unsupported web tool: {name}")
     try:
@@ -109,5 +112,25 @@ def web_tool_version(name: str, executable: str) -> str | None:
         )
     except (OSError, subprocess.TimeoutExpired):
         return None
-    output = (result.stdout or result.stderr).strip()
-    return output.splitlines()[0] if result.returncode == 0 and output else None
+    output = "\n".join(value.strip() for value in (result.stdout, result.stderr) if value.strip())
+    return output if result.returncode == 0 and output else None
+
+
+def web_tool_version(name: str, executable: str) -> str | None:
+    output = _web_tool_output(name, executable)
+    return output.splitlines()[0] if output else None
+
+
+def web_tool_supports(name: str, executable: str, feature: str) -> bool:
+    if (name, feature) not in {("curl", "http2"), ("nginx", "http2")}:
+        raise ValueError(f"Unsupported Web capability check: {name}/{feature}")
+    output = _web_tool_output(name, executable)
+    if not output:
+        return False
+    if name == "curl":
+        features_line = next(
+            (line for line in output.splitlines() if line.casefold().startswith("features:")),
+            "",
+        )
+        return "http2" in features_line.casefold().split()
+    return "--with-http_v2_module" in output

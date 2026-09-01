@@ -341,6 +341,30 @@ type WebMeasurement = {
     tls: { status: string; protocol?: string; cipher?: string; raw?: string };
   };
   tool: { name: string; version?: string };
+  generator_cpu?: {
+    status: "observed" | "unavailable";
+    sample_count: number;
+    peak_process_cpu_percent_of_one_core?: number;
+    mean_process_cpu_percent_of_one_core?: number;
+    peak_host_utilization_percent?: number;
+    mean_host_utilization_percent?: number;
+    peak_host_steal_percent?: number;
+    reason?: string;
+  };
+};
+
+type WebProtocolObservation = {
+  name: string;
+  status: "observed" | "unavailable";
+  negotiated_protocol?: string;
+  http2_negotiated: boolean;
+  response_code?: number;
+  request_successful: boolean;
+  connect_ms?: number;
+  tls_handshake_ms?: number;
+  time_to_first_byte_ms?: number;
+  total_ms?: number;
+  performance_claim: false;
 };
 
 type Run = {
@@ -385,6 +409,7 @@ type Run = {
     bidirectional_measurements?: NetworkBidirectionalMeasurement[];
     database_measurements?: DatabaseMeasurement[];
     web_measurements?: WebMeasurement[];
+    protocol_observations?: WebProtocolObservation[];
     server?: {
       engine?: string;
       scale_factor?: number;
@@ -393,7 +418,16 @@ type Run = {
       ports?: { http?: number; https?: number };
       tls?: { protocol?: string; cipher?: string; certificate?: string };
       payloads?: Record<string, number>;
-      tools?: { postgres?: string; pgbench?: string; nginx?: string; openssl?: string };
+      tools?: { postgres?: string; pgbench?: string; nginx?: string; openssl?: string; curl?: string; python?: string };
+      application?: {
+        status?: "observed" | "not-applicable";
+        runtime?: string;
+        listen_scope?: string;
+        port?: number;
+        path?: string;
+        response_bytes?: number;
+        reverse_proxy?: boolean;
+      };
       durability?: Record<string, string | number>;
     };
     cleanup?: { status: string; cleanup_verified?: boolean };
@@ -511,6 +545,33 @@ type Run = {
         comparison_eligible: boolean;
         reason_codes: string[];
       };
+      generator_headroom?: {
+        status: "adequate" | "constrained" | "unknown";
+        peak_process_cpu_percent_of_one_core?: number | null;
+        peak_host_utilization_percent?: number | null;
+        observed_measurements: number;
+        required_measurements: number;
+        limit_percent_of_one_core: number;
+        reason_codes: string[];
+      };
+      protocol_evidence?: {
+        status: "observed" | "unavailable";
+        http2_negotiated: boolean;
+        performance_claim: false;
+        observations: WebProtocolObservation[];
+      };
+      dynamic_reverse_proxy?: {
+        status: "observed" | "unavailable";
+        application_runtime?: string;
+        measurement_count: number;
+      };
+      concurrency_curves?: {
+        scheme: string;
+        path: string;
+        keep_alive: boolean;
+        points: { concurrency: number; requests_per_second: number }[];
+        lowest_to_highest_gain_percent?: number | null;
+      }[];
     };
   };
 };
@@ -755,6 +816,7 @@ type Dashboard = {
         warmup: number;
         connect_per_transaction?: boolean;
       }[];
+      protocol_probes?: { name: string; scheme: "https"; path: string }[];
     }>;
     web?: Record<string, {
       label: string;
@@ -995,6 +1057,17 @@ export default function Home() {
   );
   const webMeasurements = latestWeb?.result?.web_measurements || [];
   const webProfile = dashboard?.profiles.web?.[selectedWebProfile];
+  const webProtocolObservations = latestWeb?.result?.protocol_observations || [];
+  const webAnalysis = latestWeb?.result?.analysis;
+  const selectedWebV2 = webProfile?.methodology_version === "web-http-v2";
+  const selectedWebReady = Boolean(selectedSession)
+    && ["target", "generator"].every((role) => {
+      const agent = selectedSession?.agents.find((item) => item.role === role);
+      const capabilities = agent?.system.inventory?.capabilities || {};
+      return role === "target"
+        ? Boolean(capabilities.nginx && capabilities.openssl && (!selectedWebV2 || capabilities.nginx_http2))
+        : Boolean(capabilities.ab && (!selectedWebV2 || (capabilities.curl_http2 && capabilities.procfs_process_cpu)));
+    });
   const maxWebRps = Math.max(
     1,
     ...webMeasurements.map((item) => item.metrics.requests_per_second || 0),
@@ -1417,6 +1490,17 @@ export default function Home() {
     if (!generator?.system.inventory?.capabilities?.ab) {
       setNotice("The generator Agent needs ApacheBench. Install the CloudMark web pack and restart the Agent.");
       return;
+    }
+    if (dashboard?.profiles.web?.[selectedWebProfile]?.methodology_version === "web-http-v2") {
+      if (!targetCapabilities.nginx_http2) {
+        setNotice("The target Agent needs an Nginx build with HTTP/2 support for Web v2.");
+        return;
+      }
+      const generatorCapabilities = generator.system.inventory?.capabilities || {};
+      if (!generatorCapabilities.curl_http2 || !generatorCapabilities.procfs_process_cpu) {
+        setNotice("Web v2 requires HTTP/2-capable curl and Linux procfs CPU accounting on the Generator.");
+        return;
+      }
     }
     setBusy(true);
     setNotice(null);
@@ -1869,27 +1953,27 @@ export default function Home() {
         {activeView === "web" && (
           <div className="view web-view">
             <section className="section-intro">
-              <div><span className="section-kicker">TWO-AGENT WEB, API & TLS ASSESSMENT</span><h2>Measure serving capacity, tail latency, TLS cost, and static transfer without using the Controller as a traffic endpoint.</h2><p>CloudMark starts an isolated Nginx service on the Target and runs bounded ApacheBench jobs from the Generator. Only fixed CloudMark endpoints, ports, and concurrency levels are accepted.</p></div>
+              <div><span className="section-kicker">TWO-AGENT WEB, API & TLS ASSESSMENT</span><h2>Measure static and dynamic serving paths without using the Controller as a traffic endpoint.</h2><p>CloudMark starts isolated Nginx and, for Web v2, a packaged loopback application on the Target. Bounded Generator jobs retain tail latency, TLS, CPU-headroom, reverse-proxy, and protocol evidence.</p></div>
               <div className="runner-actions"><label><span>PROFILE</span><select value={selectedWebProfile} onChange={(event) => setSelectedWebProfile(event.target.value)} disabled={Boolean(activeWeb)}>{Object.entries(dashboard?.profiles.web || {}).map(([id, profile]) => <option key={id} value={id}>{profile.label} · ≈ {profile.estimated_minutes} min</option>)}</select></label><label><span>PAIR TOPOLOGY</span><select value={selectedTopologyScope} onChange={(event) => setSelectedTopologyScope(event.target.value as TopologyScope)}>{TOPOLOGY_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label><button className="button primary" onClick={createPairing} disabled={busy}>New session</button></div>
             </section>
             <section className="web-contract-grid">
               <article className="panel web-profile-card">
                 <div className="panel-head"><div><span className="section-kicker">VERSIONED WORKLOAD</span><h3>{webProfile?.label || "Web & TLS profile"}</h3></div><span className="run-id">HTTP {webProfile?.http_port || "—"} / TLS {webProfile?.https_port || "—"}</span></div>
                 <p>{webProfile?.description}</p>
-                <div className="web-job-grid">{webProfile?.jobs.map((job) => <div key={job.name}><span>{job.scheme.toUpperCase()}</span><strong>{job.name}</strong><small>C{job.concurrency} · {job.path} · {job.duration}s · {job.keep_alive ? "keep-alive" : "new connections"}</small></div>)}</div>
+                <div className="web-job-grid">{webProfile?.jobs.map((job) => <div key={job.name}><span>{job.path === "/api/v2/dynamic" ? "DYNAMIC" : job.scheme.toUpperCase()}</span><strong>{job.name}</strong><small>C{job.concurrency} · {job.path} · {job.duration}s · {job.keep_alive ? "keep-alive" : "new connections"}</small></div>)}</div>
               </article>
               <article className="panel web-safety-card">
                 <span className="section-kicker">EXECUTION CONTRACT</span><h3>Owned, isolated, and bounded</h3>
-                <ul><li>Exact Target address; never binds to all interfaces</li><li>Only the paired Generator and Target addresses are allowed</li><li>Fixed health, 1 KiB JSON, and 256 KiB static payloads</li><li>Ephemeral self-signed certificate with a fixed TLS 1.2 methodology</li><li>Temporary service files and keys are removed after every terminal path</li></ul>
+                <ul><li>Exact Target address; never binds to all interfaces</li><li>Only the paired Generator and Target addresses are allowed</li><li>Fixed static payloads and a bundled loopback-only dynamic application</li><li>Ephemeral self-signed certificate with fixed TLS 1.2</li><li>HTTP/2 is a protocol observation, not a throughput claim</li><li>Temporary service files, keys, and processes are removed after every terminal path</li></ul>
                 <p>This is controlled load testing, not DDoS testing. Arbitrary URLs, ports, payloads, and external targets are rejected.</p>
               </article>
             </section>
             {pairing && <section className="pairing-card"><div><span>SHORT-LIVED JOIN CREDENTIAL</span><strong>{pairing.id}</strong><small>{pairing.topology.scope} · {pairing.topology.source} · verification {pairing.topology.verification.status} · expires {new Date(pairing.expires_at).toLocaleTimeString("en-US")}</small></div><code>{pairing.join_token}</code></section>}
-            {pairing && <section className="panel agent-commands"><div><span className="section-kicker">RUN ON PROVIDER VMS</span><h3>Target hosts Nginx; Generator runs ApacheBench</h3></div><code>cloudmark agent --controller https://CONTROLLER --session {pairing.id} --token {pairing.join_token} --role target --advertise-address VM_A_IP</code><code>cloudmark agent --controller https://CONTROLLER --session {pairing.id} --token {pairing.join_token} --role generator --advertise-address VM_B_IP</code><p>Install the <strong>web</strong> pack on both machines and open TCP 58080 and 58443 only between the paired machines.</p></section>}
+            {pairing && <section className="panel agent-commands"><div><span className="section-kicker">RUN ON PROVIDER VMS</span><h3>Target hosts Nginx + app fixture; Generator runs bounded clients</h3></div><code>cloudmark agent --controller https://CONTROLLER --session {pairing.id} --token {pairing.join_token} --role target --advertise-address VM_A_IP</code><code>cloudmark agent --controller https://CONTROLLER --session {pairing.id} --token {pairing.join_token} --role generator --advertise-address VM_B_IP</code><p>Install the <strong>web</strong> pack on both machines and open TCP 58080 and 58443 only between the paired machines. The application port remains on Target loopback.</p></section>}
             <section className="panel session-panel">
               <div className="panel-head"><div><span className="section-kicker">PAIRED EXECUTION</span><h3>Web assessment readiness</h3></div><label className="compact-select"><span>SESSION</span><select value={selectedSession?.id || ""} onChange={(event) => setSelectedSessionId(event.target.value)}>{dashboard?.sessions.map((session) => <option key={session.id} value={session.id}>{session.label} · {session.topology.scope} / {session.topology.verification.status} · {session.status}</option>)}</select></label></div>
-              {selectedSession ? <div className="agent-roster">{["target", "generator"].map((role) => { const agent = selectedSession.agents.find((item) => item.role === role); const ready = role === "target" ? Boolean(agent?.system.inventory?.capabilities?.nginx && agent?.system.inventory?.capabilities?.openssl) : Boolean(agent?.system.inventory?.capabilities?.ab); return <article key={role} className={agent && ready ? "connected" : "waiting"}><span>{role.toUpperCase()}</span><strong>{agent?.name || `Waiting for ${role}`}</strong><small>{agent ? `${agent.endpoint.address || "No advertised IP"} · ${ready ? "web tools ready" : "web pack required"}` : "Join command has not connected"}</small></article>; })}</div> : <div className="empty-row">Create a session, then connect both provider Agents.</div>}
-              <div className="session-actions"><p><strong>{selectedSession?.status === "ready" ? "Pair connected" : "Two Agents required"}</strong><small>The Controller validates role-specific tools and the exact profile before accepting the run.</small></p><button className="button primary" onClick={startWeb} disabled={busy || Boolean(activeWeb) || selectedSession?.status !== "ready"}>Run Web/API/TLS assessment</button></div>
+              {selectedSession ? <div className="agent-roster">{["target", "generator"].map((role) => { const agent = selectedSession.agents.find((item) => item.role === role); const capabilities = agent?.system.inventory?.capabilities || {}; const ready = role === "target" ? Boolean(capabilities.nginx && capabilities.openssl && (!selectedWebV2 || capabilities.nginx_http2)) : Boolean(capabilities.ab && (!selectedWebV2 || (capabilities.curl_http2 && capabilities.procfs_process_cpu))); return <article key={role} className={agent && ready ? "connected" : "waiting"}><span>{role.toUpperCase()}</span><strong>{agent?.name || `Waiting for ${role}`}</strong><small>{agent ? `${agent.endpoint.address || "No advertised IP"} · ${ready ? selectedWebV2 ? "Web v2 ready" : "Web v1 ready" : "web prerequisites missing"}` : "Join command has not connected"}</small></article>; })}</div> : <div className="empty-row">Create a session, then connect both provider Agents.</div>}
+              <div className="session-actions"><p><strong>{selectedSession?.status !== "ready" ? "Two Agents required" : selectedWebReady ? "Pair ready" : "Web prerequisites missing"}</strong><small>Web v2 requires Nginx HTTP/2 support on Target plus ApacheBench, HTTP/2-capable curl, and Linux CPU accounting on Generator.</small></p><button className="button primary" onClick={startWeb} disabled={busy || Boolean(activeWeb) || selectedSession?.status !== "ready" || !selectedWebReady}>Run Web/API/TLS assessment</button></div>
             </section>
             {activeWeb && <section className="panel run-progress" aria-live="polite"><div><span className="section-kicker">ACTIVE WEB RUN / {activeWeb.id}</span><strong>{activeWeb.current_job || activeWeb.phase || "Preparing isolated Nginx"}</strong><small>{activeWeb.completed_steps || 0} of {activeWeb.total_steps || 1} steps · {Math.round((activeWeb.progress || 0) * 100)}%</small></div><div className="progress-track"><i style={{ width: `${Math.max(2, (activeWeb.progress || 0) * 100)}%` }} /></div><button className="button danger" onClick={cancelWeb} disabled={busy || activeWeb.cancel_requested}>{activeWeb.cancel_requested ? "Cancelling" : "Cancel run"}</button></section>}
             <section className="panel web-results">
@@ -1899,9 +1983,13 @@ export default function Home() {
             {webMeasurements.length > 0 && <section className="web-evidence-grid">
               {webMeasurements.map((measurement) => <article className="panel" key={measurement.name}><span>{measurement.scheme.toUpperCase()} · C{measurement.concurrency} · {measurement.keep_alive ? "KEEP-ALIVE" : "NEW CONNECTION"}</span><strong>{measurement.metrics.latency_percentiles_ms.p95.toFixed(2)} ms p95</strong><small>{measurement.metrics.latency_percentiles_ms.p99.toFixed(2)} ms p99 · {measurement.metrics.success_percent.toFixed(3)}% success · {measurement.metrics.transfer_rate_kib_per_second?.toFixed(1) ?? "—"} KiB/s</small></article>)}
               <article className="panel"><span>TLS EVIDENCE</span><strong>{webMeasurements.find((measurement) => measurement.metrics.tls.status === "measured")?.metrics.tls.protocol || "Unavailable"}</strong><small>Ephemeral self-signed certificate · trust-chain issuance is not evaluated</small></article>
+              <article className="panel"><span>GENERATOR HEADROOM</span><strong>{webAnalysis?.generator_headroom?.status || "Unavailable"}</strong><small>{webAnalysis?.generator_headroom?.peak_process_cpu_percent_of_one_core?.toFixed(1) ?? "—"}% peak ApacheBench CPU of one core · {webAnalysis?.generator_headroom?.peak_host_utilization_percent?.toFixed(1) ?? "—"}% host CPU</small></article>
+              <article className="panel"><span>DYNAMIC REVERSE PROXY</span><strong>{webAnalysis?.dynamic_reverse_proxy?.status === "observed" ? "Observed" : "Unavailable"}</strong><small>{webAnalysis?.dynamic_reverse_proxy?.measurement_count || 0} workloads · {webAnalysis?.dynamic_reverse_proxy?.application_runtime || "runtime unavailable"}</small></article>
+              <article className="panel"><span>HTTP/2 NEGOTIATION</span><strong>{webProtocolObservations.find((item) => item.http2_negotiated)?.negotiated_protocol || "Unavailable"}</strong><small>{webProtocolObservations.length ? `${webProtocolObservations[0].time_to_first_byte_ms?.toFixed(2) ?? "—"} ms single-request TTFB` : "No protocol observation"} · no HTTP/2 throughput claim</small></article>
+              <article className={`panel ${webAnalysis?.validity?.comparison_eligible ? "cleanup-evidence verified" : "cleanup-evidence unknown"}`}><span>MEASUREMENT VALIDITY</span><strong>{webAnalysis?.validity?.comparison_eligible ? "Comparable" : "Not comparable"}</strong><small>{webAnalysis?.validity?.reason_codes?.join(" · ") || "Generator, dynamic path, protocol, and cleanup evidence complete"}</small></article>
               <article className={`panel cleanup-evidence ${latestWeb?.result?.cleanup?.cleanup_verified ? "verified" : "unknown"}`}><span>EPHEMERAL CLEANUP</span><strong>{latestWeb?.result?.cleanup?.cleanup_verified ? "Verified" : "Unavailable"}</strong><small>Service directory, certificate, private key, payloads, and process state</small></article>
             </section>}
-            <section className="panel web-method-note"><span className="section-kicker">INTERPRETATION LIMITS</span><p>ApacheBench can become the throughput bottleneck, so CloudMark retains this domain as Partial and does not assign provider suitability from these measurements alone. Dynamic application runtimes, reverse proxies, HTTP/2, HTTP/3, CDN, WAF, autoscaling, and DDoS resilience require separate evidence.</p></section>
+            <section className="panel web-method-note"><span className="section-kicker">INTERPRETATION LIMITS</span><p>Web v2 rejects comparison evidence when the ApacheBench process reaches its CPU limit, and measures a bundled Python application through Nginx reverse proxy. The fixed curl request proves HTTP/2 negotiation only; HTTP/2 load, database-backed applications, HTTP/3, CDN, WAF, autoscaling, public TLS trust, and DDoS resilience still require separate evidence.</p></section>
           </div>
         )}
 

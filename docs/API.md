@@ -238,13 +238,18 @@ the Controller.
 ```
 
 The session must contain an online Target with `nginx` and `openssl`, plus an
-online Generator with `ab`. `confirm_web_load` is mandatory because the run
+online Generator with `ab`. Standard Web v2 additionally requires Target
+`nginx_http2` and Generator `curl_http2` plus `procfs_process_cpu` capabilities.
+`confirm_web_load` is mandatory because the run
 creates a temporary service and generates bounded HTTP/TLS load. Supported
 profiles are `web-peer-quick` and `web-peer-standard`. The result contains
 `web_measurements`, request/error counts, throughput, P50/P90/P95/P99/maximum
 latency, transfer evidence, TLS protocol/cipher evidence, tool versions,
+Generator process/host CPU headroom, dynamic reverse-proxy evidence, one fixed
+HTTP/2 negotiation observation for Standard, explicit comparison validity,
 target/generator identity, and cleanup status. Only the fixed Target address,
-ports 58080/58443, and CloudMark endpoints are accepted; traffic never
+ports 58080/58443, and CloudMark endpoints are accepted; the dynamic
+application binds only Target loopback port 58081 and traffic never
 traverses the Controller.
 
 ## Cancel a run

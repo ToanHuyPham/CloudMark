@@ -20,7 +20,9 @@ from cloudmark.agent import (
     AgentWorker,
     _address_class,
     _collect_sysfs_queue_steering,
+    _generator_cpu_evidence,
     _link_counters,
+    _linux_cpu_interval,
     _parse_ethtool_driver,
     _parse_ethtool_features,
     _parse_ethtool_queue_statistics,
@@ -74,13 +76,17 @@ from cloudmark.runner import CancellationToken, JobContext, ProcessResult, RunCa
 from cloudmark.server import CloudMarkController, Handler, Server, _dashboard_run_summaries, _json_bytes
 from cloudmark.suitability import SCENARIO_REQUIREMENTS, _run_valid, evaluate_suitability
 from cloudmark.topology import assess_pairing_topology
+from cloudmark.tooling import web_tool_supports
 from cloudmark.web_benchmark import (
     WebBenchmarkError,
+    _web_analysis,
     parse_ab_output,
+    parse_curl_protocol_output,
     run_web,
     validate_web_run,
     web_total_steps,
 )
+from cloudmark.web_fixture import build_dynamic_payload
 
 
 class CloudMarkTests(unittest.TestCase):
@@ -315,6 +321,22 @@ class CloudMarkTests(unittest.TestCase):
         valid, reason = _run_valid(run)
         self.assertFalse(valid)
         self.assertIn("generator headroom", reason.lower())
+
+    def test_suitability_rejects_web_v2_without_comparison_validity(self) -> None:
+        run = {
+            "suite": "web",
+            "profile": "web-peer-standard",
+            "status": "completed",
+            "methodology_version": "web-http-v2",
+            "result": {
+                "methodology_version": "web-http-v2",
+                "cleanup": {"cleanup_verified": True},
+                "analysis": {"validity": {"comparison_eligible": False}},
+            },
+        }
+        valid, reason = _run_valid(run)
+        self.assertFalse(valid)
+        self.assertIn("web v2", reason.lower())
 
     def test_provider_observations_require_exact_repeated_sampling_contract(self) -> None:
         now = datetime.now(timezone.utc)
@@ -2497,6 +2519,63 @@ Percentage of the requests served within a certain time (ms)
         self.assertEqual(metrics["connection_times"]["connect"]["max_ms"], 10.0)
         self.assertEqual(metrics["tls"]["protocol"], "TLSv1.2")
 
+    def test_web_v2_fixture_builds_stable_valid_dynamic_json(self) -> None:
+        first = build_dynamic_payload()
+        second = build_dynamic_payload()
+        self.assertEqual(len(first), 1024)
+        self.assertEqual(first, second)
+        payload = json.loads(first)
+        self.assertEqual(len(payload["digest"]), 64)
+        self.assertGreater(len(payload["payload"]), 900)
+
+    def test_web_v2_parses_http2_protocol_evidence_without_performance_claim(self) -> None:
+        evidence = parse_curl_protocol_output("2\t200\t0.001\t0.004\t0.007\t0.009\n")
+        self.assertTrue(evidence["http2_negotiated"])
+        self.assertTrue(evidence["request_successful"])
+        self.assertEqual(evidence["time_to_first_byte_ms"], 7.0)
+        self.assertFalse(evidence["performance_claim"])
+        with self.assertRaisesRegex(WebBenchmarkError, "protocol evidence fields"):
+            parse_curl_protocol_output("malformed")
+
+    def test_web_v2_tool_capabilities_require_explicit_http2_support(self) -> None:
+        responses = [
+            SimpleNamespace(
+                returncode=0,
+                stdout="curl 8.0\nFeatures: alt-svc HTTP2 IPv6 SSL\n",
+                stderr="",
+            ),
+            SimpleNamespace(
+                returncode=0,
+                stdout="",
+                stderr="nginx version: nginx/1.24\nconfigure arguments: --with-http_v2_module\n",
+            ),
+            SimpleNamespace(returncode=0, stdout="curl 8.0\nFeatures: IPv6 SSL\n", stderr=""),
+        ]
+        with patch("cloudmark.tooling.subprocess.run", side_effect=responses):
+            self.assertTrue(web_tool_supports("curl", "curl", "http2"))
+            self.assertTrue(web_tool_supports("nginx", "nginx", "http2"))
+            self.assertFalse(web_tool_supports("curl", "curl", "http2"))
+
+    def test_web_v2_generator_cpu_evidence_uses_process_and_host_intervals(self) -> None:
+        interval = _linux_cpu_interval(
+            {"total": 1000, "busy": 400, "steal": 10, "process": 100},
+            {"total": 1400, "busy": 600, "steal": 14, "process": 120},
+        )
+        self.assertIsNotNone(interval)
+        assert interval is not None
+        self.assertEqual(interval["host_utilization_percent"], 50.0)
+        self.assertEqual(interval["host_steal_percent"], 1.0)
+        with patch("cloudmark.agent.os.cpu_count", return_value=4):
+            interval = _linux_cpu_interval(
+                {"total": 1000, "busy": 400, "steal": 10, "process": 100},
+                {"total": 1400, "busy": 600, "steal": 14, "process": 120},
+            )
+        assert interval is not None
+        self.assertEqual(interval["process_cpu_percent_of_one_core"], 20.0)
+        evidence = _generator_cpu_evidence([interval])
+        self.assertEqual(evidence["status"], "observed")
+        self.assertEqual(evidence["peak_process_cpu_percent_of_one_core"], 20.0)
+
     def test_web_run_requires_nginx_openssl_and_apachebench_on_the_correct_roles(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             database = Database(Path(directory) / "test.sqlite3")
@@ -2517,6 +2596,31 @@ Percentage of the requests served within a certain time (ms)
             _, target, generator = validate_web_run(database, "session_web", "web-peer-quick")
             self.assertEqual(target["id"], "agent_target")
             self.assertEqual(generator["id"], "agent_generator")
+            with self.assertRaisesRegex(ValueError, "nginx_http2"):
+                validate_web_run(database, "session_web", "web-peer-standard")
+
+            database.create_session("session_web_v2", "web-v2", "hash", "2099-01-01T00:00:00+00:00")
+            database.add_agent(
+                "agent_target_v2",
+                "session_web_v2",
+                "target-v2",
+                "target",
+                {"inventory": {"capabilities": {"nginx": True, "openssl": True, "nginx_http2": True}}},
+                endpoint={"address": "10.0.1.10"},
+            )
+            database.add_agent(
+                "agent_generator_v2",
+                "session_web_v2",
+                "generator-v2",
+                "generator",
+                {"inventory": {"capabilities": {"ab": True, "curl_http2": True, "procfs_process_cpu": True}}},
+                endpoint={"address": "10.0.1.11"},
+            )
+            _, target_v2, generator_v2 = validate_web_run(
+                database, "session_web_v2", "web-peer-standard"
+            )
+            self.assertEqual(target_v2["id"], "agent_target_v2")
+            self.assertEqual(generator_v2["id"], "agent_generator_v2")
 
     def test_agent_builds_only_allowlisted_apachebench_commands(self) -> None:
         worker = AgentWorker("http://127.0.0.1:8787", "agent", "token")
@@ -2560,6 +2664,84 @@ Percentage of the requests served within a certain time (ms)
                     "run_total_steps": 7,
                 },
             )
+
+    def test_agent_builds_only_fixed_web_v2_http2_probe(self) -> None:
+        worker = AgentWorker("http://127.0.0.1:8787", "agent", "token")
+        with patch.object(worker, "_web_tool", return_value="curl"), patch.object(
+            worker,
+            "_guarded_service_process",
+            return_value=(0, "2\t200\t0.001\t0.004\t0.007\t0.009\n", ""),
+        ) as process, patch("cloudmark.agent.web_tool_version", return_value="curl 8.0"):
+            result = worker._run_web_protocol_probe(
+                "task_webh2",
+                {
+                    "target_address": "10.0.0.10",
+                    "scheme": "https",
+                    "port": 58443,
+                    "path": "/api/v2/dynamic",
+                    "methodology_version": "web-http-v2",
+                    "run_completed_steps": 13,
+                    "run_total_steps": 15,
+                },
+            )
+        command = process.call_args.args[1]
+        self.assertEqual(command[0], "curl")
+        self.assertIn("--http2", command)
+        self.assertIn("--tls-max", command)
+        self.assertEqual(command[-1], "https://10.0.0.10:58443/api/v2/dynamic")
+        self.assertTrue(result["protocol"]["http2_negotiated"])
+        self.assertFalse(result["protocol"]["performance_claim"])
+        with self.assertRaisesRegex(WebBenchmarkError, "fixed contract"):
+            worker._run_web_protocol_probe(
+                "task_webh2",
+                {
+                    "target_address": "10.0.0.10",
+                    "scheme": "https",
+                    "port": 58443,
+                    "path": "/operator-path",
+                    "methodology_version": "web-http-v2",
+                    "run_completed_steps": 13,
+                    "run_total_steps": 15,
+                },
+            )
+
+    def test_web_v2_analysis_rejects_a_saturated_generator(self) -> None:
+        result = {
+            "methodology_version": "web-http-v2",
+            "server": {
+                "application": {
+                    "status": "observed",
+                    "runtime": "python-standard-library",
+                    "reverse_proxy": True,
+                }
+            },
+            "web_measurements": [{
+                "name": "http-dynamic-c16",
+                "scheme": "http",
+                "path": "/api/v2/dynamic",
+                "concurrency": 16,
+                "keep_alive": True,
+                "metrics": {"requests_per_second": 1000.0, "success_percent": 100.0},
+                "generator_cpu": {
+                    "status": "observed",
+                    "peak_process_cpu_percent_of_one_core": 95.0,
+                    "peak_host_utilization_percent": 45.0,
+                },
+            }],
+            "protocol_observations": [{
+                "status": "observed",
+                "http2_negotiated": True,
+                "request_successful": True,
+            }],
+            "cleanup": {"cleanup_verified": True},
+        }
+        constrained = _web_analysis(result)
+        self.assertEqual(constrained["generator_headroom"]["status"], "constrained")
+        self.assertFalse(constrained["validity"]["comparison_eligible"])
+        result["web_measurements"][0]["generator_cpu"]["peak_process_cpu_percent_of_one_core"] = 45.0
+        adequate = _web_analysis(result)
+        self.assertEqual(adequate["generator_headroom"]["status"], "adequate")
+        self.assertTrue(adequate["validity"]["comparison_eligible"])
 
     def test_agent_refuses_web_cleanup_outside_its_workspace(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -2613,6 +2795,55 @@ Percentage of the requests served within a certain time (ms)
             with patch("cloudmark.agent.subprocess.run", return_value=SimpleNamespace(returncode=0)):
                 cleanup = worker._stop_web_server("task_webconfig")
             self.assertTrue(cleanup["cleanup_verified"])
+
+    def test_agent_web_v2_config_uses_loopback_application_and_http2_reverse_proxy(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            worker = AgentWorker(
+                "http://127.0.0.1:8787", "agent", "token", workspace=Path(directory) / "agent"
+            )
+            application_process = MagicMock()
+            application_process.poll.return_value = None
+            application_process.returncode = 0
+            nginx_process = MagicMock()
+            nginx_process.poll.return_value = None
+            nginx_process.returncode = 0
+            connection = MagicMock()
+            with patch.object(worker, "_web_tool", side_effect=lambda name: name), patch.object(
+                worker, "_guarded_service_process", return_value=(0, "", "")
+            ), patch.object(worker, "_service_control_update"), patch(
+                "cloudmark.agent.web_tool_version", return_value="test-version"
+            ), patch(
+                "cloudmark.agent.subprocess.Popen", side_effect=[application_process, nginx_process]
+            ) as popen, patch(
+                "cloudmark.agent.socket.create_connection", return_value=connection
+            ), patch("cloudmark.agent.os.geteuid", return_value=1000, create=True):
+                result = worker._start_web_server(
+                    "task_webv2config",
+                    {
+                        "listen_address": "10.0.0.10",
+                        "allowed_client_address": "10.0.0.11",
+                        "http_port": 58080,
+                        "https_port": 58443,
+                        "deadline_seconds": 600,
+                        "methodology_version": "web-http-v2",
+                        "run_completed_steps": 0,
+                        "run_total_steps": 15,
+                    },
+                )
+            config = worker.active_web_servers["task_webv2config"].config_path.read_text(encoding="utf-8")
+            self.assertIn("listen 10.0.0.10:58443 ssl http2;", config)
+            self.assertIn("server 127.0.0.1:58081;", config)
+            self.assertIn("location = /api/v2/dynamic", config)
+            self.assertIn("proxy_pass http://cloudmark_dynamic_app;", config)
+            self.assertNotIn("listen 0.0.0.0", config)
+            application_command = popen.call_args_list[0].args[0]
+            self.assertEqual(application_command[-4:], ["--bind", "127.0.0.1", "--port", "58081"])
+            self.assertEqual(result["application"]["status"], "observed")
+            self.assertTrue(result["application"]["reverse_proxy"])
+            with patch("cloudmark.agent.subprocess.run", return_value=SimpleNamespace(returncode=0)):
+                cleanup = worker._stop_web_server("task_webv2config")
+            self.assertTrue(cleanup["cleanup_verified"])
+            self.assertIsNotNone(cleanup["application_returncode"])
 
     def test_web_orchestrator_records_measurements_and_verified_cleanup(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -2684,6 +2915,122 @@ Percentage of the requests served within a certain time (ms)
             self.assertEqual(len(result["web_measurements"]), 5)
             self.assertTrue(result["cleanup"]["cleanup_verified"])
             self.assertFalse(result["policy"]["controller_in_data_path"])
+
+    def test_web_v2_orchestrator_requires_headroom_dynamic_http2_and_cleanup(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            database = Database(Path(directory) / "test.sqlite3")
+            database.create_session("session_web_v2", "web-v2", "hash", "2099-01-01T00:00:00+00:00")
+            target_system = {
+                "inventory": {
+                    "capabilities": {"nginx": True, "openssl": True, "nginx_http2": True}
+                }
+            }
+            generator_system = {
+                "inventory": {
+                    "capabilities": {"ab": True, "curl_http2": True, "procfs_process_cpu": True}
+                }
+            }
+            database.add_agent(
+                "agent_target_v2",
+                "session_web_v2",
+                "target-v2",
+                "target",
+                target_system,
+                endpoint={"address": "10.0.0.10"},
+            )
+            database.add_agent(
+                "agent_generator_v2",
+                "session_web_v2",
+                "generator-v2",
+                "generator",
+                generator_system,
+                endpoint={"address": "10.0.0.11"},
+            )
+            total_steps = web_total_steps("web-peer-standard")
+            database.create_run(
+                "run_web_v2", "web", "web-peer-standard", {"suite": "web"}, total_steps=total_steps
+            )
+            done = threading.Event()
+
+            def complete_tasks() -> None:
+                while not done.is_set():
+                    handled = False
+                    for agent_id in ("agent_target_v2", "agent_generator_v2"):
+                        task = database.claim_agent_task(agent_id)
+                        if not task:
+                            continue
+                        handled = True
+                        if task["kind"] == "web-service-start":
+                            task_result = {
+                                "ready": True,
+                                "engine": "nginx",
+                                "application": {
+                                    "status": "observed",
+                                    "runtime": "python-standard-library",
+                                    "reverse_proxy": True,
+                                },
+                            }
+                        elif task["kind"] == "web-client":
+                            task_result = {
+                                "apachebench": {
+                                    "scheme": task["payload"]["scheme"],
+                                    "path": task["payload"]["path"],
+                                    "concurrency": task["payload"]["concurrency"],
+                                    "duration_seconds": task["payload"]["duration_seconds"],
+                                    "keep_alive": task["payload"]["keep_alive"],
+                                    "metrics": {
+                                        "requests_per_second": 1500.0,
+                                        "latency_percentiles_ms": {"p95": 5.0, "p99": 10.0},
+                                        "success_percent": 100.0,
+                                    },
+                                    "generator_cpu": {
+                                        "status": "observed",
+                                        "peak_process_cpu_percent_of_one_core": 40.0,
+                                        "peak_host_utilization_percent": 35.0,
+                                    },
+                                    "tool": {"name": "ab", "version": "ApacheBench 2.4"},
+                                }
+                            }
+                        elif task["kind"] == "web-protocol-probe":
+                            task_result = {
+                                "protocol": {
+                                    "status": "observed",
+                                    "negotiated_protocol": "2",
+                                    "http2_negotiated": True,
+                                    "response_code": 200,
+                                    "request_successful": True,
+                                    "time_to_first_byte_ms": 3.0,
+                                    "performance_claim": False,
+                                }
+                            }
+                        else:
+                            task_result = {"status": "completed", "cleanup_verified": True}
+                        database.finish_agent_task(task["id"], agent_id, status="completed", result=task_result)
+                    if not handled:
+                        time.sleep(0.005)
+
+            worker = threading.Thread(target=complete_tasks, daemon=True)
+            worker.start()
+            try:
+                context = JobContext("run_web_v2", total_steps=total_steps, timeout_seconds=60)
+                result = run_web(
+                    database,
+                    "run_web_v2",
+                    "session_web_v2",
+                    "web-peer-standard",
+                    context=context,
+                )
+            finally:
+                done.set()
+                worker.join(timeout=2)
+            self.assertEqual(total_steps, 15)
+            self.assertEqual(len(result["web_measurements"]), 12)
+            self.assertEqual(len(result["protocol_observations"]), 1)
+            self.assertEqual(result["analysis"]["generator_headroom"]["status"], "adequate")
+            self.assertEqual(result["analysis"]["dynamic_reverse_proxy"]["status"], "observed")
+            self.assertTrue(result["analysis"]["protocol_evidence"]["http2_negotiated"])
+            self.assertTrue(result["analysis"]["validity"]["comparison_eligible"])
+            self.assertTrue(result["cleanup"]["cleanup_verified"])
 
     def test_web_orchestrator_schedules_cleanup_after_client_failure(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -2832,13 +3179,17 @@ Percentage of the requests served within a certain time (ms)
             plan = create_plan(["web"])
         self.assertIn("nginx", plan.packages)
         self.assertIn("apache2-utils", plan.packages)
+        self.assertIn("curl", plan.packages)
         self.assertIn("openssl", plan.packages)
 
     def test_web_profiles_are_versioned_and_bounded(self) -> None:
         self.assertEqual(web_total_steps("web-peer-quick"), 7)
-        self.assertEqual(web_total_steps("web-peer-standard"), 11)
+        self.assertEqual(web_total_steps("web-peer-standard"), 15)
+        self.assertEqual(WEB_PROFILES["web-peer-quick"]["methodology_version"], "web-http-v1")
+        self.assertEqual(WEB_PROFILES["web-peer-standard"]["methodology_version"], "web-http-v2")
+        self.assertEqual(WEB_PROFILES["web-peer-standard"]["profile_version"], "2.0")
+        self.assertEqual(len(WEB_PROFILES["web-peer-standard"]["protocol_probes"]), 1)
         for profile in WEB_PROFILES.values():
-            self.assertEqual(profile["methodology_version"], "web-http-v1")
             self.assertTrue(all(job["duration"] <= 60 for job in profile["jobs"]))
             self.assertTrue(all(job["concurrency"] <= 64 for job in profile["jobs"]))
 

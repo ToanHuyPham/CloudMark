@@ -1,6 +1,6 @@
 # CloudMark current state
 
-Last updated: 2026-08-23
+Last updated: 2026-09-01
 
 ## Repository baseline
 
@@ -85,6 +85,18 @@ baseline is still the repository head.
   fixed safety limits, and verified cleanup; the complete milestone passes 64
   Python tests, 3 rendered-dashboard tests, dashboard lint, and the production
   build without starting provider load;
+- simulation-verified `web-http-v2` Standard orchestration with a packaged
+  deterministic 1 KiB Python application on Target loopback port 58081 behind
+  the exact Nginx listener, three dynamic HTTP/1.1 concurrency workloads,
+  bounded one-second Linux Generator host/steal and ApacheBench process CPU
+  summaries, a 90%-of-one-core Generator rejection gate, and one fixed HTTPS
+  curl observation that must actually negotiate HTTP/2. The HTTP/2 observation
+  is explicitly not a throughput claim. Target Nginx and Generator curl HTTP/2
+  capabilities, dynamic reverse-proxy evidence, Generator headroom, and cleanup are required
+  for comparison eligibility. Quick remains readable as `web-http-v1`. The
+  complete development head passes 111 Python tests, 3 rendered-dashboard
+  tests, dashboard lint, and the production build without starting provider
+  load;
 - responsive dashboard navigation and execution-target selection; the mobile
   navigation uses stable 12 px labels in a contained horizontal scroller and
   was browser-verified at 390 px and 1,280 px without page-level horizontal
@@ -201,10 +213,11 @@ Controller run: `run_1c572100e8704843`.
   directory for manual operator review; the Agent refuses to overwrite or
   automatically delete unknown residual state; the same review requirement
   applies to an isolated Web service directory;
-- Web/API/TLS coverage is Partial: fixed static/JSON endpoints, HTTP/HTTPS
-  concurrency, connection churn, transfer rate, and tail latency are
-  implemented; generator-saturation validation, dynamic applications,
-  HTTP/2/3, CDN, WAF, autoscaling, and DDoS resilience remain unavailable;
+- Web/API/TLS coverage is Partial: fixed static/JSON endpoints, a packaged
+  dynamic application behind Nginx, HTTP/HTTPS concurrency, Generator CPU
+  validity, connection churn, transfer rate, tail latency, and HTTP/2
+  negotiation are implemented; database-backed applications, HTTP/2 load,
+  HTTP/3, CDN, WAF, autoscaling, and DDoS resilience remain unavailable;
 - GPU evidence and GPU benchmarks are not complete;
 - scheduled sampling campaigns, cross-pair orchestration, cross-zone analysis,
   timestamped cost,
@@ -221,8 +234,8 @@ Controller run: `run_1c572100e8704843`.
    authoritative/cache-cold/DNSSEC resolver coverage, unattended campaign
    scheduling, and Windows route parity
    before promoting the network domain from Partial.
-2. Add Web generator-saturation validation and dynamic application,
-   HTTP/2/3, reverse-proxy, CDN, WAF, and autoscaling evidence.
+2. Add database-backed Web applications, HTTP/2 load, HTTP/3, reverse-proxy
+   variants, compression, CDN, WAF, and autoscaling evidence.
 3. Extend database coverage with transaction tail latency, MySQL/MariaDB,
    Redis, replication, backup/restore, and recovery evidence.
 4. Complete remaining compute, memory/NUMA, GPU, security, reliability,

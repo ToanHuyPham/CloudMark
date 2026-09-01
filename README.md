@@ -28,11 +28,11 @@ timestamp, and raw result.
 | Available | Explicit remote Agent dispatch for CPU, memory, and storage with live progress, cancellation, and result attribution |
 | Partial | Guarded peer network executor: pre/post interface counters, route/MTU, read-only NIC/TCP-control evidence, directional TCP scaling, idle/loaded RTT, adaptive UDP sweeps, and simultaneous bidirectional TCP |
 | Partial | Guarded two-Agent PostgreSQL/pgbench profiles with durable settings and verified ephemeral cleanup |
-| Partial | Guarded two-Agent Nginx/ApacheBench HTTP, API, TLS, connection-churn, tail-latency, and static-transfer profiles |
+| Partial | Guarded two-Agent Web v2 with Nginx, a packaged dynamic reverse-proxy application, Generator CPU validity, HTTP/TLS tail latency, static transfer, and HTTP/2 negotiation |
 | Available | Target-scoped, versioned Essential/Standard/Demanding workload gates with per-check run provenance and explicit unknown evidence |
 | Available | Exact-cohort repeated-window provider observations with median, P10/P90, best/worst, spread, topology/evidence-class contracts, and guarded comparison eligibility |
 | Available | Immutable, manually dispatched repeated network campaigns with one comparison-eligible window per UTC day |
-| Roadmap | Unattended sampling schedules, physical-fabric verification, per-queue NIC evidence, public-path classification, and mTLS enrollment |
+| Roadmap | Unattended sampling schedules, physical-fabric verification, wider vendor queue normalization, public-path classification, and mTLS enrollment |
 | Roadmap | Remaining CPU, memory/NUMA, GPU, application, platform, operations, and provider executors |
 | Roadmap | Cross-target campaign orchestration, cross-zone analysis, timestamped cost, operations, and final provider ratings |
 
@@ -167,16 +167,17 @@ Controller is never an iperf3 endpoint.
 Version `0.5.0` adds authenticated remote dispatch of CPU, memory, and storage
 profiles, per-task heartbeat and cancellation, same-target load exclusion,
 provider/Agent attribution, and strict result-version validation. The current
-development head also implements the versioned `network-v8` standard profile
-and the first `database-postgresql-v1` and `web-http-v1` client/server profiles.
+development head also implements the versioned `network-v9` Standard profile,
+`database-postgresql-v1`, and Standard `web-http-v2` while preserving the Web
+v1 Quick contract.
 Compute and memory remain `Partial` until floating-point, crypto, compilation,
 latency, NUMA, and broader architecture coverage are implemented. Network
 remains partial until driver per-queue evidence is normalized across more NICs,
 controlled DNS coverage, cross-pair repeated windows, administrative path verification, and mTLS
 enrollment are implemented. PostgreSQL remains
 partial until tail latency, replication, and recovery evidence are available.
-Web/API/TLS remains partial until generator-saturation validation, dynamic
-application, HTTP/2/3, CDN, WAF, and autoscaling evidence are available.
+Web/API/TLS remains partial until database-backed applications, HTTP/2 load,
+HTTP/3, CDN, WAF, and autoscaling evidence are available.
 The current development head also implements `suitability-v1` target-scoped
 hard gates with exact evidence provenance and `provider-observations-v3`
 topology- and evidence-class-aware same-SKU repeated-window descriptive

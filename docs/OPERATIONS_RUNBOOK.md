@@ -177,9 +177,11 @@ as valid evidence.
 
 For Web/API/TLS peer profiles, install the web pack on both Agents and run the
 Target Agent as a non-root account. Allow TCP `58080` and `58443` only between
-the paired Generator and Target. Verify `cleanup_verified` and review Generator
-headroom before treating a completed run as comparable evidence; ApacheBench
-can become the limiting component.
+the paired Generator and Target; never expose loopback application port `58081`.
+Standard Web v2 requires an Nginx build and curl build with HTTP/2 support plus
+Linux procfs CPU accounting on the Generator. Verify `comparison_eligible` and
+`cleanup_verified`. An HTTP/2 observation proves negotiation only and must not
+be interpreted as HTTP/2 throughput.
 
 ## 11. Troubleshooting
 
@@ -246,8 +248,10 @@ PostgreSQL data directory.
 
 ### A Web/API/TLS peer run cannot start
 
-- verify the Target reports `nginx` and `openssl`;
-- verify the Generator reports `ab`;
+- verify the Target reports `nginx` and `openssl`; Standard also requires
+  `nginx_http2`;
+- verify the Generator reports `ab`; Standard also requires `curl_http2` and
+  `procfs_process_cpu`;
 - restart each Agent after installing the web pack so inventory refreshes;
 - verify TCP `58080` and `58443` are reachable only between the paired Agents;
 - run the Target Agent as a non-root account;

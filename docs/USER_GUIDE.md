@@ -230,7 +230,7 @@ This command displays a plan and does not modify the system.
 | `storage` | fio, smartmontools, nvme-cli |
 | `network` | iperf3, ethtool, mtr, DNS tools |
 | `database` | sysbench, PostgreSQL server/client tools including pgbench, Redis |
-| `web` | Nginx, ApacheBench, and OpenSSL |
+| `web` | Nginx, ApacheBench, curl, and OpenSSL |
 
 ## 7. Bootstrap tools
 
@@ -534,21 +534,24 @@ sudo python -m cloudmark bootstrap --packs web --yes
 
 Open **Web & API Assessment**, select `Web & TLS Peer Quick` or `Web & TLS
 Peer Standard`, choose the paired session, and select **Run Web/API/TLS
-assessment**. CloudMark creates fixed payloads and an ephemeral certificate
-beneath the Target Agent workspace, starts isolated Nginx listeners, dispatches
-bounded ApacheBench jobs from the Generator, then stops Nginx and verifies
-removal of the complete service directory.
+assessment**. Quick preserves the Web v1 static baseline. Standard Web v2 also
+starts a packaged Python application on Target loopback behind Nginx, dispatches
+bounded dynamic ApacheBench jobs, samples Generator process/host CPU, and makes
+one fixed curl request to verify HTTP/2 negotiation. CloudMark then stops both
+service processes and verifies removal of the complete service directory.
 
 Allow TCP ports `58080` and `58443` only from the Generator peer address to the
-Target. Run the Target Agent as a non-root account. The API accepts only fixed
+Target. Port `58081` must remain loopback-only and must not be opened in the
+provider firewall. Run the Target Agent as a non-root account. The API accepts only fixed
 CloudMark endpoints and never accepts an arbitrary target URL. DDoS testing is
 outside this methodology.
 
 The dashboard reports request throughput, error counts, success percentage,
-P50/P90/P95/P99/maximum latency, transfer rate, TLS protocol evidence, tool
-versions, and cleanup status. Compare only equivalent Target and Generator
-classes and verify Generator headroom because ApacheBench may become the
-bottleneck. See [`WEB_METHODOLOGY.md`](WEB_METHODOLOGY.md).
+P50/P90/P95/P99/maximum latency, transfer rate, TLS protocol evidence, dynamic
+reverse-proxy status, Generator headroom, HTTP/2 negotiation, tool versions,
+comparison validity, and cleanup status. HTTP/2 timing comes from one diagnostic
+request and is not an HTTP/2 throughput benchmark. See
+[`WEB_METHODOLOGY.md`](WEB_METHODOLOGY.md).
 
 ## 13. Workload suitability
 

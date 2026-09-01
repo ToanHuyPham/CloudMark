@@ -76,8 +76,10 @@ The first paired service executor creates an isolated durable PostgreSQL cluster
 on Agent A and runs allow-listed pgbench workloads from Agent B; cleanup is part
 of the evidence contract. The second paired service executor creates an
 isolated Nginx HTTP/TLS service on Agent A and runs fixed ApacheBench workloads
-from Agent B. Both service lifecycles use Target-owned watchdogs and verified
-ephemeral cleanup; the Controller never carries benchmark traffic.
+from Agent B. Its Standard Web v2 contract adds a packaged loopback-only Python
+application behind Nginx, Generator CPU-headroom validation, and fixed HTTP/2
+negotiation evidence. Both service lifecycles use Target-owned watchdogs and
+verified ephemeral cleanup; the Controller never carries benchmark traffic.
 
 The read-time `suitability-v1` engine partitions completed evidence by target,
 validates methodology and cleanup, and evaluates all 12 workload categories at

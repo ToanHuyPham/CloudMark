@@ -141,12 +141,25 @@ systems.
 - The Agent generates only the fixed health, 1 KiB JSON, and 256 KiB static
   payloads. Scheme, path, port, concurrency, duration, TLS version, and
   keep-alive behavior are allow-listed.
+- Web v2 starts only the packaged CloudMark Python fixture on
+  `127.0.0.1:58081`; the Controller cannot supply its bind address, port,
+  response, code, or Nginx proxy directives. Nginx is the only provider-facing
+  listener. Dynamic ApacheBench jobs use the same concurrency, duration, and
+  request limits as static jobs.
+- Web v2 samples only Linux `/proc/stat` and the active ApacheBench
+  `/proc/<pid>/stat` at one-second intervals, retains summaries rather than raw
+  process records, caps samples at 120, and rejects comparison evidence at 90%
+  of one logical CPU. No CPU setting is changed.
+- The HTTP/2 observation uses fixed HTTPS, Target address, port 58443, dynamic
+  path, TLS 1.2, ten-second deadline, and curl arguments. It is one diagnostic
+  request and never becomes an HTTP/2 throughput or capacity claim.
 - The per-run certificate and key are ephemeral. The self-signed certificate
   measures TLS handling and does not claim public trust-chain quality.
 - Arbitrary URLs and DDoS traffic are not supported. ApacheBench jobs are
   bounded by time, concurrency, request ceiling, task timeout, and Controller
   contact watchdog.
-- The Target watchdog stops Nginx and removes generated configuration,
+- The Target watchdog stops Nginx and the packaged application process, then
+  removes generated configuration,
   payloads, logs, certificates, and keys on every normal terminal path.
   Unknown residual directories after abrupt host failure require manual review.
 

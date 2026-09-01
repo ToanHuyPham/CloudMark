@@ -445,7 +445,11 @@ class CloudMarkController:
             profile_config = WEB_PROFILES[profile]
             total_steps = web_total_steps(profile)
             methodology_version = str(profile_config["methodology_version"])
-            tool_version = "nginx/apachebench-agent"
+            tool_version = (
+                "nginx/python-app/apachebench/curl-agent"
+                if methodology_version == "web-http-v2"
+                else "nginx/apachebench-agent"
+            )
             default_timeout = web_default_timeout(profile)
         else:
             total_steps = 1

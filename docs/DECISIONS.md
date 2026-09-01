@@ -329,3 +329,23 @@ may hide the hardware table and physical interrupt placement. Treating absence
 as failure would penalize providers for interface visibility rather than a
 measured performance defect, while claiming guest affinity represents the host
 fabric would exceed the evidence.
+
+## D-025: Web v2 separates dynamic serving, Generator validity, and HTTP/2 claims
+
+**Decision:** Advance the Standard Web profile to `web-http-v2` while keeping
+Quick on the readable `web-http-v1` contract. The Target starts only the
+packaged CloudMark Python fixture on `127.0.0.1:58081`, and Nginx reverse-proxies
+the fixed `/api/v2/dynamic` endpoint through its paired-client access policy.
+The Generator samples its ApacheBench process and host through bounded Linux
+procfs intervals. Missing CPU evidence or ApacheBench reaching 90% of one
+logical CPU makes Web v2 comparison-ineligible. One fixed curl request must
+negotiate HTTP/2 successfully, but its timings remain protocol diagnostics and
+never become HTTP/2 capacity evidence. Cleanup must stop both service processes
+and remove their workspace before the Run is eligible.
+
+**Reason:** A static Nginx response omits application and reverse-proxy cost,
+while a saturated single-process Generator can understate Target capacity.
+Adding a deterministic packaged runtime makes that path repeatable without
+accepting operator code or arbitrary upstreams. Separating a negotiated HTTP/2
+fact from HTTP/2 load prevents one request from being overstated as production
+protocol performance.

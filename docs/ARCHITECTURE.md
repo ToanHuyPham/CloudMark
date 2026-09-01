@@ -149,12 +149,14 @@ lost control connection.
 PostgreSQL settings and built-in pgbench workloads. The Controller never sends
 SQL, paths, credentials, or arbitrary server configuration to an Agent.
 
-`web-http-v1` uses the same lifecycle to create an isolated Nginx service on
-the Target. The Agent generates fixed payloads and an ephemeral certificate,
-binds the exact advertised address on ports 58080 and 58443, and permits only
-the paired Generator address. Generator tasks accept only versioned
-ApacheBench jobs over three fixed endpoints. The Controller never accepts an
-arbitrary URL and is not an HTTP/TLS traffic endpoint.
+`web-http-v1` remains the Quick static-service baseline. Standard
+`web-http-v2` adds a packaged Python application on fixed Target loopback port
+58081 behind Nginx, dynamic ApacheBench workloads, bounded Linux Generator
+process/host CPU accounting, and one fixed curl HTTP/2 negotiation observation.
+Nginx binds the exact advertised address on ports 58080 and 58443 and permits
+only the paired Generator. The Controller never accepts an arbitrary URL and
+is not an HTTP/TLS traffic endpoint. HTTP/2 negotiation is not presented as an
+HTTP/2 performance measurement.
 
 ## Network direction policy
 

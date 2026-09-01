@@ -60,9 +60,11 @@ rate over 20% evidence coverage remains `Insufficient evidence`.
 
 - **Storage & Backup:** sequential read/write and verified cleanup; snapshot,
   object durability, restore, availability, and cost remain limitations.
-- **Web & App Hosting:** CPU/RAM, HTTPS API throughput/success/P95, and
-  directional network throughput/latency; dynamic runtime, upstreams,
-  HTTP/2/3, WAF, CDN, autoscaling, and public TLS trust remain limitations.
+- **Web & App Hosting:** CPU/RAM, HTTPS API throughput/success/P95, bundled
+  dynamic reverse-proxy evidence, Generator CPU validity, HTTP/2 negotiation,
+  and directional network throughput/latency; database-backed upstreams,
+  HTTP/2 load, HTTP/3, WAF, CDN, autoscaling, and public TLS trust remain
+  limitations.
 - **Dev & Test:** CPU/RAM, sustained compute, low-queue random read, and write
   throughput; provisioning, images, clone/snapshot, automation, and cost remain
   limitations.
