@@ -228,6 +228,21 @@ DATABASE_PROFILES: dict[str, dict[str, Any]] = {
             {"name": "tpcb-like-tail-c4", "workload": "tpcb-like", "clients": 4, "threads": 2, "duration": 0, "warmup": 5, "transactions_per_client": 1000, "timeout": 120},
         ],
     },
+    "postgres-peer-recovery": {
+        "label": "PostgreSQL Backup & Restore",
+        "description": "Isolated durable workload followed by a fixed logical backup, restore into a second ephemeral database, row-count verification, and complete artifact cleanup.",
+        "estimated_minutes": 12,
+        "requires_agents": 2,
+        "engine": "postgresql",
+        "scale_factor": 20,
+        "port": 55432,
+        "profile_version": "1.0",
+        "methodology_version": "database-postgresql-recovery-v1",
+        "jobs": [
+            {"name": "tpcb-like-c4", "workload": "tpcb-like", "clients": 4, "threads": 2, "duration": 30, "warmup": 5},
+        ],
+        "recovery_drill": {"type": "logical-backup-restore", "timeout": 300},
+    },
 }
 
 

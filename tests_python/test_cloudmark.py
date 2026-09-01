@@ -46,6 +46,7 @@ from cloudmark.database_benchmark import (
     database_total_steps,
     parse_pgbench_latency_log,
     parse_pgbench_output,
+    parse_pgbench_row_counts,
     run_database,
     validate_database_run,
 )
@@ -354,7 +355,13 @@ class CloudMarkTests(unittest.TestCase):
         }
         valid, reason = _run_valid(run)
         self.assertFalse(valid)
-        self.assertIn("database v2", reason.lower())
+        self.assertIn("database", reason.lower())
+
+        run["methodology_version"] = "database-postgresql-recovery-v1"
+        run["result"]["methodology_version"] = "database-postgresql-recovery-v1"
+        valid, reason = _run_valid(run)
+        self.assertFalse(valid)
+        self.assertIn("recovery", reason.lower())
 
     def test_provider_observations_require_exact_repeated_sampling_contract(self) -> None:
         now = datetime.now(timezone.utc)
@@ -2189,6 +2196,13 @@ tps = 941.176470 (without initial connection time)
         self.assertEqual(partial["status"], "partial")
         self.assertEqual(partial["invalid_rows"], 1)
 
+    def test_database_recovery_parses_only_fixed_pgbench_row_counts(self) -> None:
+        counts = parse_pgbench_row_counts("2000000|20|200|12345\n")
+        self.assertEqual(counts["accounts"], 2_000_000)
+        self.assertEqual(counts["history"], 12_345)
+        with self.assertRaisesRegex(DatabaseBenchmarkError, "row counts"):
+            parse_pgbench_row_counts("2000000|20|malformed|12345\n")
+
     def test_database_v2_requires_pgbench_fixed_transaction_log_support(self) -> None:
         responses = [
             SimpleNamespace(
@@ -2261,6 +2275,8 @@ tps = 941.176470 (without initial connection time)
             self.assertEqual(generator["id"], "agent_generator")
             with self.assertRaisesRegex(ValueError, "pgbench_latency_log"):
                 validate_database_run(database, "session_db", "postgres-peer-standard")
+            with self.assertRaisesRegex(ValueError, "pg_dump"):
+                validate_database_run(database, "session_db", "postgres-peer-recovery")
 
             database.create_session("session_db_v2", "database-v2", "hash", "2099-01-01T00:00:00+00:00")
             database.add_agent(
@@ -2292,6 +2308,43 @@ tps = 941.176470 (without initial connection time)
             )
             self.assertEqual(target_v2["id"], "agent_target_v2")
             self.assertEqual(generator_v2["id"], "agent_generator_v2")
+
+            database.create_session("session_db_recovery", "database-recovery", "hash", "2099-01-01T00:00:00+00:00")
+            database.add_agent(
+                "agent_target_recovery",
+                "session_db_recovery",
+                "target-recovery",
+                "target",
+                {
+                    "inventory": {
+                        "capabilities": {
+                            "postgres": True,
+                            "initdb": True,
+                            "pgbench": True,
+                            "pg_isready": True,
+                            "pg_dump": True,
+                            "pg_restore": True,
+                            "createdb": True,
+                            "dropdb": True,
+                            "psql": True,
+                        }
+                    }
+                },
+                endpoint={"address": "10.0.2.10"},
+            )
+            database.add_agent(
+                "agent_generator_recovery",
+                "session_db_recovery",
+                "generator-recovery",
+                "generator",
+                generator_system,
+                endpoint={"address": "10.0.2.11"},
+            )
+            _, target_recovery, generator_recovery = validate_database_run(
+                database, "session_db_recovery", "postgres-peer-recovery"
+            )
+            self.assertEqual(target_recovery["id"], "agent_target_recovery")
+            self.assertEqual(generator_recovery["id"], "agent_generator_recovery")
 
     def test_agent_builds_only_allowlisted_pgbench_commands(self) -> None:
         worker = AgentWorker("http://127.0.0.1:8787", "agent", "token")
@@ -2456,6 +2509,57 @@ tps = 400.000000 (without initial connection time)
                     )
             self.assertEqual(calls, 2)
             self.assertFalse((workspace / "database-client-logs" / "task_tailfail").exists())
+
+    def test_agent_database_recovery_uses_fixed_tools_verification_and_cleanup(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory) / "agent"
+            service_root = workspace / "database-services" / "task_server123"
+            service_root.mkdir(parents=True)
+            worker = AgentWorker(
+                "http://127.0.0.1:8787",
+                "agent",
+                "token",
+                workspace=workspace,
+            )
+            worker.active_database_servers["task_server123"] = SimpleNamespace(
+                root=service_root,
+                scale_factor=20,
+                port=55432,
+            )
+            commands: list[list[str]] = []
+
+            def guarded(_task_id: str, command: list[str], **_kwargs: object) -> tuple[int, str, str]:
+                commands.append(command)
+                executable = command[0]
+                if executable == "psql":
+                    return 0, "2000000|20|200|12345\n", ""
+                if executable == "pg_dump":
+                    backup_path = Path(command[command.index("-f") + 1])
+                    backup_path.write_bytes(b"fixed-backup-evidence")
+                return 0, "", ""
+
+            with patch.object(worker, "_postgres_tool", side_effect=lambda name: name), patch.object(
+                worker, "_guarded_service_process", side_effect=guarded
+            ), patch("cloudmark.agent.subprocess.run", return_value=SimpleNamespace(returncode=0)), patch(
+                "cloudmark.agent.tool_version", side_effect=lambda executable: f"{executable} 16.2"
+            ):
+                result = worker._run_database_recovery(
+                    "task_recovery123",
+                    {
+                        "server_task_id": "task_server123",
+                        "methodology_version": "database-postgresql-recovery-v1",
+                        "run_completed_steps": 2,
+                        "run_total_steps": 4,
+                    },
+                )
+            self.assertEqual(result["status"], "complete")
+            self.assertTrue(result["verification"]["row_counts_match"])
+            self.assertTrue(result["verification"]["expected_scale_shape_match"])
+            self.assertTrue(result["cleanup_verified"])
+            self.assertGreater(result["backup_bytes"], 0)
+            self.assertFalse((service_root / "logical-recovery").exists())
+            self.assertEqual([command[0] for command in commands], ["psql", "pg_dump", "createdb", "pg_restore", "psql"])
+            self.assertTrue(any("cloudmark_restore" in command for command in commands))
 
     def test_agent_refuses_database_cleanup_outside_its_workspace(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -2708,6 +2812,108 @@ tps = 400.000000 (without initial connection time)
             self.assertEqual(len(result["database_measurements"]), 8)
             self.assertEqual(result["analysis"]["generator_headroom"]["status"], "adequate")
             self.assertEqual(result["analysis"]["transaction_tail_latency"]["status"], "complete")
+            self.assertTrue(result["analysis"]["validity"]["comparison_eligible"])
+            self.assertTrue(result["cleanup"]["cleanup_verified"])
+
+    def test_database_recovery_orchestrator_records_verified_logical_restore(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            database = Database(Path(directory) / "test.sqlite3")
+            database.create_session("session_recovery", "recovery", "hash", "2099-01-01T00:00:00+00:00")
+            target_capabilities = {
+                "postgres": True,
+                "initdb": True,
+                "pgbench": True,
+                "pg_isready": True,
+                "pg_dump": True,
+                "pg_restore": True,
+                "createdb": True,
+                "dropdb": True,
+                "psql": True,
+            }
+            database.add_agent(
+                "agent_target_recovery",
+                "session_recovery",
+                "target-recovery",
+                "target",
+                {"inventory": {"capabilities": target_capabilities}},
+                endpoint={"address": "10.0.0.10"},
+            )
+            database.add_agent(
+                "agent_generator_recovery",
+                "session_recovery",
+                "generator-recovery",
+                "generator",
+                {"inventory": {"capabilities": {"pgbench": True}}},
+                endpoint={"address": "10.0.0.11"},
+            )
+            total_steps = database_total_steps("postgres-peer-recovery")
+            database.create_run(
+                "run_database_recovery",
+                "database",
+                "postgres-peer-recovery",
+                {"suite": "database"},
+                total_steps=total_steps,
+            )
+            done = threading.Event()
+
+            def complete_tasks() -> None:
+                while not done.is_set():
+                    handled = False
+                    for agent_id in ("agent_target_recovery", "agent_generator_recovery"):
+                        task = database.claim_agent_task(agent_id)
+                        if not task:
+                            continue
+                        handled = True
+                        if task["kind"] == "database-server-start":
+                            task_result = {"ready": True, "engine": "postgresql", "scale_factor": 20}
+                        elif task["kind"] == "database-client":
+                            task_result = {
+                                "pgbench": {
+                                    "workload": "tpcb-like",
+                                    "clients": 4,
+                                    "threads": 2,
+                                    "duration_seconds": 30,
+                                    "transactions_per_client": 0,
+                                    "metrics": {"transactions_per_second": 1000.0, "latency_average_ms": 4.0},
+                                    "generator_cpu": {"status": "unavailable"},
+                                }
+                            }
+                        elif task["kind"] == "database-recovery-drill":
+                            task_result = {
+                                "status": "complete",
+                                "type": "logical-backup-restore",
+                                "backup_duration_seconds": 2.0,
+                                "restore_duration_seconds": 3.0,
+                                "backup_bytes": 10_000_000,
+                                "verification": {
+                                    "row_counts_match": True,
+                                    "expected_scale_shape_match": True,
+                                },
+                                "cleanup_verified": True,
+                            }
+                        else:
+                            task_result = {"status": "completed", "cleanup_verified": True}
+                        database.finish_agent_task(task["id"], agent_id, status="completed", result=task_result)
+                    if not handled:
+                        time.sleep(0.005)
+
+            worker = threading.Thread(target=complete_tasks, daemon=True)
+            worker.start()
+            try:
+                context = JobContext("run_database_recovery", total_steps=total_steps, timeout_seconds=60)
+                result = run_database(
+                    database,
+                    "run_database_recovery",
+                    "session_recovery",
+                    "postgres-peer-recovery",
+                    context=context,
+                )
+            finally:
+                done.set()
+                worker.join(timeout=2)
+            self.assertEqual(total_steps, 4)
+            self.assertEqual(result["recovery"]["status"], "complete")
+            self.assertEqual(result["analysis"]["logical_recovery"]["status"], "complete")
             self.assertTrue(result["analysis"]["validity"]["comparison_eligible"])
             self.assertTrue(result["cleanup"]["cleanup_verified"])
 
@@ -3522,6 +3728,7 @@ Percentage of the requests served within a certain time (ms)
     def test_database_profiles_are_versioned_and_bounded(self) -> None:
         self.assertEqual(database_total_steps("postgres-peer-quick"), 5)
         self.assertEqual(database_total_steps("postgres-peer-standard"), 10)
+        self.assertEqual(database_total_steps("postgres-peer-recovery"), 4)
         self.assertEqual(
             DATABASE_PROFILES["postgres-peer-quick"]["methodology_version"],
             "database-postgresql-v1",
@@ -3531,6 +3738,11 @@ Percentage of the requests served within a certain time (ms)
             "database-postgresql-v2",
         )
         self.assertEqual(DATABASE_PROFILES["postgres-peer-standard"]["profile_version"], "2.0")
+        self.assertEqual(
+            DATABASE_PROFILES["postgres-peer-recovery"]["methodology_version"],
+            "database-postgresql-recovery-v1",
+        )
+        self.assertEqual(DATABASE_PROFILES["postgres-peer-recovery"]["recovery_drill"]["timeout"], 300)
         for profile in DATABASE_PROFILES.values():
             self.assertLessEqual(profile["scale_factor"], 100)
             self.assertTrue(all(job["duration"] <= 60 for job in profile["jobs"]))

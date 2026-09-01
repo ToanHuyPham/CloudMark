@@ -62,6 +62,8 @@ test("keeps production metadata and project policy explicit", async () => {
   assert.match(page, /web-http-v2/i);
   assert.match(page, /TRANSACTION TAIL LATENCY/);
   assert.match(page, /database-postgresql-v2/i);
+  assert.match(page, /LOGICAL BACKUP &amp; RESTORE/);
+  assert.match(page, /database-postgresql-recovery-v1/i);
   assert.match(page, /Provider Comparison/);
   assert.match(page, /CloudMark does not rank providers/);
   assert.match(page, /profiles\.database\?\.\[selectedDatabaseProfile\]/);

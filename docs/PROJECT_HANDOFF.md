@@ -76,7 +76,9 @@ The first paired service executor creates an isolated durable PostgreSQL cluster
 on Agent A and runs allow-listed pgbench workloads from Agent B; cleanup is part
 of the evidence contract. Its Standard Database v2 contract adds exact
 fixed-count transaction tail percentiles, Generator CPU validity, and verified
-Generator-log cleanup. The second paired service executor creates an
+Generator-log cleanup. A separate same-Target logical recovery profile measures
+pg_dump/pg_restore timing, four-table row-count equality, and artifact cleanup
+without claiming provider snapshot or cross-zone DR behavior. The second paired service executor creates an
 isolated Nginx HTTP/TLS service on Agent A and runs fixed ApacheBench workloads
 from Agent B. Its Standard Web v2 contract adds a packaged loopback-only Python
 application behind Nginx, Generator CPU-headroom validation, and fixed HTTP/2

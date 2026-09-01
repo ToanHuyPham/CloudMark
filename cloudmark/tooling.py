@@ -7,7 +7,17 @@ import subprocess
 from pathlib import Path
 
 
-POSTGRES_TOOLS = {"initdb", "pgbench", "pg_isready", "postgres"}
+POSTGRES_TOOLS = {
+    "createdb",
+    "dropdb",
+    "initdb",
+    "pg_dump",
+    "pg_restore",
+    "pgbench",
+    "pg_isready",
+    "postgres",
+    "psql",
+}
 WEB_TOOLS = {"ab", "curl", "nginx", "openssl"}
 
 

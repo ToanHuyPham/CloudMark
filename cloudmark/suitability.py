@@ -275,9 +275,12 @@ def _run_valid(run: dict[str, Any]) -> tuple[bool, str | None]:
         return False, "Storage cleanup is not verified."
     if suite in {"database", "web"} and _nested(result, "cleanup", "cleanup_verified") is not True:
         return False, "Ephemeral service cleanup is not verified."
-    if suite == "database" and str(result.get("methodology_version", "")) == "database-postgresql-v2":
+    if suite == "database" and str(result.get("methodology_version", "")) in {
+        "database-postgresql-v2",
+        "database-postgresql-recovery-v1",
+    }:
         if _nested(result, "analysis", "validity", "comparison_eligible") is not True:
-            return False, "Database v2 Generator headroom, fixed-count transaction tail latency, or cleanup evidence is insufficient for comparison."
+            return False, "Database Generator validity, required tail/recovery evidence, or cleanup evidence is insufficient for comparison."
     if suite == "web" and str(result.get("methodology_version", "")) == "web-http-v2":
         if _nested(result, "analysis", "validity", "comparison_eligible") is not True:
             return False, "Web v2 Generator headroom, dynamic reverse-proxy, HTTP/2 negotiation, or cleanup evidence is insufficient for comparison."

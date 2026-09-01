@@ -136,6 +136,20 @@ def parse_pgbench_latency_log(
     return result
 
 
+def parse_pgbench_row_counts(stdout: str) -> dict[str, int]:
+    line = next((value.strip() for value in stdout.splitlines() if value.strip()), "")
+    parts = line.split("|")
+    if len(parts) != 4 or any(not re.fullmatch(r"\d+", value.strip()) for value in parts):
+        raise DatabaseBenchmarkError("PostgreSQL recovery verification returned invalid row counts.")
+    values = [int(value.strip()) for value in parts]
+    return {
+        "accounts": values[0],
+        "branches": values[1],
+        "tellers": values[2],
+        "history": values[3],
+    }
+
+
 def _database_analysis(result: dict[str, Any]) -> dict[str, Any]:
     measurements = [item for item in (result.get("database_measurements") or []) if isinstance(item, dict)]
     timed_measurements = [
@@ -175,16 +189,29 @@ def _database_analysis(result: dict[str, Any]) -> dict[str, Any]:
         "partial" if tail_measurements else "unavailable"
     )
     cleanup_verified = (result.get("cleanup") or {}).get("cleanup_verified") is True
-    v2_required = str(result.get("methodology_version", "")) == "database-postgresql-v2"
+    methodology = str(result.get("methodology_version", ""))
+    v2_required = methodology == "database-postgresql-v2"
+    recovery_required = methodology == "database-postgresql-recovery-v1"
+    recovery = result.get("recovery") or {}
+    if recovery.get("status") == "not-requested":
+        recovery = {}
+    recovery_complete = (
+        recovery.get("status") == "complete"
+        and recovery.get("verification", {}).get("row_counts_match") is True
+        and recovery.get("cleanup_verified") is True
+    )
     reason_codes: list[str] = []
     if v2_required and generator_status != "adequate":
         reason_codes.append(f"generator-headroom-{generator_status}")
     if v2_required and tail_status != "complete":
         reason_codes.append("transaction-tail-latency-evidence-incomplete")
+    if recovery_required and not recovery_complete:
+        reason_codes.append("logical-backup-restore-evidence-incomplete")
     if not cleanup_verified:
         reason_codes.append("ephemeral-cleanup-unverified")
     comparison_eligible = cleanup_verified and (
-        not v2_required or (generator_status == "adequate" and tail_status == "complete")
+        (not v2_required or (generator_status == "adequate" and tail_status == "complete"))
+        and (not recovery_required or recovery_complete)
     )
     return {
         "generator_headroom": {
@@ -202,10 +229,20 @@ def _database_analysis(result: dict[str, Any]) -> dict[str, Any]:
             "complete_measurement_count": len(complete_tail),
             "sampling": "all-transactions-fixed-count",
         },
+        "logical_recovery": {
+            "status": "complete" if recovery_complete else (
+                "partial" if recovery else "unavailable"
+            ),
+            "required": recovery_required,
+            "backup_duration_seconds": recovery.get("backup_duration_seconds"),
+            "restore_duration_seconds": recovery.get("restore_duration_seconds"),
+            "backup_bytes": recovery.get("backup_bytes"),
+        },
         "validity": {
             "generator_headroom_required": v2_required,
             "transaction_tail_latency_required": v2_required,
             "cleanup_required": True,
+            "logical_recovery_required": recovery_required,
             "comparison_eligible": comparison_eligible,
             "reason_codes": reason_codes,
         },
@@ -214,7 +251,8 @@ def _database_analysis(result: dict[str, Any]) -> dict[str, Any]:
 
 
 def database_total_steps(profile_name: str) -> int:
-    return len(DATABASE_PROFILES[profile_name]["jobs"]) + 2
+    profile = DATABASE_PROFILES[profile_name]
+    return len(profile["jobs"]) + 2 + (1 if profile.get("recovery_drill") else 0)
 
 
 def database_default_timeout(profile_name: str) -> int:
@@ -223,7 +261,10 @@ def database_default_timeout(profile_name: str) -> int:
         int(job.get("timeout", int(job["duration"]) + 45)) + int(job.get("warmup", 0))
         for job in profile["jobs"]
     )
-    return 300 + job_seconds + 120
+    recovery_seconds = int((profile.get("recovery_drill") or {}).get("timeout", 0)) + (
+        60 if profile.get("recovery_drill") else 0
+    )
+    return 300 + job_seconds + recovery_seconds + 120
 
 
 def validate_database_run(
@@ -234,13 +275,16 @@ def validate_database_run(
     if profile_name not in DATABASE_PROFILES:
         raise ValueError(f"Unknown database profile: {profile_name}")
     profile = DATABASE_PROFILES[profile_name]
+    target_capabilities = ["postgres", "initdb", "pgbench", "pg_isready"]
     generator_capabilities = ["pgbench"]
     if profile["methodology_version"] == "database-postgresql-v2":
         generator_capabilities.extend(["pgbench_latency_log", "procfs_process_cpu"])
+    if profile.get("recovery_drill"):
+        target_capabilities.extend(["pg_dump", "pg_restore", "createdb", "dropdb", "psql"])
     return validate_pair(
         database,
         session_id,
-        target_capabilities=("postgres", "initdb", "pgbench", "pg_isready"),
+        target_capabilities=tuple(target_capabilities),
         generator_capabilities=tuple(generator_capabilities),
     )
 
@@ -281,6 +325,7 @@ def run_database(
             "transaction_log_max_rows": DATABASE_TAIL_LOG_MAX_ROWS,
         },
         "database_measurements": [],
+        "recovery": {"status": "not-requested" if not profile.get("recovery_drill") else "pending"},
         "cleanup": {"status": "pending"},
     }
     server_task: str | None = None
@@ -345,6 +390,35 @@ def run_database(
             result["database_measurements"].append({"name": job["name"], **measurement})
             result["analysis"] = _database_analysis(result)
             context.complete_step("database-measurement-complete", None, partial_result=result)
+
+        recovery_drill = profile.get("recovery_drill")
+        if recovery_drill:
+            context.report("running-database-recovery", "Logical backup, restore, and row verification")
+            recovery_task = create_task(
+                database,
+                run_id,
+                session_id,
+                target["id"],
+                "database-recovery-drill",
+                {
+                    "server_task_id": server_task,
+                    "methodology_version": profile["methodology_version"],
+                    "run_completed_steps": len(profile["jobs"]) + 1,
+                    "run_total_steps": database_total_steps(profile_name),
+                },
+            )
+            recovered = wait_task(
+                database,
+                recovery_task,
+                timeout_seconds=int(recovery_drill["timeout"]) + 45,
+                context=context,
+            )
+            recovery_result = recovered.get("result") or {}
+            if not isinstance(recovery_result, dict):
+                raise DatabaseBenchmarkError("Database recovery drill returned an invalid result.")
+            result["recovery"] = recovery_result
+            result["analysis"] = _database_analysis(result)
+            context.complete_step("database-recovery-complete", None, partial_result=result)
 
         context.report("cleaning-database", f"Remove ephemeral PostgreSQL cluster on {target['name']}")
         cleanup_task = create_task(

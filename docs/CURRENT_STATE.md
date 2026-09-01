@@ -90,6 +90,17 @@ baseline is still the repository head.
   readable as `database-postgresql-v1`. The complete development head passes
   118 Python tests, 3 rendered-dashboard tests, dashboard lint, and the
   production build without starting provider load;
+- simulation-verified `database-postgresql-recovery-v1` as a separate
+  same-Target logical backup/restore profile. After a fixed durable workload and
+  after Generator load ends, the Target records four pgbench table counts,
+  creates an uncompressed custom-format pg_dump archive, restores it into the
+  fixed `cloudmark_restore` database, verifies source/restored row-count
+  equality and scale shape, then removes the restored database and archive.
+  Free-space reserve, archive-size bounds, fixed loopback commands, recovery
+  cleanup, and final cluster cleanup are enforced. The evidence does not claim
+  snapshots, PITR, cross-zone DR, RPO, or RTO. The complete development head
+  passes 121 Python tests, 3 rendered-dashboard tests, dashboard lint, and the
+  production build without starting provider load;
 - simulation-verified `web-http-v1` paired executor with an isolated Nginx
   Target, fixed HTTP/HTTPS endpoints, Generator-side ApacheBench workloads,
   exact address allow-listing, TLS 1.2 evidence, progress/control heartbeat,
@@ -219,7 +230,9 @@ Controller run: `run_1c572100e8704843`.
 - PostgreSQL database coverage is Partial: read-only, durable read/write,
   concurrency, connection churn, fixed-count transaction tail percentiles, and
   Generator CPU validity are implemented; checkpoint isolation, replication,
-  recovery, MySQL/MariaDB, Redis, and managed-service behavior remain unavailable;
+  same-Target logical backup/restore, and artifact cleanup are implemented;
+  physical/PITR backup, cross-zone recovery, replication, MySQL/MariaDB, Redis,
+  and managed-service behavior remain unavailable;
 - an abrupt Agent or host termination can leave an isolated PostgreSQL task
   directory for manual operator review; the Agent refuses to overwrite or
   automatically delete unknown residual state; the same review requirement
@@ -248,7 +261,7 @@ Controller run: `run_1c572100e8704843`.
 2. Add database-backed Web applications, HTTP/2 load, HTTP/3, reverse-proxy
    variants, compression, CDN, WAF, and autoscaling evidence.
 3. Extend database coverage with checkpoint isolation, MySQL/MariaDB, Redis,
-   replication, backup/restore, and recovery evidence.
+   physical/PITR backup, replication, cross-zone recovery, and RPO/RTO evidence.
 4. Complete remaining compute, memory/NUMA, GPU, security, reliability,
    observability, container, and control-plane executors.
 5. Extend campaigns across independent targets, then add timestamped price

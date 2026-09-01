@@ -369,3 +369,22 @@ on a fast provider. A small random sample would introduce run-to-run sampling
 uncertainty. A fixed total transaction contract gives exact bounded percentile
 evidence, and pgbench CPU validation prevents the Generator from silently
 understating Target database capacity.
+
+## D-027: Logical recovery is a separate same-Target evidence contract
+
+**Decision:** Add `database-postgresql-recovery-v1` as a separate profile rather
+than folding recovery into PostgreSQL Standard. After its fixed workload and
+after Generator load ends, the Target uses only fixed loopback commands and a
+generated service subdirectory to create an uncompressed custom-format
+pg_dump, restore it into the fixed `cloudmark_restore` database, compare the
+accounts/branches/tellers/history row counts, drop the restored database, and
+remove the archive. Free space must cover twice the estimated dataset plus the
+normal reserve, and the archive may not exceed twice the estimate. Recovery
+and final cluster cleanup are both comparison gates.
+
+**Reason:** Backup/restore timing is operational evidence with a different load
+shape from transaction throughput and tail latency. Keeping it separate avoids
+silently lengthening Standard and lets operators schedule storage-heavy
+recovery work deliberately. Same-Target logical restore is useful but cannot
+establish snapshot durability, cross-zone recovery, PITR, RPO, RTO, or
+cryptographic data equality, so those claims remain unavailable.

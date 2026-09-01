@@ -150,6 +150,11 @@ lost control connection.
 client pgbench log job, nearest-rank P50/P95/P99/P99.9, bounded Generator log
 cleanup, and Linux pgbench process/host CPU validity. The Controller never
 sends SQL, paths, credentials, or arbitrary server configuration to an Agent.
+`database-postgresql-recovery-v1` reuses the active ephemeral Target only after
+Generator load ends, runs fixed loopback pg_dump/pg_restore stages, verifies
+four source/restored pgbench table counts, and removes the restored database
+and archive before final cluster cleanup. It does not claim provider snapshot
+or cross-zone disaster-recovery behavior.
 
 `web-http-v1` remains the Quick static-service baseline. Standard
 `web-http-v2` adds a packaged Python application on fixed Target loopback port

@@ -27,7 +27,7 @@ timestamp, and raw result.
 | Available | Authenticated persistent agents, heartbeat, and durable task queues |
 | Available | Explicit remote Agent dispatch for CPU, memory, and storage with live progress, cancellation, and result attribution |
 | Partial | Guarded peer network executor: pre/post interface counters, route/MTU, read-only NIC/TCP-control evidence, directional TCP scaling, idle/loaded RTT, adaptive UDP sweeps, and simultaneous bidirectional TCP |
-| Partial | Guarded PostgreSQL v2 with durable throughput, exact fixed-count P50/P95/P99/P99.9 transaction latency, Generator CPU validity, and verified cleanup |
+| Partial | Guarded PostgreSQL v2 plus logical Backup & Restore with durable throughput, exact transaction P50/P95/P99/P99.9, Generator validity, row-count verification, and cleanup |
 | Partial | Guarded two-Agent Web v2 with Nginx, a packaged dynamic reverse-proxy application, Generator CPU validity, HTTP/TLS tail latency, static transfer, and HTTP/2 negotiation |
 | Available | Target-scoped, versioned Essential/Standard/Demanding workload gates with per-check run provenance and explicit unknown evidence |
 | Available | Exact-cohort repeated-window provider observations with median, P10/P90, best/worst, spread, topology/evidence-class contracts, and guarded comparison eligibility |
@@ -169,7 +169,8 @@ profiles, per-task heartbeat and cancellation, same-target load exclusion,
 provider/Agent attribution, and strict result-version validation. The current
 development head also implements the versioned `network-v9` Standard profile,
 Standard `database-postgresql-v2`, and Standard `web-http-v2` while preserving
-the Database/Web v1 Quick contracts.
+the Database/Web v1 Quick contracts. PostgreSQL also includes the separately
+versioned `database-postgresql-recovery-v1` logical backup/restore drill.
 Compute and memory remain `Partial` until floating-point, crypto, compilation,
 latency, NUMA, and broader architecture coverage are implemented. Network
 remains partial until driver per-queue evidence is normalized across more NICs,

@@ -70,8 +70,9 @@ rate over 20% evidence coverage remains `Insufficient evidence`.
   limitations.
 - **Database Management:** CPU/RAM, durable synchronous storage, PostgreSQL
   durable transaction TPS/latency/failures, fixed-count P95/P99, Generator CPU
-  validity, and network latency; checkpoint isolation, replication, recovery,
-  other engines, and managed services remain
+  validity, same-Target logical backup/restore, and network latency; checkpoint
+  isolation, physical/PITR and cross-zone recovery, replication, other engines,
+  and managed services remain
   limitations.
 - **Networking & Connectivity:** directional TCP floor, idle latency/loss, and
   adaptive UDP loss/jitter; route, MTU, DNS, IPv6, public and cross-location

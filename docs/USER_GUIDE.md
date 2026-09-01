@@ -512,6 +512,14 @@ unavailable; Standard v2 calculates it from every transaction in the bounded
 fixed-count job rather than from one-second averages. See
 [`DATABASE_METHODOLOGY.md`](DATABASE_METHODOLOGY.md).
 
+Select **PostgreSQL Backup & Restore** for the separately versioned logical
+recovery drill. The Target must report `pg_dump`, `pg_restore`, `createdb`,
+`dropdb`, and `psql`. CloudMark measures backup and restore duration, compares
+the accounts/branches/tellers/history row counts, then removes the restored
+database and archive before cleaning the source cluster. Treat this as
+same-Target logical recovery evidence only—not snapshot, cross-zone DR, PITR,
+RPO, or RTO evidence.
+
 ### Dispatch a single-system profile to an Agent
 
 After an Agent is online, open **Compute & Memory** or **Storage Assessment**

@@ -55,9 +55,11 @@ The current development head implements domain 10 through
 `database-postgresql-v2`: a durable ephemeral PostgreSQL service, built-in
 pgbench throughput and connection-churn jobs, an exact fixed-count transaction
 tail workload, Linux Generator CPU validity, and verified Target/Generator
-cleanup. MySQL/MariaDB, Redis, checkpoint isolation, replication,
-backup/restore, and failover remain missing; database coverage therefore
-remains `Partial`.
+cleanup. A separate recovery profile adds same-Target logical backup/restore,
+four-table row-count verification, timing, and artifact cleanup. MySQL/MariaDB,
+Redis, checkpoint isolation, physical/PITR backup, replication, cross-zone
+recovery, and failover remain missing; database coverage therefore remains
+`Partial`.
 
 The current development head implements domain 9 through `web-http-v2`: an
 isolated Nginx service, fixed JSON/static payloads, a packaged Python dynamic

@@ -452,6 +452,23 @@ type Run = {
       };
       durability?: Record<string, string | number>;
     };
+    recovery?: {
+      status: "complete" | "partial" | "pending" | "not-requested";
+      type?: string;
+      backup_format?: string;
+      backup_duration_seconds?: number;
+      restore_duration_seconds?: number;
+      backup_bytes?: number;
+      verification?: {
+        source_row_counts?: Record<string, number>;
+        restored_row_counts?: Record<string, number>;
+        row_counts_match?: boolean;
+        expected_scale_shape_match?: boolean;
+      };
+      cleanup_verified?: boolean;
+      restore_database_removed?: boolean;
+      backup_artifact_removed?: boolean;
+    };
     cleanup?: { status: string; cleanup_verified?: boolean };
     analysis?: {
       scored: boolean;
@@ -592,6 +609,13 @@ type Run = {
         measurement_count: number;
         complete_measurement_count: number;
         sampling: string;
+      };
+      logical_recovery?: {
+        status: "complete" | "partial" | "unavailable";
+        required: boolean;
+        backup_duration_seconds?: number;
+        restore_duration_seconds?: number;
+        backup_bytes?: number;
       };
       concurrency_curves?: {
         scheme: string;
@@ -846,6 +870,7 @@ type Dashboard = {
         transactions_per_client?: number;
         timeout?: number;
       }[];
+      recovery_drill?: { type: string; timeout: number };
       protocol_probes?: { name: string; scheme: "https"; path: string }[];
     }>;
     web?: Record<string, {
@@ -1080,12 +1105,15 @@ export default function Home() {
     (item) => (item.transactions_per_client || 0) > 0,
   );
   const selectedDatabaseV2 = databaseProfile?.methodology_version === "database-postgresql-v2";
+  const selectedDatabaseRecovery = databaseProfile?.methodology_version === "database-postgresql-recovery-v1";
   const selectedDatabaseReady = Boolean(selectedSession)
     && ["target", "generator"].every((role) => {
       const agent = selectedSession?.agents.find((item) => item.role === role);
       const capabilities = agent?.system.inventory?.capabilities || {};
       return role === "target"
-        ? Boolean(capabilities.postgres && capabilities.initdb && capabilities.pgbench && capabilities.pg_isready)
+        ? Boolean(capabilities.postgres && capabilities.initdb && capabilities.pgbench && capabilities.pg_isready
+          && (!selectedDatabaseRecovery
+            || (capabilities.pg_dump && capabilities.pg_restore && capabilities.createdb && capabilities.dropdb && capabilities.psql)))
         : Boolean(capabilities.pgbench
           && (!selectedDatabaseV2 || (capabilities.pgbench_latency_log && capabilities.procfs_process_cpu)));
     });
@@ -1469,6 +1497,12 @@ export default function Home() {
     if (!targetCapabilities.postgres || !targetCapabilities.initdb || !targetCapabilities.pgbench || !targetCapabilities.pg_isready) {
       setNotice("The target Agent needs PostgreSQL server tools and pgbench. Install the CloudMark database pack and restart the Agent.");
       return;
+    }
+    if (dashboard?.profiles.database?.[selectedDatabaseProfile]?.methodology_version === "database-postgresql-recovery-v1") {
+      if (!targetCapabilities.pg_dump || !targetCapabilities.pg_restore || !targetCapabilities.createdb || !targetCapabilities.dropdb || !targetCapabilities.psql) {
+        setNotice("The PostgreSQL recovery profile requires pg_dump, pg_restore, createdb, dropdb, and psql on the Target.");
+        return;
+      }
     }
     if (!generator?.system.inventory?.capabilities?.pgbench) {
       setNotice("The generator Agent needs pgbench. Install the CloudMark database pack and restart the Agent.");
@@ -1986,8 +2020,8 @@ export default function Home() {
             {pairing && <section className="panel agent-commands"><div><span className="section-kicker">RUN ON PROVIDER VMS</span><h3>Target hosts PostgreSQL; Generator runs pgbench</h3></div><code>cloudmark agent --controller https://CONTROLLER --session {pairing.id} --token {pairing.join_token} --role target --advertise-address VM_A_IP</code><code>cloudmark agent --controller https://CONTROLLER --session {pairing.id} --token {pairing.join_token} --role generator --advertise-address VM_B_IP</code><p>Install the <strong>database</strong> pack on both machines before starting their Agents.</p></section>}
             <section className="panel session-panel">
               <div className="panel-head"><div><span className="section-kicker">PAIRED EXECUTION</span><h3>Database readiness</h3></div><label className="compact-select"><span>SESSION</span><select value={selectedSession?.id || ""} onChange={(event) => setSelectedSessionId(event.target.value)}>{dashboard?.sessions.map((session) => <option key={session.id} value={session.id}>{session.label} · {session.topology.scope} / {session.topology.verification.status} · {session.status}</option>)}</select></label></div>
-              {selectedSession ? <div className="agent-roster">{["target", "generator"].map((role) => { const agent = selectedSession.agents.find((item) => item.role === role); const capabilities = agent?.system.inventory?.capabilities || {}; const ready = role === "target" ? Boolean(capabilities.postgres && capabilities.initdb && capabilities.pgbench && capabilities.pg_isready) : Boolean(capabilities.pgbench && (!selectedDatabaseV2 || (capabilities.pgbench_latency_log && capabilities.procfs_process_cpu))); return <article key={role} className={agent && ready ? "connected" : "waiting"}><span>{role.toUpperCase()}</span><strong>{agent?.name || `Waiting for ${role}`}</strong><small>{agent ? `${agent.endpoint.address || "No advertised IP"} · ${ready ? selectedDatabaseV2 ? "Database v2 ready" : "Database v1 ready" : "database prerequisites missing"}` : "Join command has not connected"}</small></article>; })}</div> : <div className="empty-row">Create a session, then connect both provider Agents.</div>}
-              <div className="session-actions"><p><strong>{selectedSession?.status !== "ready" ? "Two Agents required" : selectedDatabaseReady ? "Pair ready" : "Database prerequisites missing"}</strong><small>Database v2 requires pgbench transaction logging and Linux process CPU accounting on the Generator.</small></p><button className="button primary" onClick={startDatabase} disabled={busy || Boolean(activeDatabase) || selectedSession?.status !== "ready" || !selectedDatabaseReady}>Run database assessment</button></div>
+              {selectedSession ? <div className="agent-roster">{["target", "generator"].map((role) => { const agent = selectedSession.agents.find((item) => item.role === role); const capabilities = agent?.system.inventory?.capabilities || {}; const ready = role === "target" ? Boolean(capabilities.postgres && capabilities.initdb && capabilities.pgbench && capabilities.pg_isready && (!selectedDatabaseRecovery || (capabilities.pg_dump && capabilities.pg_restore && capabilities.createdb && capabilities.dropdb && capabilities.psql))) : Boolean(capabilities.pgbench && (!selectedDatabaseV2 || (capabilities.pgbench_latency_log && capabilities.procfs_process_cpu))); return <article key={role} className={agent && ready ? "connected" : "waiting"}><span>{role.toUpperCase()}</span><strong>{agent?.name || `Waiting for ${role}`}</strong><small>{agent ? `${agent.endpoint.address || "No advertised IP"} · ${ready ? selectedDatabaseV2 ? "Database v2 ready" : selectedDatabaseRecovery ? "Recovery tools ready" : "Database v1 ready" : "database prerequisites missing"}` : "Join command has not connected"}</small></article>; })}</div> : <div className="empty-row">Create a session, then connect both provider Agents.</div>}
+              <div className="session-actions"><p><strong>{selectedSession?.status !== "ready" ? "Two Agents required" : selectedDatabaseReady ? "Pair ready" : "Database prerequisites missing"}</strong><small>{selectedDatabaseRecovery ? "Recovery requires fixed PostgreSQL logical backup/restore tools on the Target." : "Database v2 requires pgbench transaction logging and Linux process CPU accounting on the Generator."}</small></p><button className="button primary" onClick={startDatabase} disabled={busy || Boolean(activeDatabase) || selectedSession?.status !== "ready" || !selectedDatabaseReady}>Run database assessment</button></div>
             </section>
             {activeDatabase && <section className="panel run-progress" aria-live="polite"><div><span className="section-kicker">ACTIVE DATABASE RUN / {activeDatabase.id}</span><strong>{activeDatabase.current_job || activeDatabase.phase || "Preparing PostgreSQL"}</strong><small>{activeDatabase.completed_steps || 0} of {activeDatabase.total_steps || 1} steps · {Math.round((activeDatabase.progress || 0) * 100)}%</small></div><div className="progress-track"><i style={{ width: `${Math.max(2, (activeDatabase.progress || 0) * 100)}%` }} /></div><button className="button danger" onClick={cancelDatabase} disabled={busy || activeDatabase.cancel_requested}>{activeDatabase.cancel_requested ? "Cancelling" : "Cancel run"}</button></section>}
             <section className="panel database-results">
@@ -1998,7 +2032,8 @@ export default function Home() {
               {databaseMeasurements.map((measurement) => <article className="panel" key={measurement.name}><span>{measurement.workload.toUpperCase()} · C{measurement.clients} / J{measurement.threads}</span><strong>{measurement.metrics.latency_average_ms.toFixed(2)} ms</strong><small>{measurement.metrics.failed_transactions} failed · {measurement.metrics.transactions_processed.toLocaleString()} transactions</small></article>)}
               <article className="panel"><span>TRANSACTION TAIL LATENCY</span><strong>{databaseTailMeasurement?.metrics.transaction_latency?.latency_percentiles_ms ? `${databaseTailMeasurement.metrics.transaction_latency.latency_percentiles_ms.p99.toFixed(2)} ms p99` : "Unavailable"}</strong><small>{databaseTailMeasurement?.metrics.transaction_latency?.latency_percentiles_ms ? `${databaseTailMeasurement.metrics.transaction_latency.latency_percentiles_ms.p95.toFixed(2)} ms p95 · ${databaseTailMeasurement.metrics.transaction_latency.latency_percentiles_ms.p99_9.toFixed(2)} ms p99.9 · ${databaseTailMeasurement.metrics.transaction_latency.sample_count?.toLocaleString()} transactions` : "Fixed-count transaction evidence not available"}</small></article>
               <article className="panel"><span>GENERATOR CPU HEADROOM</span><strong>{databaseAnalysis?.generator_headroom?.status || "Unavailable"}</strong><small>{databaseAnalysis?.generator_headroom?.peak_process_cpu_percent_of_one_core?.toFixed(1) ?? "—"}% peak pgbench CPU of one core · {databaseAnalysis?.generator_headroom?.peak_host_utilization_percent?.toFixed(1) ?? "—"}% host CPU</small></article>
-              <article className={`panel ${databaseAnalysis?.validity?.comparison_eligible ? "cleanup-evidence verified" : "cleanup-evidence unknown"}`}><span>MEASUREMENT VALIDITY</span><strong>{databaseAnalysis?.validity?.comparison_eligible ? "Comparable" : "Not comparable"}</strong><small>{databaseAnalysis?.validity?.reason_codes?.join(" · ") || "Generator, transaction tail, and cleanup evidence complete"}</small></article>
+              <article className={`panel ${databaseAnalysis?.validity?.comparison_eligible ? "cleanup-evidence verified" : "cleanup-evidence unknown"}`}><span>MEASUREMENT VALIDITY</span><strong>{databaseAnalysis?.validity?.comparison_eligible ? "Comparable" : "Not comparable"}</strong><small>{databaseAnalysis?.validity?.reason_codes?.join(" · ") || "All methodology-required evidence and cleanup complete"}</small></article>
+              {latestDatabase?.result?.recovery?.type && <article className="panel"><span>LOGICAL BACKUP &amp; RESTORE</span><strong>{latestDatabase.result.recovery.status === "complete" ? "Verified" : "Incomplete"}</strong><small>{latestDatabase.result.recovery.backup_duration_seconds?.toFixed(2) ?? "—"}s backup · {latestDatabase.result.recovery.restore_duration_seconds?.toFixed(2) ?? "—"}s restore · {formatBytes(latestDatabase.result.recovery.backup_bytes)} · row counts {latestDatabase.result.recovery.verification?.row_counts_match ? "match" : "do not match"}</small></article>}
               <article className={`panel cleanup-evidence ${latestDatabase?.result?.cleanup?.cleanup_verified ? "verified" : "unknown"}`}><span>EPHEMERAL CLEANUP</span><strong>{latestDatabase?.result?.cleanup?.cleanup_verified ? "Verified" : "Unavailable"}</strong><small>{latestDatabase?.result?.server?.estimated_dataset_bytes ? `${formatBytes(latestDatabase.result.server.estimated_dataset_bytes)} estimated dataset` : "Dataset size unavailable"}</small></article>
             </section>}
           </div>

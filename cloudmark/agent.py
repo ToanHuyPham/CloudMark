@@ -37,6 +37,7 @@ from .database_benchmark import (
     DatabaseBenchmarkError,
     parse_pgbench_latency_log,
     parse_pgbench_output,
+    parse_pgbench_row_counts,
 )
 from .inventory import collect_inventory
 from .network import (
@@ -1947,6 +1948,7 @@ class AgentWorker:
             (data_dir / "pg_hba.conf").write_text(
                 "local all cloudmark trust\n"
                 "host postgres cloudmark 127.0.0.1/32 trust\n"
+                "host cloudmark_restore cloudmark 127.0.0.1/32 trust\n"
                 "host postgres cloudmark ::1/128 trust\n"
                 f"host postgres cloudmark {allowed_client}/{prefix} trust\n",
                 encoding="utf-8",
@@ -2292,6 +2294,192 @@ class AgentWorker:
                 "tool": {"name": "pgbench", "version": tool_version(pgbench)},
                 "raw": {"stdout": stdout, "stderr": stderr},
             }
+        }
+
+    def _run_database_recovery(self, task_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+        server_task_id = str(payload.get("server_task_id", ""))
+        active = self.active_database_servers.get(server_task_id)
+        if not active:
+            raise DatabaseBenchmarkError("Database recovery requires the active CloudMark PostgreSQL service.")
+        if str(payload.get("methodology_version", "")) != "database-postgresql-recovery-v1":
+            raise DatabaseBenchmarkError("Database recovery methodology is outside the installed contract.")
+        completed_steps = int(payload.get("run_completed_steps", 0))
+        total_steps = int(payload.get("run_total_steps", 1))
+        if not 0 <= completed_steps < total_steps <= 64:
+            raise DatabaseBenchmarkError("Database recovery progress metadata is invalid.")
+        recovery_root = (active.root / "logical-recovery").resolve()
+        try:
+            recovery_root.relative_to(active.root.resolve())
+        except ValueError as exc:
+            raise DatabaseBenchmarkError("Database recovery path escaped the active service workspace.") from exc
+        if recovery_root.exists():
+            raise DatabaseBenchmarkError("Database recovery found a residual recovery directory.")
+        estimated_dataset_bytes = active.scale_factor * 20 * 1024 * 1024
+        disk = shutil.disk_usage(active.root)
+        reserve = max(1024**3, int(disk.total * 0.05))
+        if disk.free < reserve + estimated_dataset_bytes * 2:
+            raise DatabaseBenchmarkError("Insufficient free space for logical backup, restore, and reserve.")
+        recovery_root.mkdir(exist_ok=False)
+        backup_path = recovery_root / "cloudmark.dump"
+        restore_database = "cloudmark_restore"
+        environment = os.environ.copy()
+        environment["LC_ALL"] = "C"
+        environment["PGCONNECT_TIMEOUT"] = "5"
+        pg_dump = self._postgres_tool("pg_dump")
+        pg_restore = self._postgres_tool("pg_restore")
+        createdb = self._postgres_tool("createdb")
+        dropdb = self._postgres_tool("dropdb")
+        psql = self._postgres_tool("psql")
+        base_connection = ["-h", "127.0.0.1", "-p", str(active.port), "-U", "cloudmark"]
+        count_query = (
+            "SELECT (SELECT count(*) FROM pgbench_accounts),"
+            "(SELECT count(*) FROM pgbench_branches),"
+            "(SELECT count(*) FROM pgbench_tellers),"
+            "(SELECT count(*) FROM pgbench_history);"
+        )
+        restored_database_created = False
+        dropped_restore = False
+
+        def guarded(command: list[str], *, stage: str, timeout: int) -> tuple[str, str, float]:
+            started = time.monotonic()
+            code, stdout, stderr = self._guarded_service_process(
+                task_id,
+                command,
+                environment=environment,
+                expected_duration=timeout,
+                phase="database-recovery",
+                current_job=stage,
+                completed_steps=completed_steps,
+                total_steps=total_steps,
+            )
+            elapsed = round(time.monotonic() - started, 6)
+            if code != 0:
+                raise DatabaseBenchmarkError(
+                    stderr.strip() or stdout.strip() or f"PostgreSQL recovery stage failed: {stage}."
+                )
+            return stdout, stderr, elapsed
+
+        try:
+            source_stdout, _, verify_source_seconds = guarded(
+                [
+                    psql,
+                    *base_connection,
+                    "-d",
+                    "postgres",
+                    "-At",
+                    "-v",
+                    "ON_ERROR_STOP=1",
+                    "-c",
+                    count_query,
+                ],
+                stage="source-row-counts",
+                timeout=30,
+            )
+            source_counts = parse_pgbench_row_counts(source_stdout)
+            _, _, backup_seconds = guarded(
+                [
+                    pg_dump,
+                    *base_connection,
+                    "-d",
+                    "postgres",
+                    "-Fc",
+                    "-Z",
+                    "0",
+                    "-f",
+                    str(backup_path),
+                ],
+                stage="logical-backup",
+                timeout=300,
+            )
+            if not backup_path.is_file():
+                raise DatabaseBenchmarkError("PostgreSQL logical backup did not create its fixed artifact.")
+            backup_bytes = backup_path.stat().st_size
+            if backup_bytes <= 0 or backup_bytes > estimated_dataset_bytes * 2:
+                raise DatabaseBenchmarkError("PostgreSQL logical backup size is outside the bounded contract.")
+            guarded(
+                [createdb, *base_connection, "-T", "template0", restore_database],
+                stage="create-restore-database",
+                timeout=30,
+            )
+            restored_database_created = True
+            _, _, restore_seconds = guarded(
+                [
+                    pg_restore,
+                    *base_connection,
+                    "-d",
+                    restore_database,
+                    "--exit-on-error",
+                    "--no-owner",
+                    "--no-privileges",
+                    str(backup_path),
+                ],
+                stage="logical-restore",
+                timeout=300,
+            )
+            restored_stdout, _, verify_restore_seconds = guarded(
+                [
+                    psql,
+                    *base_connection,
+                    "-d",
+                    restore_database,
+                    "-At",
+                    "-v",
+                    "ON_ERROR_STOP=1",
+                    "-c",
+                    count_query,
+                ],
+                stage="restored-row-counts",
+                timeout=30,
+            )
+            restored_counts = parse_pgbench_row_counts(restored_stdout)
+            row_counts_match = source_counts == restored_counts
+            expected_shape = {
+                "accounts": active.scale_factor * 100_000,
+                "branches": active.scale_factor,
+                "tellers": active.scale_factor * 10,
+            }
+            expected_shape_match = all(source_counts[key] == value for key, value in expected_shape.items())
+        finally:
+            if restored_database_created:
+                try:
+                    drop_result = subprocess.run(
+                        [dropdb, *base_connection, "--if-exists", restore_database],
+                        capture_output=True,
+                        text=True,
+                        timeout=30,
+                        check=False,
+                        shell=False,
+                        env=environment,
+                        creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+                    )
+                    dropped_restore = drop_result.returncode == 0
+                except (OSError, subprocess.TimeoutExpired):
+                    dropped_restore = False
+            recovery_root_removed = self._remove_database_root(recovery_root)
+        cleanup_verified = dropped_restore and recovery_root_removed
+        return {
+            "status": "complete" if row_counts_match and expected_shape_match and cleanup_verified else "partial",
+            "type": "logical-backup-restore",
+            "backup_format": "pg_dump-custom-uncompressed",
+            "backup_duration_seconds": backup_seconds,
+            "restore_duration_seconds": restore_seconds,
+            "source_verification_seconds": verify_source_seconds,
+            "restored_verification_seconds": verify_restore_seconds,
+            "backup_bytes": backup_bytes,
+            "verification": {
+                "source_row_counts": source_counts,
+                "restored_row_counts": restored_counts,
+                "row_counts_match": row_counts_match,
+                "expected_scale_shape_match": expected_shape_match,
+            },
+            "cleanup_verified": cleanup_verified,
+            "restore_database_removed": dropped_restore,
+            "backup_artifact_removed": recovery_root_removed,
+            "tools": {
+                "pg_dump": tool_version(pg_dump),
+                "pg_restore": tool_version(pg_restore),
+                "psql": tool_version(psql),
+            },
         }
 
     def _stop_database_task(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -3045,6 +3233,8 @@ class AgentWorker:
             return self._start_database_server(str(task["id"]), payload)
         if kind == "database-client":
             return self._run_database_client(str(task["id"]), payload)
+        if kind == "database-recovery-drill":
+            return self._run_database_recovery(str(task["id"]), payload)
         if kind == "database-server-stop":
             return self._stop_database_task(payload)
         if kind == "web-service-start":

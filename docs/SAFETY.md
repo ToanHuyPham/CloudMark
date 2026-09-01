@@ -143,6 +143,15 @@ systems.
 - The Target watchdog stops PostgreSQL and removes the generated cluster after
   success, failure, timeout, cancellation, or more than 20 seconds without
   successful Controller contact.
+- The logical recovery profile accepts no caller-controlled database name,
+  query, path, format, or tool argument. It uses fixed loopback connections,
+  the `cloudmark_restore` database, a custom-format uncompressed archive, and
+  four fixed pgbench row-count queries.
+- Recovery begins only after Generator load completes. Free space must cover
+  twice the estimated dataset plus the normal reserve. The archive may not
+  exceed twice the estimate. The restored database and archive are removed on
+  success and best-effort cleanup runs on failure; unverified recovery cleanup
+  makes the Run comparison-ineligible.
 
 ## Web, API, and TLS
 

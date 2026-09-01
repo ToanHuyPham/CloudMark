@@ -216,6 +216,11 @@ def collect_inventory(workspace: Path | None = None) -> dict[str, Any]:
                 pgbench and postgres_tool_supports("pgbench", pgbench, "transaction-log")
             ),
             "pg_isready": find_postgres_binary("pg_isready") is not None,
+            "pg_dump": find_postgres_binary("pg_dump") is not None,
+            "pg_restore": find_postgres_binary("pg_restore") is not None,
+            "createdb": find_postgres_binary("createdb") is not None,
+            "dropdb": find_postgres_binary("dropdb") is not None,
+            "psql": find_postgres_binary("psql") is not None,
             "nginx": nginx is not None,
             "nginx_http2": bool(nginx and web_tool_supports("nginx", nginx, "http2")),
             "ab": find_web_binary("ab") is not None,

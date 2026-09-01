@@ -176,6 +176,11 @@ Generator. Standard Database v2 additionally requires
 `pgbench_latency_log` and `procfs_process_cpu` on the Generator. Verify
 `comparison_eligible`, Target `cleanup_verified`, exact tail sample count, and
 Generator log cleanup before treating the Run as comparable evidence.
+For `PostgreSQL Backup & Restore`, the Target additionally requires `pg_dump`,
+`pg_restore`, `createdb`, `dropdb`, and `psql`. Review source/restored row-count
+equality, expected scale shape, backup size, restore timing, recovery cleanup,
+and final cluster cleanup. This is same-Target logical recovery evidence, not a
+provider snapshot or cross-zone disaster-recovery claim.
 
 For Web/API/TLS peer profiles, install the web pack on both Agents and run the
 Target Agent as a non-root account. Allow TCP `58080` and `58443` only between
@@ -237,6 +242,8 @@ be interpreted as HTTP/2 throughput.
 - verify the Generator reports `pgbench`;
 - for Standard v2, verify the Generator also reports `pgbench_latency_log` and
   `procfs_process_cpu`;
+- for Backup & Restore, verify the Target reports `pg_dump`, `pg_restore`,
+  `createdb`, `dropdb`, and `psql`;
 - restart each Agent after installing the database pack so inventory refreshes;
 - verify TCP `55432` is reachable only from the Generator peer address;
 - run the Target Agent as a non-root account;

@@ -223,12 +223,19 @@ Standard Database v2 additionally requires Generator `pgbench_latency_log` and
 `procfs_process_cpu` capabilities.
 `confirm_database_load` is mandatory because the run creates a temporary
 dataset and generates read/write transactions. Supported profiles are
-`postgres-peer-quick` and `postgres-peer-standard`. The result contains
+`postgres-peer-quick`, `postgres-peer-standard`, and
+`postgres-peer-recovery`. The result contains
 `database_measurements`, fixed durability settings, tool versions, target and
 generator identity, Generator CPU validity, exact fixed-count transaction
 P50/P95/P99/P99.9, Generator-log cleanup, comparison eligibility, and Target
 cleanup evidence. Transaction traffic never traverses
 the Controller.
+The recovery profile adds one Target-side
+`database-postgresql-recovery-v1` logical drill after its fixed workload. It
+returns backup bytes, backup/restore duration, four source/restored pgbench row
+counts, scale-shape validation, recovery-artifact cleanup, and final cluster
+cleanup. The API cannot provide a database name, SQL query, path, archive
+format, or recovery command argument.
 
 ## Create a Web/API/TLS peer run
 
