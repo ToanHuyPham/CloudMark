@@ -42,7 +42,9 @@ from cloudmark.compute import ComputeError, parse_sysbench_cpu, run_system_bench
 from cloudmark.database import Database
 from cloudmark.database_benchmark import (
     DatabaseBenchmarkError,
+    _database_analysis,
     database_total_steps,
+    parse_pgbench_latency_log,
     parse_pgbench_output,
     run_database,
     validate_database_run,
@@ -76,7 +78,7 @@ from cloudmark.runner import CancellationToken, JobContext, ProcessResult, RunCa
 from cloudmark.server import CloudMarkController, Handler, Server, _dashboard_run_summaries, _json_bytes
 from cloudmark.suitability import SCENARIO_REQUIREMENTS, _run_valid, evaluate_suitability
 from cloudmark.topology import assess_pairing_topology
-from cloudmark.tooling import web_tool_supports
+from cloudmark.tooling import postgres_tool_supports, web_tool_supports
 from cloudmark.web_benchmark import (
     WebBenchmarkError,
     _web_analysis,
@@ -337,6 +339,22 @@ class CloudMarkTests(unittest.TestCase):
         valid, reason = _run_valid(run)
         self.assertFalse(valid)
         self.assertIn("web v2", reason.lower())
+
+    def test_suitability_rejects_database_v2_without_comparison_validity(self) -> None:
+        run = {
+            "suite": "database",
+            "profile": "postgres-peer-standard",
+            "status": "completed",
+            "methodology_version": "database-postgresql-v2",
+            "result": {
+                "methodology_version": "database-postgresql-v2",
+                "cleanup": {"cleanup_verified": True},
+                "analysis": {"validity": {"comparison_eligible": False}},
+            },
+        }
+        valid, reason = _run_valid(run)
+        self.assertFalse(valid)
+        self.assertIn("database v2", reason.lower())
 
     def test_provider_observations_require_exact_repeated_sampling_contract(self) -> None:
         now = datetime.now(timezone.utc)
@@ -2154,6 +2172,69 @@ tps = 941.176470 (without initial connection time)
         self.assertEqual(metrics["progress"][0]["failed"], 1)
         self.assertEqual(metrics["tail_latency_status"], "unavailable")
 
+    def test_database_v2_parses_exact_fixed_transaction_tail_percentiles(self) -> None:
+        evidence = parse_pgbench_latency_log(
+            "0 1 1000 0 1 1\n0 2 2000 0 1 2\n0 3 3000 0 1 3\n0 4 4000 0 1 4\n0 5 5000 0 1 5\n",
+            expected_transactions=5,
+        )
+        self.assertEqual(evidence["status"], "complete")
+        self.assertEqual(evidence["sample_count"], 5)
+        self.assertEqual(evidence["latency_percentiles_ms"]["p50"], 3.0)
+        self.assertEqual(evidence["latency_percentiles_ms"]["p99"], 5.0)
+        self.assertEqual(evidence["latency_percentiles_ms"]["p99_9"], 5.0)
+        partial = parse_pgbench_latency_log(
+            "0 1 1000 0 1 1\nmalformed\n",
+            expected_transactions=2,
+        )
+        self.assertEqual(partial["status"], "partial")
+        self.assertEqual(partial["invalid_rows"], 1)
+
+    def test_database_v2_requires_pgbench_fixed_transaction_log_support(self) -> None:
+        responses = [
+            SimpleNamespace(
+                returncode=0,
+                stdout="--log write transaction times --transactions=NUM run NUM transactions\n",
+                stderr="",
+            ),
+            SimpleNamespace(returncode=0, stdout="--transactions=NUM\n", stderr=""),
+        ]
+        with patch("cloudmark.tooling.subprocess.run", side_effect=responses):
+            self.assertTrue(postgres_tool_supports("pgbench", "pgbench", "transaction-log"))
+            self.assertFalse(postgres_tool_supports("pgbench", "pgbench", "transaction-log"))
+
+    def test_database_v2_analysis_rejects_generator_or_tail_evidence_gaps(self) -> None:
+        result = {
+            "methodology_version": "database-postgresql-v2",
+            "database_measurements": [
+                {
+                    "name": "tpcb-like-c4",
+                    "transactions_per_client": 0,
+                    "generator_cpu": {
+                        "status": "observed",
+                        "peak_process_cpu_percent_of_one_core": 95.0,
+                        "peak_host_utilization_percent": 40.0,
+                    },
+                },
+                {
+                    "name": "tpcb-like-tail-c4",
+                    "transactions_per_client": 1000,
+                    "client_log_cleanup_verified": True,
+                    "metrics": {"transaction_latency": {"status": "complete"}},
+                },
+            ],
+            "cleanup": {"cleanup_verified": True},
+        }
+        constrained = _database_analysis(result)
+        self.assertEqual(constrained["generator_headroom"]["status"], "constrained")
+        self.assertFalse(constrained["validity"]["comparison_eligible"])
+        result["database_measurements"][0]["generator_cpu"]["peak_process_cpu_percent_of_one_core"] = 40.0
+        adequate = _database_analysis(result)
+        self.assertEqual(adequate["transaction_tail_latency"]["status"], "complete")
+        self.assertTrue(adequate["validity"]["comparison_eligible"])
+        result["database_measurements"][1]["client_log_cleanup_verified"] = False
+        incomplete = _database_analysis(result)
+        self.assertFalse(incomplete["validity"]["comparison_eligible"])
+
     def test_database_run_requires_postgresql_capabilities_on_the_correct_roles(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             database = Database(Path(directory) / "test.sqlite3")
@@ -2178,6 +2259,39 @@ tps = 941.176470 (without initial connection time)
             _, target, generator = validate_database_run(database, "session_db", "postgres-peer-quick")
             self.assertEqual(target["id"], "agent_target")
             self.assertEqual(generator["id"], "agent_generator")
+            with self.assertRaisesRegex(ValueError, "pgbench_latency_log"):
+                validate_database_run(database, "session_db", "postgres-peer-standard")
+
+            database.create_session("session_db_v2", "database-v2", "hash", "2099-01-01T00:00:00+00:00")
+            database.add_agent(
+                "agent_target_v2",
+                "session_db_v2",
+                "target-v2",
+                "target",
+                target_system,
+                endpoint={"address": "10.0.1.10"},
+            )
+            database.add_agent(
+                "agent_generator_v2",
+                "session_db_v2",
+                "generator-v2",
+                "generator",
+                {
+                    "inventory": {
+                        "capabilities": {
+                            "pgbench": True,
+                            "pgbench_latency_log": True,
+                            "procfs_process_cpu": True,
+                        }
+                    }
+                },
+                endpoint={"address": "10.0.1.11"},
+            )
+            _, target_v2, generator_v2 = validate_database_run(
+                database, "session_db_v2", "postgres-peer-standard"
+            )
+            self.assertEqual(target_v2["id"], "agent_target_v2")
+            self.assertEqual(generator_v2["id"], "agent_generator_v2")
 
     def test_agent_builds_only_allowlisted_pgbench_commands(self) -> None:
         worker = AgentWorker("http://127.0.0.1:8787", "agent", "token")
@@ -2226,6 +2340,123 @@ tps = 400.000000 (without initial connection time)
                 },
             )
 
+    def test_agent_database_v2_uses_fixed_transactions_and_cleans_generator_logs(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            worker = AgentWorker(
+                "http://127.0.0.1:8787",
+                "agent",
+                "token",
+                workspace=Path(directory) / "agent",
+            )
+            summary = (
+                "number of transactions actually processed: 4000\n"
+                "number of failed transactions: 0 (0.000%)\n"
+                "latency average = 2.500 ms\n"
+                "initial connection time = 4.000 ms\n"
+                "tps = 1600.000000 (without initial connection time)\n"
+            )
+            measured_log_root: Path | None = None
+
+            def guarded(_task_id: str, command: list[str], **kwargs: object) -> tuple[int, str, str]:
+                nonlocal measured_log_root
+                if "--log" not in command:
+                    return 0, "warmup", ""
+                measured_log_root = kwargs["working_directory"]  # type: ignore[assignment]
+                assert isinstance(measured_log_root, Path)
+                rows = "".join(
+                    f"{index % 4} {index + 1} {1000 + index} 0 1 1\n"
+                    for index in range(4000)
+                )
+                (measured_log_root / "pgbench_log.1234").write_text(rows, encoding="utf-8")
+                samples = kwargs["cpu_samples"]
+                assert isinstance(samples, list)
+                samples.append({
+                    "host_utilization_percent": 35.0,
+                    "host_steal_percent": 0.1,
+                    "process_cpu_percent_of_one_core": 40.0,
+                })
+                return 0, summary, ""
+
+            with patch.object(worker, "_postgres_tool", return_value="pgbench"), patch.object(
+                worker, "_guarded_service_process", side_effect=guarded
+            ) as process, patch("cloudmark.agent.tool_version", return_value="pgbench 16.2"):
+                result = worker._run_database_client(
+                    "task_tail123",
+                    {
+                        "target_address": "10.0.0.10",
+                        "port": 55432,
+                        "workload": "tpcb-like",
+                        "clients": 4,
+                        "threads": 2,
+                        "duration_seconds": 0,
+                        "warmup_seconds": 3,
+                        "transactions_per_client": 1000,
+                        "methodology_version": "database-postgresql-v2",
+                        "run_completed_steps": 8,
+                        "run_total_steps": 10,
+                    },
+                )
+            measured_command = process.call_args_list[1].args[1]
+            self.assertIn("--log", measured_command)
+            self.assertEqual(measured_command[measured_command.index("-t") + 1], "1000")
+            self.assertNotIn("-T", measured_command)
+            self.assertEqual(
+                result["pgbench"]["metrics"]["transaction_latency"]["status"],
+                "complete",
+            )
+            self.assertEqual(
+                result["pgbench"]["metrics"]["transaction_latency"]["sample_count"],
+                4000,
+            )
+            self.assertEqual(result["pgbench"]["generator_cpu"]["status"], "observed")
+            self.assertTrue(result["pgbench"]["client_log_cleanup_verified"])
+            assert measured_log_root is not None
+            self.assertFalse(measured_log_root.exists())
+
+    def test_agent_database_v2_cleans_generator_logs_after_client_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory) / "agent"
+            worker = AgentWorker(
+                "http://127.0.0.1:8787",
+                "agent",
+                "token",
+                workspace=workspace,
+            )
+            calls = 0
+
+            def guarded(_task_id: str, command: list[str], **kwargs: object) -> tuple[int, str, str]:
+                nonlocal calls
+                calls += 1
+                if "--log" not in command:
+                    return 0, "warmup", ""
+                root = kwargs["working_directory"]
+                assert isinstance(root, Path)
+                (root / "pgbench_log.1234").write_text("0 1 1000 0 1 1\n", encoding="utf-8")
+                raise AgentBenchmarkFailure("simulated client failure", status="failed", result=None)
+
+            with patch.object(worker, "_postgres_tool", return_value="pgbench"), patch.object(
+                worker, "_guarded_service_process", side_effect=guarded
+            ):
+                with self.assertRaisesRegex(AgentBenchmarkFailure, "simulated client failure"):
+                    worker._run_database_client(
+                        "task_tailfail",
+                        {
+                            "target_address": "10.0.0.10",
+                            "port": 55432,
+                            "workload": "tpcb-like",
+                            "clients": 4,
+                            "threads": 2,
+                            "duration_seconds": 0,
+                            "warmup_seconds": 3,
+                            "transactions_per_client": 1000,
+                            "methodology_version": "database-postgresql-v2",
+                            "run_completed_steps": 8,
+                            "run_total_steps": 10,
+                        },
+                    )
+            self.assertEqual(calls, 2)
+            self.assertFalse((workspace / "database-client-logs" / "task_tailfail").exists())
+
     def test_agent_refuses_database_cleanup_outside_its_workspace(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory) / "agent"
@@ -2234,6 +2465,8 @@ tps = 400.000000 (without initial connection time)
             worker = AgentWorker("http://127.0.0.1:8787", "agent", "token", workspace=workspace)
             with self.assertRaisesRegex(DatabaseBenchmarkError, "outside"):
                 worker._remove_database_root(outside)
+            with self.assertRaisesRegex(DatabaseBenchmarkError, "outside"):
+                worker._remove_database_client_log_root(outside)
             self.assertTrue(outside.exists())
 
     def test_agent_database_watchdog_cleans_up_after_controller_contact_loss(self) -> None:
@@ -2357,6 +2590,126 @@ tps = 400.000000 (without initial connection time)
             self.assertEqual(len(result["database_measurements"]), 3)
             self.assertTrue(result["cleanup"]["cleanup_verified"])
             self.assertFalse(result["policy"]["controller_in_data_path"])
+
+    def test_database_v2_orchestrator_requires_generator_tail_and_cleanup_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            database = Database(Path(directory) / "test.sqlite3")
+            database.create_session("session_db_v2", "database-v2", "hash", "2099-01-01T00:00:00+00:00")
+            target_system = {
+                "inventory": {
+                    "capabilities": {"postgres": True, "initdb": True, "pgbench": True, "pg_isready": True}
+                }
+            }
+            generator_system = {
+                "inventory": {
+                    "capabilities": {
+                        "pgbench": True,
+                        "pgbench_latency_log": True,
+                        "procfs_process_cpu": True,
+                    }
+                }
+            }
+            database.add_agent(
+                "agent_target_v2",
+                "session_db_v2",
+                "target-v2",
+                "target",
+                target_system,
+                endpoint={"address": "10.0.0.10"},
+            )
+            database.add_agent(
+                "agent_generator_v2",
+                "session_db_v2",
+                "generator-v2",
+                "generator",
+                generator_system,
+                endpoint={"address": "10.0.0.11"},
+            )
+            total_steps = database_total_steps("postgres-peer-standard")
+            database.create_run(
+                "run_database_v2",
+                "database",
+                "postgres-peer-standard",
+                {"suite": "database"},
+                total_steps=total_steps,
+            )
+            done = threading.Event()
+
+            def complete_tasks() -> None:
+                while not done.is_set():
+                    handled = False
+                    for agent_id in ("agent_target_v2", "agent_generator_v2"):
+                        task = database.claim_agent_task(agent_id)
+                        if not task:
+                            continue
+                        handled = True
+                        if task["kind"] == "database-server-start":
+                            task_result = {"ready": True, "engine": "postgresql", "scale_factor": 50}
+                        elif task["kind"] == "database-client":
+                            fixed_transactions = int(task["payload"].get("transactions_per_client", 0))
+                            metrics: dict[str, object] = {
+                                "transactions_per_second": 1200.0,
+                                "latency_average_ms": 4.0,
+                            }
+                            if fixed_transactions:
+                                metrics["transaction_latency"] = {
+                                    "status": "complete",
+                                    "sample_count": 4000,
+                                    "expected_transactions": 4000,
+                                    "latency_percentiles_ms": {
+                                        "p50": 2.0,
+                                        "p95": 5.0,
+                                        "p99": 8.0,
+                                        "p99_9": 12.0,
+                                        "maximum": 15.0,
+                                    },
+                                }
+                            task_result = {
+                                "pgbench": {
+                                    "workload": task["payload"]["workload"],
+                                    "clients": task["payload"]["clients"],
+                                    "threads": task["payload"]["threads"],
+                                    "duration_seconds": task["payload"]["duration_seconds"],
+                                    "transactions_per_client": fixed_transactions,
+                                    "metrics": metrics,
+                                    "generator_cpu": (
+                                        {"status": "unavailable"}
+                                        if fixed_transactions
+                                        else {
+                                            "status": "observed",
+                                            "peak_process_cpu_percent_of_one_core": 45.0,
+                                            "peak_host_utilization_percent": 35.0,
+                                        }
+                                    ),
+                                    "client_log_cleanup_verified": True if fixed_transactions else None,
+                                }
+                            }
+                        else:
+                            task_result = {"status": "completed", "cleanup_verified": True}
+                        database.finish_agent_task(task["id"], agent_id, status="completed", result=task_result)
+                    if not handled:
+                        time.sleep(0.005)
+
+            worker = threading.Thread(target=complete_tasks, daemon=True)
+            worker.start()
+            try:
+                context = JobContext("run_database_v2", total_steps=total_steps, timeout_seconds=60)
+                result = run_database(
+                    database,
+                    "run_database_v2",
+                    "session_db_v2",
+                    "postgres-peer-standard",
+                    context=context,
+                )
+            finally:
+                done.set()
+                worker.join(timeout=2)
+            self.assertEqual(total_steps, 10)
+            self.assertEqual(len(result["database_measurements"]), 8)
+            self.assertEqual(result["analysis"]["generator_headroom"]["status"], "adequate")
+            self.assertEqual(result["analysis"]["transaction_tail_latency"]["status"], "complete")
+            self.assertTrue(result["analysis"]["validity"]["comparison_eligible"])
+            self.assertTrue(result["cleanup"]["cleanup_verified"])
 
     def test_controller_admits_only_confirmed_database_pair_runs(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -3168,11 +3521,22 @@ Percentage of the requests served within a certain time (ms)
 
     def test_database_profiles_are_versioned_and_bounded(self) -> None:
         self.assertEqual(database_total_steps("postgres-peer-quick"), 5)
-        self.assertEqual(database_total_steps("postgres-peer-standard"), 9)
+        self.assertEqual(database_total_steps("postgres-peer-standard"), 10)
+        self.assertEqual(
+            DATABASE_PROFILES["postgres-peer-quick"]["methodology_version"],
+            "database-postgresql-v1",
+        )
+        self.assertEqual(
+            DATABASE_PROFILES["postgres-peer-standard"]["methodology_version"],
+            "database-postgresql-v2",
+        )
+        self.assertEqual(DATABASE_PROFILES["postgres-peer-standard"]["profile_version"], "2.0")
         for profile in DATABASE_PROFILES.values():
-            self.assertEqual(profile["methodology_version"], "database-postgresql-v1")
             self.assertLessEqual(profile["scale_factor"], 100)
             self.assertTrue(all(job["duration"] <= 60 for job in profile["jobs"]))
+        tail_job = DATABASE_PROFILES["postgres-peer-standard"]["jobs"][-1]
+        self.assertEqual(tail_job["transactions_per_client"], 1000)
+        self.assertEqual(tail_job["clients"] * tail_job["transactions_per_client"], 4000)
 
     def test_bootstrap_web_pack_includes_nginx_apachebench_and_openssl(self) -> None:
         with patch("cloudmark.bootstrap.detect_manager", return_value="apt"):

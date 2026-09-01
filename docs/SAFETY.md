@@ -123,6 +123,19 @@ systems.
   or 5% free space.
 - Port, scale factor, client count, thread count, duration, database name,
   username, server settings, and pgbench scripts are allow-listed.
+- Database v2 permits exactly one fixed-count tail shape: four clients, 1,000
+  transactions per client, the built-in TPC-B-like script, and a 120-second
+  task deadline. The Agent-wide ceiling is 16,000 transactions; no API caller
+  can supply a transaction count or logging path.
+- Generator pgbench logs are created only below a generated
+  `database-client-logs/task_*` directory, parsed up to 8 MiB and 20,000 rows,
+  and removed after success, failure, cancellation, timeout, or parser error.
+  Exact row-count mismatch, malformed data, or truncation remains partial
+  evidence rather than an invented percentile.
+- Timed Database v2 jobs sample only Linux `/proc/stat` and the active pgbench
+  `/proc/<pid>/stat`, cap evidence at 120 summaries, and become
+  comparison-ineligible when pgbench reaches 90% of one logical CPU. No CPU
+  configuration is changed.
 - Host authentication permits only the exact paired Generator address. No
   database password or generated secret is persisted in a task payload.
 - Durability settings stay enabled. The executor does not present an unsafe

@@ -27,7 +27,7 @@ timestamp, and raw result.
 | Available | Authenticated persistent agents, heartbeat, and durable task queues |
 | Available | Explicit remote Agent dispatch for CPU, memory, and storage with live progress, cancellation, and result attribution |
 | Partial | Guarded peer network executor: pre/post interface counters, route/MTU, read-only NIC/TCP-control evidence, directional TCP scaling, idle/loaded RTT, adaptive UDP sweeps, and simultaneous bidirectional TCP |
-| Partial | Guarded two-Agent PostgreSQL/pgbench profiles with durable settings and verified ephemeral cleanup |
+| Partial | Guarded PostgreSQL v2 with durable throughput, exact fixed-count P50/P95/P99/P99.9 transaction latency, Generator CPU validity, and verified cleanup |
 | Partial | Guarded two-Agent Web v2 with Nginx, a packaged dynamic reverse-proxy application, Generator CPU validity, HTTP/TLS tail latency, static transfer, and HTTP/2 negotiation |
 | Available | Target-scoped, versioned Essential/Standard/Demanding workload gates with per-check run provenance and explicit unknown evidence |
 | Available | Exact-cohort repeated-window provider observations with median, P10/P90, best/worst, spread, topology/evidence-class contracts, and guarded comparison eligibility |
@@ -168,14 +168,14 @@ Version `0.5.0` adds authenticated remote dispatch of CPU, memory, and storage
 profiles, per-task heartbeat and cancellation, same-target load exclusion,
 provider/Agent attribution, and strict result-version validation. The current
 development head also implements the versioned `network-v9` Standard profile,
-`database-postgresql-v1`, and Standard `web-http-v2` while preserving the Web
-v1 Quick contract.
+Standard `database-postgresql-v2`, and Standard `web-http-v2` while preserving
+the Database/Web v1 Quick contracts.
 Compute and memory remain `Partial` until floating-point, crypto, compilation,
 latency, NUMA, and broader architecture coverage are implemented. Network
 remains partial until driver per-queue evidence is normalized across more NICs,
 controlled DNS coverage, cross-pair repeated windows, administrative path verification, and mTLS
-enrollment are implemented. PostgreSQL remains
-partial until tail latency, replication, and recovery evidence are available.
+enrollment are implemented. PostgreSQL remains partial until checkpoint
+isolation, other engines, replication, and recovery evidence are available.
 Web/API/TLS remains partial until database-backed applications, HTTP/2 load,
 HTTP/3, CDN, WAF, and autoscaling evidence are available.
 The current development head also implements `suitability-v1` target-scoped

@@ -172,8 +172,10 @@ and does not treat a completed fixed-pair campaign as a provider rating.
 
 For PostgreSQL peer profiles, install the database pack on both Agents, run the
 Target Agent as a non-root account, and allow TCP `55432` only from the paired
-Generator. Verify `cleanup_verified` before treating a completed database run
-as valid evidence.
+Generator. Standard Database v2 additionally requires
+`pgbench_latency_log` and `procfs_process_cpu` on the Generator. Verify
+`comparison_eligible`, Target `cleanup_verified`, exact tail sample count, and
+Generator log cleanup before treating the Run as comparable evidence.
 
 For Web/API/TLS peer profiles, install the web pack on both Agents and run the
 Target Agent as a non-root account. Allow TCP `58080` and `58443` only between
@@ -233,6 +235,8 @@ be interpreted as HTTP/2 throughput.
 
 - verify the Target reports `postgres`, `initdb`, `pg_isready`, and `pgbench`;
 - verify the Generator reports `pgbench`;
+- for Standard v2, verify the Generator also reports `pgbench_latency_log` and
+  `procfs_process_cpu`;
 - restart each Agent after installing the database pack so inventory refreshes;
 - verify TCP `55432` is reachable only from the Generator peer address;
 - run the Target Agent as a non-root account;

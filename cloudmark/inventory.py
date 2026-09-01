@@ -10,7 +10,7 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
-from .tooling import find_postgres_binary, find_web_binary, web_tool_supports
+from .tooling import find_postgres_binary, find_web_binary, postgres_tool_supports, web_tool_supports
 
 
 def _run(command: list[str], timeout: float = 3.0) -> str | None:
@@ -183,6 +183,7 @@ def collect_inventory(workspace: Path | None = None) -> dict[str, Any]:
     uname = platform.uname()
     nginx = find_web_binary("nginx")
     curl = find_web_binary("curl")
+    pgbench = find_postgres_binary("pgbench")
     return {
         "hostname": socket.gethostname(),
         "os": {
@@ -210,7 +211,10 @@ def collect_inventory(workspace: Path | None = None) -> dict[str, Any]:
             "tcp_congestion_control": Path("/proc/sys/net/ipv4/tcp_congestion_control").is_file(),
             "postgres": find_postgres_binary("postgres") is not None,
             "initdb": find_postgres_binary("initdb") is not None,
-            "pgbench": find_postgres_binary("pgbench") is not None,
+            "pgbench": pgbench is not None,
+            "pgbench_latency_log": bool(
+                pgbench and postgres_tool_supports("pgbench", pgbench, "transaction-log")
+            ),
             "pg_isready": find_postgres_binary("pg_isready") is not None,
             "nginx": nginx is not None,
             "nginx_http2": bool(nginx and web_tool_supports("nginx", nginx, "http2")),

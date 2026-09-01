@@ -69,6 +69,24 @@ def tool_version(executable: str) -> str | None:
     return output.splitlines()[0] if result.returncode == 0 and output else None
 
 
+def postgres_tool_supports(name: str, executable: str, feature: str) -> bool:
+    if (name, feature) != ("pgbench", "transaction-log"):
+        raise ValueError(f"Unsupported PostgreSQL capability check: {name}/{feature}")
+    try:
+        result = subprocess.run(
+            [executable, "--help"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+            shell=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    output = f"{result.stdout}\n{result.stderr}"
+    return result.returncode == 0 and "--log" in output and "--transactions" in output
+
+
 def find_web_binary(name: str) -> str | None:
     if name not in WEB_TOOLS:
         raise ValueError(f"Unsupported web tool: {name}")

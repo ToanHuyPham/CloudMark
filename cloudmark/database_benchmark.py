@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import re
 from typing import Any
 
@@ -15,6 +16,12 @@ DATABASE_MAX_SCALE = 100
 DATABASE_ALLOWED_CLIENTS = {1, 4, 16}
 DATABASE_ALLOWED_THREADS = {1, 2, 4}
 DATABASE_MAX_DURATION = 60
+DATABASE_TAIL_TRANSACTIONS_PER_CLIENT = 1_000
+DATABASE_TAIL_MAX_TOTAL_TRANSACTIONS = 16_000
+DATABASE_TAIL_LOG_MAX_BYTES = 8 * 1024 * 1024
+DATABASE_TAIL_LOG_MAX_ROWS = 20_000
+DATABASE_TAIL_JOB_TIMEOUT_SECONDS = 120
+DATABASE_GENERATOR_CPU_LIMIT_PERCENT = 90.0
 
 
 class DatabaseBenchmarkError(RuntimeError):
@@ -63,13 +70,159 @@ def parse_pgbench_output(stdout: str, stderr: str = "") -> dict[str, Any]:
     }
 
 
+def parse_pgbench_latency_log(
+    text: str,
+    *,
+    expected_transactions: int,
+    truncated: bool = False,
+) -> dict[str, Any]:
+    latencies_ms: list[float] = []
+    invalid_rows = 0
+    lines = text.splitlines()
+    for line in lines[:DATABASE_TAIL_LOG_MAX_ROWS]:
+        fields = line.split()
+        if len(fields) < 3 or not fields[0].isdigit() or not fields[1].isdigit():
+            invalid_rows += 1
+            continue
+        try:
+            latency_us = float(fields[2])
+        except ValueError:
+            invalid_rows += 1
+            continue
+        if not math.isfinite(latency_us) or latency_us < 0 or latency_us > 3_600_000_000:
+            invalid_rows += 1
+            continue
+        latencies_ms.append(latency_us / 1000)
+    parser_truncated = truncated or len(lines) > DATABASE_TAIL_LOG_MAX_ROWS
+    if not latencies_ms:
+        return {
+            "status": "unavailable",
+            "source": "pgbench-per-transaction-log",
+            "sample_count": 0,
+            "expected_transactions": expected_transactions,
+            "invalid_rows": invalid_rows,
+            "truncated": parser_truncated,
+            "reason": "No bounded pgbench transaction-latency rows were parsed.",
+        }
+    ordered = sorted(latencies_ms)
+
+    def percentile(value: float) -> float:
+        index = max(0, math.ceil(value / 100 * len(ordered)) - 1)
+        return round(ordered[index], 6)
+
+    complete = (
+        not parser_truncated
+        and invalid_rows == 0
+        and len(ordered) == expected_transactions
+    )
+    result: dict[str, Any] = {
+        "status": "complete" if complete else "partial",
+        "source": "pgbench-per-transaction-log",
+        "sampling": "all-transactions-fixed-count",
+        "sample_count": len(ordered),
+        "expected_transactions": expected_transactions,
+        "invalid_rows": invalid_rows,
+        "truncated": parser_truncated,
+        "latency_percentiles_ms": {
+            "p50": percentile(50),
+            "p95": percentile(95),
+            "p99": percentile(99),
+            "p99_9": percentile(99.9),
+            "maximum": round(ordered[-1], 6),
+        },
+    }
+    if not complete:
+        result["reason"] = "The parsed transaction log did not exactly match the fixed transaction contract."
+    return result
+
+
+def _database_analysis(result: dict[str, Any]) -> dict[str, Any]:
+    measurements = [item for item in (result.get("database_measurements") or []) if isinstance(item, dict)]
+    timed_measurements = [
+        item for item in measurements if not int(item.get("transactions_per_client") or 0)
+    ]
+    cpu_evidence = [item.get("generator_cpu") or {} for item in timed_measurements]
+    observed_cpu = [item for item in cpu_evidence if item.get("status") == "observed"]
+    process_peaks = [
+        float(item["peak_process_cpu_percent_of_one_core"])
+        for item in observed_cpu
+        if isinstance(item.get("peak_process_cpu_percent_of_one_core"), (int, float))
+    ]
+    host_peaks = [
+        float(item["peak_host_utilization_percent"])
+        for item in observed_cpu
+        if isinstance(item.get("peak_host_utilization_percent"), (int, float))
+    ]
+    if not timed_measurements or len(observed_cpu) != len(timed_measurements) or not process_peaks:
+        generator_status = "unknown"
+        generator_reasons = ["generator-cpu-evidence-incomplete"]
+    elif max(process_peaks) >= DATABASE_GENERATOR_CPU_LIMIT_PERCENT:
+        generator_status = "constrained"
+        generator_reasons = ["pgbench-process-cpu-at-or-above-limit"]
+    else:
+        generator_status = "adequate"
+        generator_reasons = []
+
+    tail_measurements = [
+        item for item in measurements if int(item.get("transactions_per_client") or 0) > 0
+    ]
+    complete_tail = [
+        item for item in tail_measurements
+        if ((item.get("metrics") or {}).get("transaction_latency") or {}).get("status") == "complete"
+        and item.get("client_log_cleanup_verified") is True
+    ]
+    tail_status = "complete" if tail_measurements and len(complete_tail) == len(tail_measurements) else (
+        "partial" if tail_measurements else "unavailable"
+    )
+    cleanup_verified = (result.get("cleanup") or {}).get("cleanup_verified") is True
+    v2_required = str(result.get("methodology_version", "")) == "database-postgresql-v2"
+    reason_codes: list[str] = []
+    if v2_required and generator_status != "adequate":
+        reason_codes.append(f"generator-headroom-{generator_status}")
+    if v2_required and tail_status != "complete":
+        reason_codes.append("transaction-tail-latency-evidence-incomplete")
+    if not cleanup_verified:
+        reason_codes.append("ephemeral-cleanup-unverified")
+    comparison_eligible = cleanup_verified and (
+        not v2_required or (generator_status == "adequate" and tail_status == "complete")
+    )
+    return {
+        "generator_headroom": {
+            "status": generator_status,
+            "peak_process_cpu_percent_of_one_core": max(process_peaks, default=None),
+            "peak_host_utilization_percent": max(host_peaks, default=None),
+            "observed_measurements": len(observed_cpu),
+            "required_measurements": len(timed_measurements),
+            "limit_percent_of_one_core": DATABASE_GENERATOR_CPU_LIMIT_PERCENT,
+            "reason_codes": generator_reasons,
+        },
+        "transaction_tail_latency": {
+            "status": tail_status,
+            "measurement_count": len(tail_measurements),
+            "complete_measurement_count": len(complete_tail),
+            "sampling": "all-transactions-fixed-count",
+        },
+        "validity": {
+            "generator_headroom_required": v2_required,
+            "transaction_tail_latency_required": v2_required,
+            "cleanup_required": True,
+            "comparison_eligible": comparison_eligible,
+            "reason_codes": reason_codes,
+        },
+        "scored": False,
+    }
+
+
 def database_total_steps(profile_name: str) -> int:
     return len(DATABASE_PROFILES[profile_name]["jobs"]) + 2
 
 
 def database_default_timeout(profile_name: str) -> int:
     profile = DATABASE_PROFILES[profile_name]
-    job_seconds = sum(int(job["duration"]) + int(job.get("warmup", 0)) + 45 for job in profile["jobs"])
+    job_seconds = sum(
+        int(job.get("timeout", int(job["duration"]) + 45)) + int(job.get("warmup", 0))
+        for job in profile["jobs"]
+    )
     return 300 + job_seconds + 120
 
 
@@ -80,11 +233,15 @@ def validate_database_run(
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
     if profile_name not in DATABASE_PROFILES:
         raise ValueError(f"Unknown database profile: {profile_name}")
+    profile = DATABASE_PROFILES[profile_name]
+    generator_capabilities = ["pgbench"]
+    if profile["methodology_version"] == "database-postgresql-v2":
+        generator_capabilities.extend(["pgbench_latency_log", "procfs_process_cpu"])
     return validate_pair(
         database,
         session_id,
         target_capabilities=("postgres", "initdb", "pgbench", "pg_isready"),
-        generator_capabilities=("pgbench",),
+        generator_capabilities=tuple(generator_capabilities),
     )
 
 
@@ -120,6 +277,8 @@ def run_database(
             "durability_enabled": True,
             "arbitrary_sql_allowed": False,
             "port_range": [DATABASE_PORT_MIN, DATABASE_PORT_MAX],
+            "transaction_log_max_bytes": DATABASE_TAIL_LOG_MAX_BYTES,
+            "transaction_log_max_rows": DATABASE_TAIL_LOG_MAX_ROWS,
         },
         "database_measurements": [],
         "cleanup": {"status": "pending"},
@@ -141,6 +300,7 @@ def run_database(
                 "scale_factor": int(profile["scale_factor"]),
                 "max_connections": max(int(job["clients"]) for job in profile["jobs"]) + 10,
                 "deadline_seconds": database_default_timeout(profile_name),
+                "methodology_version": profile["methodology_version"],
                 "run_completed_steps": 0,
                 "run_total_steps": database_total_steps(profile_name),
             },
@@ -166,6 +326,8 @@ def run_database(
                     "duration_seconds": int(job["duration"]),
                     "warmup_seconds": int(job.get("warmup", 0)),
                     "connect_per_transaction": bool(job.get("connect_per_transaction", False)),
+                    "transactions_per_client": int(job.get("transactions_per_client", 0)),
+                    "methodology_version": profile["methodology_version"],
                     "run_completed_steps": job_index + 1,
                     "run_total_steps": database_total_steps(profile_name),
                 },
@@ -173,7 +335,7 @@ def run_database(
             completed = wait_task(
                 database,
                 client_task,
-                timeout_seconds=int(job["duration"]) + int(job.get("warmup", 0)) + 45,
+                timeout_seconds=int(job.get("timeout", int(job["duration"]) + 45)) + int(job.get("warmup", 0)),
                 context=context,
             )
             payload = completed.get("result") or {}
@@ -181,6 +343,7 @@ def run_database(
             if not isinstance(measurement, dict):
                 raise DatabaseBenchmarkError("Database client returned an invalid result.")
             result["database_measurements"].append({"name": job["name"], **measurement})
+            result["analysis"] = _database_analysis(result)
             context.complete_step("database-measurement-complete", None, partial_result=result)
 
         context.report("cleaning-database", f"Remove ephemeral PostgreSQL cluster on {target['name']}")
@@ -195,6 +358,7 @@ def run_database(
         cleanup_scheduled = True
         cleaned = wait_task(database, cleanup_task, timeout_seconds=45, context=None)
         result["cleanup"] = cleaned.get("result") or {"status": "completed"}
+        result["analysis"] = _database_analysis(result)
         context.complete_step("database-cleanup-complete", None, partial_result=result)
     except (RunStopped, DistributedError, DatabaseBenchmarkError) as exc:
         if server_task and not cleanup_scheduled:
@@ -213,6 +377,7 @@ def run_database(
                 result["cleanup"] = cleaned.get("result") or {"status": "completed"}
             except DistributedError:
                 pass
+        result["analysis"] = _database_analysis(result)
         exc.partial_result = result
         raise
     return result

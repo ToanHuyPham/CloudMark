@@ -349,3 +349,23 @@ Adding a deterministic packaged runtime makes that path repeatable without
 accepting operator code or arbitrary upstreams. Separating a negotiated HTTP/2
 fact from HTTP/2 load prevents one request from being overstated as production
 protocol performance.
+
+## D-026: Database v2 uses an exact fixed-count tail job and Generator validity
+
+**Decision:** Advance PostgreSQL Standard to `database-postgresql-v2` while
+keeping Quick on the readable v1 contract. Timed throughput jobs retain their
+existing durable settings and add bounded Linux pgbench process/host CPU
+evidence. A separate built-in TPC-B-like job runs exactly 1,000 transactions on
+each of four clients and logs every transaction under a generated Generator
+workspace. CloudMark requires exactly 4,000 parsed rows, computes nearest-rank
+P50/P95/P99/P99.9/maximum, limits input to 8 MiB and 20,000 rows, and verifies
+Generator-log cleanup. Missing CPU, a pgbench peak at or above 90% of one
+logical CPU, incomplete tail evidence, or unverified Target cleanup makes the
+Run comparison-ineligible.
+
+**Reason:** One-second pgbench averages cannot establish transaction tail
+latency, while an unbounded full transaction log could consume excessive disk
+on a fast provider. A small random sample would introduce run-to-run sampling
+uncertainty. A fixed total transaction contract gives exact bounded percentile
+evidence, and pgbench CPU validation prevents the Generator from silently
+understating Target database capacity.

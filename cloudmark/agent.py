@@ -30,7 +30,12 @@ from .database_benchmark import (
     DATABASE_MAX_SCALE,
     DATABASE_PORT_MAX,
     DATABASE_PORT_MIN,
+    DATABASE_TAIL_JOB_TIMEOUT_SECONDS,
+    DATABASE_TAIL_LOG_MAX_BYTES,
+    DATABASE_TAIL_MAX_TOTAL_TRANSACTIONS,
+    DATABASE_TAIL_TRANSACTIONS_PER_CLIENT,
     DatabaseBenchmarkError,
+    parse_pgbench_latency_log,
     parse_pgbench_output,
 )
 from .inventory import collect_inventory
@@ -1721,6 +1726,65 @@ class AgentWorker:
             raise DatabaseBenchmarkError("Database service path escaped the Agent workspace.") from exc
         return root
 
+    def _database_client_log_root(self, task_id: str) -> Path:
+        if not task_id.startswith("task_") or not task_id.removeprefix("task_").isalnum():
+            raise DatabaseBenchmarkError("Database client task ID is invalid.")
+        base = (self.workspace / "database-client-logs").resolve()
+        root = (base / task_id).resolve()
+        try:
+            root.relative_to(base)
+        except ValueError as exc:
+            raise DatabaseBenchmarkError("Database client log path escaped the Agent workspace.") from exc
+        return root
+
+    def _remove_database_client_log_root(self, root: Path) -> bool:
+        base = (self.workspace / "database-client-logs").resolve()
+        resolved = root.resolve()
+        try:
+            relative = resolved.relative_to(base)
+        except ValueError as exc:
+            raise DatabaseBenchmarkError("Agent refused cleanup outside its database client-log workspace.") from exc
+        if not relative.parts:
+            raise DatabaseBenchmarkError("Agent refused cleanup of the database client-log root.")
+        if resolved.exists():
+            shutil.rmtree(resolved)
+        return not resolved.exists()
+
+    @staticmethod
+    def _read_pgbench_latency_logs(root: Path, *, expected_transactions: int) -> dict[str, Any]:
+        remaining = DATABASE_TAIL_LOG_MAX_BYTES
+        chunks: list[bytes] = []
+        truncated = False
+        try:
+            log_paths = sorted(
+                item for item in root.iterdir()
+                if item.is_file() and re.fullmatch(r"pgbench_log\.\d+(?:\.\d+)?", item.name)
+            )
+        except OSError:
+            log_paths = []
+        for path in log_paths:
+            if remaining <= 0:
+                truncated = True
+                break
+            try:
+                with path.open("rb") as handle:
+                    chunk = handle.read(remaining + 1)
+            except OSError:
+                truncated = True
+                continue
+            if len(chunk) > remaining:
+                chunks.append(chunk[:remaining])
+                truncated = True
+                remaining = 0
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        return parse_pgbench_latency_log(
+            b"\n".join(chunks).decode("utf-8", errors="replace"),
+            expected_transactions=expected_transactions,
+            truncated=truncated,
+        )
+
     @staticmethod
     def _terminate_process(process: subprocess.Popen[str], timeout: float = 10) -> None:
         if process.poll() is not None:
@@ -1823,6 +1887,9 @@ class AgentWorker:
         parsed_listen = self._peer_address(listen_address)
         parsed_client = self._peer_address(allowed_client)
         port = self._database_port(payload.get("port"))
+        methodology_version = str(payload.get("methodology_version") or "database-postgresql-v1")
+        if methodology_version not in {"database-postgresql-v1", "database-postgresql-v2"}:
+            raise DatabaseBenchmarkError("Database service methodology is outside the installed contract.")
         scale_factor = int(payload.get("scale_factor", 0))
         max_connections = int(payload.get("max_connections", 0))
         deadline_seconds = int(payload.get("deadline_seconds", 0))
@@ -1983,6 +2050,7 @@ class AgentWorker:
                 "scale_factor": scale_factor,
                 "estimated_dataset_bytes": estimated_bytes,
                 "durability": settings,
+                "methodology_version": methodology_version,
                 "tools": {"postgres": active.postgres_version, "pgbench": active.pgbench_version},
             }
         except BaseException:
@@ -2005,6 +2073,7 @@ class AgentWorker:
         completed_steps: int,
         total_steps: int,
         cpu_samples: list[dict[str, float]] | None = None,
+        working_directory: Path | None = None,
     ) -> tuple[int, str, str]:
         process = subprocess.Popen(
             command,
@@ -2013,6 +2082,7 @@ class AgentWorker:
             text=True,
             shell=False,
             env=environment,
+            cwd=str(working_directory) if working_directory is not None else None,
             creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
         )
         try:
@@ -2086,10 +2156,27 @@ class AgentWorker:
         threads = int(payload.get("threads", 0))
         duration = int(payload.get("duration_seconds", 0))
         warmup = int(payload.get("warmup_seconds", 0))
+        transactions_per_client = int(payload.get("transactions_per_client", 0))
+        methodology_version = str(payload.get("methodology_version") or "database-postgresql-v1")
+        if methodology_version not in {"database-postgresql-v1", "database-postgresql-v2"}:
+            raise DatabaseBenchmarkError("Database client methodology is outside the installed contract.")
         if clients not in DATABASE_ALLOWED_CLIENTS or threads not in DATABASE_ALLOWED_THREADS or threads > clients:
             raise DatabaseBenchmarkError("Database concurrency is outside the CloudMark allow-list.")
-        if not 1 <= duration <= DATABASE_MAX_DURATION or not 0 <= warmup <= 10:
+        if not 0 <= warmup <= 10:
             raise DatabaseBenchmarkError("Database duration is outside the CloudMark allow-list.")
+        if transactions_per_client:
+            if (
+                methodology_version != "database-postgresql-v2"
+                or duration != 0
+                or transactions_per_client != DATABASE_TAIL_TRANSACTIONS_PER_CLIENT
+                or clients * transactions_per_client > DATABASE_TAIL_MAX_TOTAL_TRANSACTIONS
+            ):
+                raise DatabaseBenchmarkError("Database fixed-transaction workload is outside the v2 contract.")
+            expected_duration = DATABASE_TAIL_JOB_TIMEOUT_SECONDS
+        else:
+            if not 1 <= duration <= DATABASE_MAX_DURATION:
+                raise DatabaseBenchmarkError("Database duration is outside the CloudMark allow-list.")
+            expected_duration = duration
         connect_per_transaction = payload.get("connect_per_transaction") is True
         completed_steps = int(payload.get("run_completed_steps", 0))
         total_steps = int(payload.get("run_total_steps", 1))
@@ -2101,7 +2188,7 @@ class AgentWorker:
         environment["LC_ALL"] = "C"
         environment["PGCONNECT_TIMEOUT"] = "5"
 
-        def command(seconds: int, progress: bool) -> list[str]:
+        def command(seconds: int, progress: bool, *, fixed_transactions: bool = False) -> list[str]:
             value = [
                 pgbench,
                 "-h",
@@ -2114,11 +2201,13 @@ class AgentWorker:
                 str(clients),
                 "-j",
                 str(threads),
-                "-T",
-                str(seconds),
                 "-b",
                 workload,
             ]
+            if fixed_transactions:
+                value.extend(["-t", str(transactions_per_client), "--log"])
+            else:
+                value.extend(["-T", str(seconds)])
             if progress:
                 value.extend(["-P", "1"])
             if connect_per_transaction:
@@ -2139,18 +2228,54 @@ class AgentWorker:
             )
             if code != 0:
                 raise DatabaseBenchmarkError(stderr.strip() or stdout.strip() or "pgbench warm-up failed.")
-        code, stdout, stderr = self._guarded_service_process(
-            task_id,
-            command(duration, True),
-            environment=environment,
-            expected_duration=duration,
-            phase="measuring-database",
-            current_job=workload,
-            completed_steps=completed_steps,
-            total_steps=total_steps,
-        )
+        log_root: Path | None = None
+        transaction_latency: dict[str, Any] = {
+            "status": "not-applicable",
+            "source": "pgbench-per-transaction-log",
+        }
+        client_log_cleanup_verified: bool | None = None
+        if transactions_per_client:
+            log_root = self._database_client_log_root(task_id)
+            if log_root.exists():
+                raise DatabaseBenchmarkError("Database client found a residual transaction-log directory.")
+            log_root.parent.mkdir(parents=True, exist_ok=True)
+            disk = shutil.disk_usage(log_root.parent)
+            reserve = max(512 * 1024 * 1024, int(disk.total * 0.05))
+            if disk.free < reserve + DATABASE_TAIL_LOG_MAX_BYTES:
+                raise DatabaseBenchmarkError("Insufficient free space for bounded transaction logs and reserve.")
+            log_root.mkdir(exist_ok=False)
+        cpu_samples: list[dict[str, float]] = []
+        measured_arguments: dict[str, Any] = {
+            "environment": environment,
+            "expected_duration": expected_duration,
+            "phase": "measuring-database",
+            "current_job": workload,
+            "completed_steps": completed_steps,
+            "total_steps": total_steps,
+        }
+        if methodology_version == "database-postgresql-v2":
+            measured_arguments["cpu_samples"] = cpu_samples
+        if log_root is not None:
+            measured_arguments["working_directory"] = log_root
+        try:
+            code, stdout, stderr = self._guarded_service_process(
+                task_id,
+                command(duration, True, fixed_transactions=bool(transactions_per_client)),
+                **measured_arguments,
+            )
+            if log_root is not None:
+                transaction_latency = self._read_pgbench_latency_logs(
+                    log_root,
+                    expected_transactions=clients * transactions_per_client,
+                )
+        finally:
+            if log_root is not None:
+                client_log_cleanup_verified = self._remove_database_client_log_root(log_root)
         if code != 0:
             raise DatabaseBenchmarkError(stderr.strip() or stdout.strip() or "pgbench workload failed.")
+        metrics = parse_pgbench_output(stdout, stderr)
+        metrics["transaction_latency"] = transaction_latency
+        metrics["tail_latency_status"] = transaction_latency["status"]
         return {
             "pgbench": {
                 "workload": workload,
@@ -2159,7 +2284,11 @@ class AgentWorker:
                 "duration_seconds": duration,
                 "warmup_seconds": warmup,
                 "connect_per_transaction": connect_per_transaction,
-                "metrics": parse_pgbench_output(stdout, stderr),
+                "transactions_per_client": transactions_per_client,
+                "methodology_version": methodology_version,
+                "metrics": metrics,
+                "generator_cpu": _generator_cpu_evidence(cpu_samples),
+                "client_log_cleanup_verified": client_log_cleanup_verified,
                 "tool": {"name": "pgbench", "version": tool_version(pgbench)},
                 "raw": {"stdout": stdout, "stderr": stderr},
             }

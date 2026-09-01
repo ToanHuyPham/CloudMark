@@ -145,9 +145,11 @@ the Generator, and a stop task verifies cleanup. The service watchdog is owned
 by the Target Agent rather than the Controller, so cleanup deadlines survive a
 lost control connection.
 
-`database-postgresql-v1` is the first implementation. It accepts only fixed
-PostgreSQL settings and built-in pgbench workloads. The Controller never sends
-SQL, paths, credentials, or arbitrary server configuration to an Agent.
+`database-postgresql-v1` remains the Quick baseline. Standard
+`database-postgresql-v2` adds one exact four-client, 1,000-transactions-per-
+client pgbench log job, nearest-rank P50/P95/P99/P99.9, bounded Generator log
+cleanup, and Linux pgbench process/host CPU validity. The Controller never
+sends SQL, paths, credentials, or arbitrary server configuration to an Agent.
 
 `web-http-v1` remains the Quick static-service baseline. Standard
 `web-http-v2` adds a packaged Python application on fixed Target loopback port

@@ -308,16 +308,38 @@ type DatabaseMeasurement = {
   duration_seconds: number;
   warmup_seconds: number;
   connect_per_transaction: boolean;
+  transactions_per_client?: number;
+  client_log_cleanup_verified?: boolean | null;
   metrics: {
     transactions_processed: number;
     failed_transactions: number;
     transactions_per_second: number;
     latency_average_ms: number;
     initial_connection_time_ms?: number;
-    tail_latency_status: "unavailable";
+    tail_latency_status: "complete" | "partial" | "unavailable" | "not-applicable";
+    transaction_latency?: {
+      status: "complete" | "partial" | "unavailable" | "not-applicable";
+      sampling?: string;
+      sample_count?: number;
+      expected_transactions?: number;
+      truncated?: boolean;
+      latency_percentiles_ms?: {
+        p50: number;
+        p95: number;
+        p99: number;
+        p99_9: number;
+        maximum: number;
+      };
+      reason?: string;
+    };
     progress: { elapsed_seconds: number; tps: number; latency_average_ms: number; failed: number }[];
   };
   tool: { name: string; version?: string };
+  generator_cpu?: {
+    status: "observed" | "unavailable";
+    peak_process_cpu_percent_of_one_core?: number;
+    peak_host_utilization_percent?: number;
+  };
 };
 
 type WebMeasurement = {
@@ -564,6 +586,12 @@ type Run = {
         status: "observed" | "unavailable";
         application_runtime?: string;
         measurement_count: number;
+      };
+      transaction_tail_latency?: {
+        status: "complete" | "partial" | "unavailable";
+        measurement_count: number;
+        complete_measurement_count: number;
+        sampling: string;
       };
       concurrency_curves?: {
         scheme: string;
@@ -815,6 +843,8 @@ type Dashboard = {
         duration: number;
         warmup: number;
         connect_per_transaction?: boolean;
+        transactions_per_client?: number;
+        timeout?: number;
       }[];
       protocol_probes?: { name: string; scheme: "https"; path: string }[];
     }>;
@@ -1045,6 +1075,20 @@ export default function Home() {
   );
   const databaseMeasurements = latestDatabase?.result?.database_measurements || [];
   const databaseProfile = dashboard?.profiles.database?.[selectedDatabaseProfile];
+  const databaseAnalysis = latestDatabase?.result?.analysis;
+  const databaseTailMeasurement = databaseMeasurements.find(
+    (item) => (item.transactions_per_client || 0) > 0,
+  );
+  const selectedDatabaseV2 = databaseProfile?.methodology_version === "database-postgresql-v2";
+  const selectedDatabaseReady = Boolean(selectedSession)
+    && ["target", "generator"].every((role) => {
+      const agent = selectedSession?.agents.find((item) => item.role === role);
+      const capabilities = agent?.system.inventory?.capabilities || {};
+      return role === "target"
+        ? Boolean(capabilities.postgres && capabilities.initdb && capabilities.pgbench && capabilities.pg_isready)
+        : Boolean(capabilities.pgbench
+          && (!selectedDatabaseV2 || (capabilities.pgbench_latency_log && capabilities.procfs_process_cpu)));
+    });
   const maxDatabaseTps = Math.max(
     1,
     ...databaseMeasurements.map((item) => item.metrics.transactions_per_second || 0),
@@ -1429,6 +1473,13 @@ export default function Home() {
     if (!generator?.system.inventory?.capabilities?.pgbench) {
       setNotice("The generator Agent needs pgbench. Install the CloudMark database pack and restart the Agent.");
       return;
+    }
+    if (dashboard?.profiles.database?.[selectedDatabaseProfile]?.methodology_version === "database-postgresql-v2") {
+      const generatorCapabilities = generator.system.inventory?.capabilities || {};
+      if (!generatorCapabilities.pgbench_latency_log || !generatorCapabilities.procfs_process_cpu) {
+        setNotice("Database v2 requires pgbench transaction logging and Linux procfs CPU accounting on the Generator.");
+        return;
+      }
     }
     setBusy(true);
     setNotice(null);
@@ -1916,27 +1967,27 @@ export default function Home() {
         {activeView === "database" && (
           <div className="view database-view">
             <section className="section-intro">
-              <div><span className="section-kicker">TWO-AGENT DATABASE ASSESSMENT</span><h2>Measure the database service, storage path, CPU, and provider network together.</h2><p>CloudMark creates an isolated PostgreSQL cluster on the Target and dispatches exact pgbench workloads from the Generator. The Controller stores evidence but never carries transaction traffic.</p></div>
+              <div><span className="section-kicker">TWO-AGENT DATABASE ASSESSMENT</span><h2>Measure durable throughput and transaction tail latency without hiding Generator limits.</h2><p>CloudMark creates an isolated PostgreSQL cluster on the Target. Database v2 separates timed throughput jobs from one bounded 4,000-transaction tail-latency workload and records pgbench CPU headroom.</p></div>
               <div className="runner-actions"><label><span>PROFILE</span><select value={selectedDatabaseProfile} onChange={(event) => setSelectedDatabaseProfile(event.target.value)} disabled={Boolean(activeDatabase)}>{Object.entries(dashboard?.profiles.database || {}).map(([id, profile]) => <option key={id} value={id}>{profile.label} · ≈ {profile.estimated_minutes} min</option>)}</select></label><label><span>PAIR TOPOLOGY</span><select value={selectedTopologyScope} onChange={(event) => setSelectedTopologyScope(event.target.value as TopologyScope)}>{TOPOLOGY_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label><button className="button primary" onClick={createPairing} disabled={busy}>New session</button></div>
             </section>
             <section className="database-contract-grid">
               <article className="panel database-profile-card">
                 <div className="panel-head"><div><span className="section-kicker">VERSIONED WORKLOAD</span><h3>{databaseProfile?.label || "PostgreSQL profile"}</h3></div><span className="run-id">SCALE {databaseProfile?.scale_factor || "—"}</span></div>
                 <p>{databaseProfile?.description}</p>
-                <div className="database-job-grid">{databaseProfile?.jobs.map((job) => <div key={job.name}><span>{job.workload}</span><strong>{job.name}</strong><small>C{job.clients} · J{job.threads} · {job.duration}s{job.connect_per_transaction ? " · reconnect" : ""}</small></div>)}</div>
+                <div className="database-job-grid">{databaseProfile?.jobs.map((job) => <div key={job.name}><span>{job.transactions_per_client ? "TAIL LATENCY" : job.workload}</span><strong>{job.name}</strong><small>C{job.clients} · J{job.threads} · {job.transactions_per_client ? `${job.transactions_per_client.toLocaleString()} transactions/client` : `${job.duration}s`}{job.connect_per_transaction ? " · reconnect" : ""}</small></div>)}</div>
               </article>
               <article className="panel database-safety-card">
                 <span className="section-kicker">EXECUTION CONTRACT</span><h3>Ephemeral and bounded by design</h3>
-                <ul><li>Target-only temporary PostgreSQL cluster</li><li>Generator address is the only remote database client</li><li>Durability remains enabled: fsync, full-page writes, synchronous commit</li><li>Fixed port 55432 and allow-listed built-in pgbench scripts</li><li>Dataset and logs removed after success, failure, timeout, or cancellation</li></ul>
-                <p>Transaction tail percentiles are not claimed in PostgreSQL v1; average latency, failures, TPS, and one-second progress are retained.</p>
+                <ul><li>Target-only temporary PostgreSQL cluster</li><li>Generator address is the only remote database client</li><li>Durability remains enabled: fsync, full-page writes, synchronous commit</li><li>Fixed port 55432 and allow-listed built-in pgbench scripts</li><li>Tail job is capped at 1,000 transactions per client and 16,000 total</li><li>Dataset and Generator logs are removed after every terminal path</li></ul>
+                <p>Database v2 computes P50/P95/P99/P99.9 from every transaction in the fixed-count tail job. It does not infer percentiles from one-second averages.</p>
               </article>
             </section>
             {pairing && <section className="pairing-card"><div><span>SHORT-LIVED JOIN CREDENTIAL</span><strong>{pairing.id}</strong><small>{pairing.topology.scope} · {pairing.topology.source} · verification {pairing.topology.verification.status} · expires {new Date(pairing.expires_at).toLocaleTimeString("en-US")}</small></div><code>{pairing.join_token}</code></section>}
             {pairing && <section className="panel agent-commands"><div><span className="section-kicker">RUN ON PROVIDER VMS</span><h3>Target hosts PostgreSQL; Generator runs pgbench</h3></div><code>cloudmark agent --controller https://CONTROLLER --session {pairing.id} --token {pairing.join_token} --role target --advertise-address VM_A_IP</code><code>cloudmark agent --controller https://CONTROLLER --session {pairing.id} --token {pairing.join_token} --role generator --advertise-address VM_B_IP</code><p>Install the <strong>database</strong> pack on both machines before starting their Agents.</p></section>}
             <section className="panel session-panel">
               <div className="panel-head"><div><span className="section-kicker">PAIRED EXECUTION</span><h3>Database readiness</h3></div><label className="compact-select"><span>SESSION</span><select value={selectedSession?.id || ""} onChange={(event) => setSelectedSessionId(event.target.value)}>{dashboard?.sessions.map((session) => <option key={session.id} value={session.id}>{session.label} · {session.topology.scope} / {session.topology.verification.status} · {session.status}</option>)}</select></label></div>
-              {selectedSession ? <div className="agent-roster">{["target", "generator"].map((role) => { const agent = selectedSession.agents.find((item) => item.role === role); const ready = role === "target" ? Boolean(agent?.system.inventory?.capabilities?.postgres && agent?.system.inventory?.capabilities?.initdb && agent?.system.inventory?.capabilities?.pgbench && agent?.system.inventory?.capabilities?.pg_isready) : Boolean(agent?.system.inventory?.capabilities?.pgbench); return <article key={role} className={agent && ready ? "connected" : "waiting"}><span>{role.toUpperCase()}</span><strong>{agent?.name || `Waiting for ${role}`}</strong><small>{agent ? `${agent.endpoint.address || "No advertised IP"} · ${ready ? "database tools ready" : "database pack required"}` : "Join command has not connected"}</small></article>; })}</div> : <div className="empty-row">Create a session, then connect both provider Agents.</div>}
-              <div className="session-actions"><p><strong>{selectedSession?.status === "ready" ? "Pair connected" : "Two Agents required"}</strong><small>The Controller validates PostgreSQL capabilities again before accepting the run.</small></p><button className="button primary" onClick={startDatabase} disabled={busy || Boolean(activeDatabase) || selectedSession?.status !== "ready"}>Run database assessment</button></div>
+              {selectedSession ? <div className="agent-roster">{["target", "generator"].map((role) => { const agent = selectedSession.agents.find((item) => item.role === role); const capabilities = agent?.system.inventory?.capabilities || {}; const ready = role === "target" ? Boolean(capabilities.postgres && capabilities.initdb && capabilities.pgbench && capabilities.pg_isready) : Boolean(capabilities.pgbench && (!selectedDatabaseV2 || (capabilities.pgbench_latency_log && capabilities.procfs_process_cpu))); return <article key={role} className={agent && ready ? "connected" : "waiting"}><span>{role.toUpperCase()}</span><strong>{agent?.name || `Waiting for ${role}`}</strong><small>{agent ? `${agent.endpoint.address || "No advertised IP"} · ${ready ? selectedDatabaseV2 ? "Database v2 ready" : "Database v1 ready" : "database prerequisites missing"}` : "Join command has not connected"}</small></article>; })}</div> : <div className="empty-row">Create a session, then connect both provider Agents.</div>}
+              <div className="session-actions"><p><strong>{selectedSession?.status !== "ready" ? "Two Agents required" : selectedDatabaseReady ? "Pair ready" : "Database prerequisites missing"}</strong><small>Database v2 requires pgbench transaction logging and Linux process CPU accounting on the Generator.</small></p><button className="button primary" onClick={startDatabase} disabled={busy || Boolean(activeDatabase) || selectedSession?.status !== "ready" || !selectedDatabaseReady}>Run database assessment</button></div>
             </section>
             {activeDatabase && <section className="panel run-progress" aria-live="polite"><div><span className="section-kicker">ACTIVE DATABASE RUN / {activeDatabase.id}</span><strong>{activeDatabase.current_job || activeDatabase.phase || "Preparing PostgreSQL"}</strong><small>{activeDatabase.completed_steps || 0} of {activeDatabase.total_steps || 1} steps · {Math.round((activeDatabase.progress || 0) * 100)}%</small></div><div className="progress-track"><i style={{ width: `${Math.max(2, (activeDatabase.progress || 0) * 100)}%` }} /></div><button className="button danger" onClick={cancelDatabase} disabled={busy || activeDatabase.cancel_requested}>{activeDatabase.cancel_requested ? "Cancelling" : "Cancel run"}</button></section>}
             <section className="panel database-results">
@@ -1945,6 +1996,9 @@ export default function Home() {
             </section>
             {databaseMeasurements.length > 0 && <section className="database-evidence-grid">
               {databaseMeasurements.map((measurement) => <article className="panel" key={measurement.name}><span>{measurement.workload.toUpperCase()} · C{measurement.clients} / J{measurement.threads}</span><strong>{measurement.metrics.latency_average_ms.toFixed(2)} ms</strong><small>{measurement.metrics.failed_transactions} failed · {measurement.metrics.transactions_processed.toLocaleString()} transactions</small></article>)}
+              <article className="panel"><span>TRANSACTION TAIL LATENCY</span><strong>{databaseTailMeasurement?.metrics.transaction_latency?.latency_percentiles_ms ? `${databaseTailMeasurement.metrics.transaction_latency.latency_percentiles_ms.p99.toFixed(2)} ms p99` : "Unavailable"}</strong><small>{databaseTailMeasurement?.metrics.transaction_latency?.latency_percentiles_ms ? `${databaseTailMeasurement.metrics.transaction_latency.latency_percentiles_ms.p95.toFixed(2)} ms p95 · ${databaseTailMeasurement.metrics.transaction_latency.latency_percentiles_ms.p99_9.toFixed(2)} ms p99.9 · ${databaseTailMeasurement.metrics.transaction_latency.sample_count?.toLocaleString()} transactions` : "Fixed-count transaction evidence not available"}</small></article>
+              <article className="panel"><span>GENERATOR CPU HEADROOM</span><strong>{databaseAnalysis?.generator_headroom?.status || "Unavailable"}</strong><small>{databaseAnalysis?.generator_headroom?.peak_process_cpu_percent_of_one_core?.toFixed(1) ?? "—"}% peak pgbench CPU of one core · {databaseAnalysis?.generator_headroom?.peak_host_utilization_percent?.toFixed(1) ?? "—"}% host CPU</small></article>
+              <article className={`panel ${databaseAnalysis?.validity?.comparison_eligible ? "cleanup-evidence verified" : "cleanup-evidence unknown"}`}><span>MEASUREMENT VALIDITY</span><strong>{databaseAnalysis?.validity?.comparison_eligible ? "Comparable" : "Not comparable"}</strong><small>{databaseAnalysis?.validity?.reason_codes?.join(" · ") || "Generator, transaction tail, and cleanup evidence complete"}</small></article>
               <article className={`panel cleanup-evidence ${latestDatabase?.result?.cleanup?.cleanup_verified ? "verified" : "unknown"}`}><span>EPHEMERAL CLEANUP</span><strong>{latestDatabase?.result?.cleanup?.cleanup_verified ? "Verified" : "Unavailable"}</strong><small>{latestDatabase?.result?.server?.estimated_dataset_bytes ? `${formatBytes(latestDatabase.result.server.estimated_dataset_bytes)} estimated dataset` : "Dataset size unavailable"}</small></article>
             </section>}
           </div>

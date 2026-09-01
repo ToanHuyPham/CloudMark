@@ -114,7 +114,7 @@ SCENARIO_REQUIREMENTS: dict[str, dict[str, Any]] = {
             ("database.tpcb_c4_failed", "Failed transactions", "==", _threshold(0, 0, 0), "count"),
             ("network.idle_latency_ms", "Worst peer idle latency", "<=", _threshold(50, 20, 8), "ms"),
         ],
-        "limitations": ["Transaction P95/P99, replication, failover, backup/restore, MySQL/MariaDB, Redis, and managed-service behavior are not measured."],
+        "limitations": ["Fixed-count PostgreSQL transaction P95/P99 is measured; replication, failover, backup/restore, MySQL/MariaDB, Redis, and managed-service behavior remain unavailable."],
         "next_actions": ["Run Disk Database, Network Standard, and PostgreSQL Peer Standard on the same Target."],
     },
     "network": {
@@ -275,6 +275,9 @@ def _run_valid(run: dict[str, Any]) -> tuple[bool, str | None]:
         return False, "Storage cleanup is not verified."
     if suite in {"database", "web"} and _nested(result, "cleanup", "cleanup_verified") is not True:
         return False, "Ephemeral service cleanup is not verified."
+    if suite == "database" and str(result.get("methodology_version", "")) == "database-postgresql-v2":
+        if _nested(result, "analysis", "validity", "comparison_eligible") is not True:
+            return False, "Database v2 Generator headroom, fixed-count transaction tail latency, or cleanup evidence is insufficient for comparison."
     if suite == "web" and str(result.get("methodology_version", "")) == "web-http-v2":
         if _nested(result, "analysis", "validity", "comparison_eligible") is not True:
             return False, "Web v2 Generator headroom, dynamic reverse-proxy, HTTP/2 negotiation, or cleanup evidence is insufficient for comparison."

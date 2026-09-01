@@ -143,8 +143,9 @@ own generators for CPU and network resources.
 
 - PostgreSQL pgbench read-only, durable read/write, concurrency scaling, and
   connection churn — available in `database-postgresql-v1`;
-- PostgreSQL transaction tail percentiles, checkpoint isolation, replication,
-  backup/restore, and recovery — planned;
+- PostgreSQL fixed-count transaction P50/P95/P99/P99.9 and Linux Generator CPU
+  validity — available in `database-postgresql-v2`;
+- PostgreSQL checkpoint isolation, replication, backup/restore, and recovery — planned;
 - MySQL/MariaDB OLTP read/write and fsync-sensitive profiles;
 - Redis GET/SET, pipelines, persistence, and tail latency;
 - static web, JSON API, TLS 1.2, keep-alive, connection churn, concurrency

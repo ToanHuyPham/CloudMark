@@ -51,11 +51,13 @@ storage profiles on an explicitly selected authenticated Agent. Remote execution
 improves topology accuracy and attribution; it does not change incomplete domain
 coverage into a complete suitability score.
 
-The current development head implements the first domain 10 subset with a
-durable, ephemeral PostgreSQL service on a Target Agent and built-in pgbench
-workloads from a separate Generator. Transaction tail percentiles,
-MySQL/MariaDB, Redis, replication, backup/restore, and failover remain missing;
-database coverage therefore remains `Partial`.
+The current development head implements domain 10 through
+`database-postgresql-v2`: a durable ephemeral PostgreSQL service, built-in
+pgbench throughput and connection-churn jobs, an exact fixed-count transaction
+tail workload, Linux Generator CPU validity, and verified Target/Generator
+cleanup. MySQL/MariaDB, Redis, checkpoint isolation, replication,
+backup/restore, and failover remain missing; database coverage therefore
+remains `Partial`.
 
 The current development head implements domain 9 through `web-http-v2`: an
 isolated Nginx service, fixed JSON/static payloads, a packaged Python dynamic

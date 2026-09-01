@@ -413,7 +413,11 @@ class CloudMarkController:
             profile_config = DATABASE_PROFILES[profile]
             total_steps = database_total_steps(profile)
             methodology_version = str(profile_config["methodology_version"])
-            tool_version = "postgresql/pgbench-agent"
+            tool_version = (
+                "postgresql/pgbench-tail/procfs-agent"
+                if methodology_version == "database-postgresql-v2"
+                else "postgresql/pgbench-agent"
+            )
             default_timeout = database_default_timeout(profile)
         elif suite == "web":
             if request.get("confirm_web_load") is not True:

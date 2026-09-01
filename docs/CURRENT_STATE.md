@@ -79,6 +79,17 @@ baseline is still the repository head.
   progress/control heartbeat, fixed safety limits, and verified cleanup; the
   milestone passes 53 Python tests, 3 rendered-dashboard tests, dashboard lint,
   and the production dashboard build without running a real load;
+- simulation-verified `database-postgresql-v2` Standard orchestration with the
+  durable v1 throughput/concurrency/connection-churn jobs plus one exact
+  four-client, 1,000-transactions-per-client TPC-B-like tail job. CloudMark
+  parses every bounded transaction log row into nearest-rank
+  P50/P95/P99/P99.9/maximum, requires an exact 4,000-row contract, caps input at
+  8 MiB and 20,000 rows, and verifies Generator log cleanup. Timed jobs retain
+  one-second Linux host/steal and pgbench process CPU summaries; missing CPU or
+  a 90%-of-one-core peak makes the Run comparison-ineligible. Quick remains
+  readable as `database-postgresql-v1`. The complete development head passes
+  118 Python tests, 3 rendered-dashboard tests, dashboard lint, and the
+  production build without starting provider load;
 - simulation-verified `web-http-v1` paired executor with an isolated Nginx
   Target, fixed HTTP/HTTPS endpoints, Generator-side ApacheBench workloads,
   exact address allow-listing, TLS 1.2 evidence, progress/control heartbeat,
@@ -206,9 +217,9 @@ Controller run: `run_1c572100e8704843`.
   unattended scheduling, cross-pair
   orchestration, Windows route parity, and mTLS remain unimplemented;
 - PostgreSQL database coverage is Partial: read-only, durable read/write,
-  concurrency, and connection churn are implemented; transaction tail
-  percentiles, replication, recovery, MySQL/MariaDB, Redis, and managed-service
-  behavior remain unavailable;
+  concurrency, connection churn, fixed-count transaction tail percentiles, and
+  Generator CPU validity are implemented; checkpoint isolation, replication,
+  recovery, MySQL/MariaDB, Redis, and managed-service behavior remain unavailable;
 - an abrupt Agent or host termination can leave an isolated PostgreSQL task
   directory for manual operator review; the Agent refuses to overwrite or
   automatically delete unknown residual state; the same review requirement
@@ -236,8 +247,8 @@ Controller run: `run_1c572100e8704843`.
    before promoting the network domain from Partial.
 2. Add database-backed Web applications, HTTP/2 load, HTTP/3, reverse-proxy
    variants, compression, CDN, WAF, and autoscaling evidence.
-3. Extend database coverage with transaction tail latency, MySQL/MariaDB,
-   Redis, replication, backup/restore, and recovery evidence.
+3. Extend database coverage with checkpoint isolation, MySQL/MariaDB, Redis,
+   replication, backup/restore, and recovery evidence.
 4. Complete remaining compute, memory/NUMA, GPU, security, reliability,
    observability, container, and control-plane executors.
 5. Extend campaigns across independent targets, then add timestamped price

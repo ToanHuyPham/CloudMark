@@ -495,7 +495,9 @@ Peer Standard`, choose the paired session, and select **Run database
 assessment**. CloudMark creates a temporary PostgreSQL cluster beneath the
 Target Agent workspace, initializes a fixed pgbench dataset, runs built-in
 workloads from the Generator, stops PostgreSQL, and verifies removal of the
-cluster.
+cluster. Standard Database v2 adds one exact 4,000-transaction tail job and
+one-second Linux pgbench process/host CPU evidence. Its Generator transaction
+logs are removed before the Run can become comparison-eligible.
 
 Allow TCP port `55432` only from the Generator peer address to the Target. Run
 the Target Agent as a non-root account; PostgreSQL initialization refuses root.
@@ -504,9 +506,11 @@ keeps `fsync`, full-page writes, and synchronous commit enabled so the result is
 not an unsafe durability-off headline number.
 
 The dashboard reports TPS, average latency, failed transactions, concurrency,
-dataset scale, tool versions, and cleanup status. PostgreSQL v1 marks
-transaction P95/P99 latency unavailable rather than estimating it from
-one-second averages. See [`DATABASE_METHODOLOGY.md`](DATABASE_METHODOLOGY.md).
+dataset scale, Generator CPU headroom, transaction P50/P95/P99/P99.9, validity,
+tool versions, and cleanup status. Quick PostgreSQL v1 keeps tail latency
+unavailable; Standard v2 calculates it from every transaction in the bounded
+fixed-count job rather than from one-second averages. See
+[`DATABASE_METHODOLOGY.md`](DATABASE_METHODOLOGY.md).
 
 ### Dispatch a single-system profile to an Agent
 
