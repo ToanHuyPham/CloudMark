@@ -28,6 +28,7 @@ timestamp, and raw result.
 | Available | Explicit remote Agent dispatch for CPU, memory, and storage with live progress, cancellation, and result attribution |
 | Partial | Guarded peer network executor: pre/post interface counters, route/MTU, read-only NIC/TCP-control evidence, directional TCP scaling, idle/loaded RTT, adaptive UDP sweeps, and simultaneous bidirectional TCP |
 | Partial | Guarded PostgreSQL v2 plus logical Backup & Restore with durable throughput, exact transaction P50/P95/P99/P99.9, Generator validity, row-count verification, and cleanup |
+| Partial | Authenticated Redis GET/SET, value-size/concurrency/pipeline curves, AOF persistence, P50/P95/P99 latency, Generator validity, and cleanup |
 | Partial | Guarded two-Agent Web v2 with Nginx, a packaged dynamic reverse-proxy application, Generator CPU validity, HTTP/TLS tail latency, static transfer, and HTTP/2 negotiation |
 | Available | Target-scoped, versioned Essential/Standard/Demanding workload gates with per-check run provenance and explicit unknown evidence |
 | Available | Exact-cohort repeated-window provider observations with median, P10/P90, best/worst, spread, topology/evidence-class contracts, and guarded comparison eligibility |

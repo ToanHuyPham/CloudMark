@@ -10,7 +10,7 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
-from .tooling import find_postgres_binary, find_web_binary, postgres_tool_supports, web_tool_supports
+from .tooling import find_postgres_binary, find_redis_binary, find_web_binary, postgres_tool_supports, web_tool_supports
 
 
 def _run(command: list[str], timeout: float = 3.0) -> str | None:
@@ -221,6 +221,9 @@ def collect_inventory(workspace: Path | None = None) -> dict[str, Any]:
             "createdb": find_postgres_binary("createdb") is not None,
             "dropdb": find_postgres_binary("dropdb") is not None,
             "psql": find_postgres_binary("psql") is not None,
+            "redis_server": find_redis_binary("redis-server") is not None,
+            "redis_cli": find_redis_binary("redis-cli") is not None,
+            "redis_benchmark": find_redis_binary("redis-benchmark") is not None,
             "nginx": nginx is not None,
             "nginx_http2": bool(nginx and web_tool_supports("nginx", nginx, "http2")),
             "ab": find_web_binary("ab") is not None,

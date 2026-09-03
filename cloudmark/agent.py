@@ -59,7 +59,8 @@ from .profiles import COMPUTE_PROFILES, MEMORY_PROFILES, STORAGE_PROFILES
 from .provider import detect_provider
 from .remote import REMOTE_METHODOLOGY_VERSION
 from .runner import CancellationToken, JobContext, RunCancelled, RunTimedOut
-from .tooling import find_postgres_binary, find_web_binary, tool_version, web_tool_version
+from .tooling import find_postgres_binary, find_redis_binary, find_web_binary, tool_version, web_tool_version
+from .redis_benchmark import REDIS_PORT, RedisBenchmarkError, parse_redis_benchmark_csv
 from .web_benchmark import (
     WEB_ALLOWED_CONCURRENCY,
     WEB_ALLOWED_PATHS,
@@ -1166,6 +1167,16 @@ class ActiveWebServer:
     application_log_handle: Any | None
     methodology_version: str
 
+@dataclass
+class ActiveRedisServer:
+    process: subprocess.Popen[str]
+    deadline: float
+    root: Path
+    log_path: Path
+    log_handle: Any
+    version: str | None
+    port: int
+
 
 class AgentBenchmarkFailure(RuntimeError):
     def __init__(self, message: str, *, status: str, result: dict[str, Any] | None):
@@ -1194,6 +1205,7 @@ class AgentWorker:
         self.active_servers: dict[str, ActiveServer] = {}
         self.active_database_servers: dict[str, ActiveDatabaseServer] = {}
         self.active_web_servers: dict[str, ActiveWebServer] = {}
+        self.active_redis_servers: dict[str, ActiveRedisServer] = {}
         self.pending_completions: dict[str, dict[str, Any]] = {}
         self.last_controller_contact = time.monotonic()
 
@@ -2489,6 +2501,61 @@ class AgentWorker:
         return self._stop_database_server(server_task_id)
 
     @staticmethod
+    def _redis_password(payload: dict[str, Any]) -> str:
+        secret=payload.get("_ephemeral_secret") or {}; password=secret.get("redis_password")
+        if not isinstance(password,str) or not 16<=len(password)<=512: raise RedisBenchmarkError("Redis task is missing its ephemeral credential.")
+        return password
+
+    def _redis_root(self, task_id:str)->Path:
+        if not task_id.startswith("task_") or not task_id.removeprefix("task_").isalnum(): raise RedisBenchmarkError("Redis task ID is invalid.")
+        base=(self.workspace/"redis-services").resolve(); root=(base/task_id).resolve()
+        try: root.relative_to(base)
+        except ValueError as exc: raise RedisBenchmarkError("Redis path escaped the Agent workspace.") from exc
+        return root
+
+    def _stop_redis_server(self, server_task_id:str)->dict[str,Any]:
+        active=self.active_redis_servers.get(server_task_id)
+        if not active:
+            root=self._redis_root(server_task_id); return {"status":"already-absent","cleanup_verified":not root.exists()}
+        self._terminate_process(active.process); active.log_handle.close(); tail=self._tail_text(active.log_path); shutil.rmtree(active.root); cleaned=not active.root.exists(); self.active_redis_servers.pop(server_task_id,None)
+        return {"status":"completed","cleanup_verified":cleaned,"server_returncode":active.process.returncode,"redis_log_tail":tail}
+
+    def _start_redis_server(self, task_id:str,payload:dict[str,Any])->dict[str,Any]:
+        if self.active_redis_servers or self.active_database_servers or self.active_web_servers: raise RedisBenchmarkError("Agent already has an active paired service.")
+        if os.name=="nt": raise RedisBenchmarkError("Redis assessment currently requires a Linux Agent.")
+        address=str(payload.get("listen_address","")); self._peer_address(address); port=int(payload.get("port",0)); deadline=int(payload.get("deadline_seconds",0)); password=self._redis_password(payload)
+        if port!=REDIS_PORT or not 120<=deadline<=3600: raise RedisBenchmarkError("Redis service bounds do not match the methodology.")
+        root=self._redis_root(task_id)
+        if root.exists(): raise RedisBenchmarkError("Redis service found residual state.")
+        root.mkdir(parents=True); config=root/"redis.conf"; log=root/"redis.log"
+        config.write_text(f"bind {address}\nprotected-mode yes\nport {port}\ndir {root}\ndbfilename cloudmark.rdb\nappendonly yes\nappendfilename cloudmark.aof\nappendfsync everysec\nsave \"\"\nrequirepass {password}\n",encoding="utf-8")
+        executable=find_redis_binary("redis-server")
+        if not executable: shutil.rmtree(root); raise RedisBenchmarkError("redis-server is unavailable.")
+        handle=log.open("w",encoding="utf-8"); process=subprocess.Popen([executable,str(config)],stdout=handle,stderr=subprocess.STDOUT,text=True,shell=False)
+        cli=find_redis_binary("redis-cli"); ready=False
+        try:
+            for _ in range(40):
+                if process.poll() is not None: break
+                check=subprocess.run([cli,"-h",address,"-p",str(port),"-a",password,"PING"],capture_output=True,text=True,timeout=3,check=False,shell=False) if cli else None
+                if check and check.returncode==0 and check.stdout.strip()=="PONG": ready=True; break
+                time.sleep(.25)
+            if not ready: raise RedisBenchmarkError("Authenticated Redis service did not become ready.")
+            active=ActiveRedisServer(process,time.monotonic()+deadline,root,log,handle,tool_version(executable),port); self.active_redis_servers[task_id]=active
+            return {"ready":True,"engine":"redis","port":port,"authentication":"memory-only-per-run-secret","persistence":{"appendonly":True,"appendfsync":"everysec"},"tool":{"name":"redis-server","version":active.version}}
+        except BaseException:
+            self._terminate_process(process); handle.close(); shutil.rmtree(root,ignore_errors=True); raise
+
+    def _run_redis_client(self,task_id:str,payload:dict[str,Any])->dict[str,Any]:
+        address=str(payload.get("target_address","")); self._peer_address(address); password=self._redis_password(payload); port=int(payload.get("port",0)); operation=str(payload.get("operation","")).lower(); clients=int(payload.get("clients",0)); pipeline=int(payload.get("pipeline",0)); size=int(payload.get("value_bytes",0)); requests=int(payload.get("requests",0))
+        if port!=REDIS_PORT or operation not in {"get","set"} or clients not in {1,16,64} or pipeline not in {1,16} or size not in {64,1024} or not 1<=requests<=50000: raise RedisBenchmarkError("Redis workload is outside the fixed contract.")
+        executable=find_redis_binary("redis-benchmark")
+        if not executable: raise RedisBenchmarkError("redis-benchmark is unavailable.")
+        samples=[]; command=[executable,"-h",address,"-p",str(port),"-a",password,"-n",str(requests),"-c",str(clients),"-P",str(pipeline),"-d",str(size),"-t",operation,"--csv"]
+        code,stdout,stderr=self._guarded_service_process(task_id,command,environment={**os.environ,"LC_ALL":"C"},expected_duration=60,phase="measuring-redis",current_job=operation,completed_steps=int(payload.get("run_completed_steps",0)),total_steps=int(payload.get("run_total_steps",1)),cpu_samples=samples)
+        if code!=0: raise RedisBenchmarkError(stderr.strip()[:256] or "redis-benchmark failed.")
+        return {"redis_benchmark":{"operation":operation,"clients":clients,"pipeline":pipeline,"value_bytes":size,"requests":requests,"metrics":parse_redis_benchmark_csv(stdout),"generator_cpu":_generator_cpu_evidence(samples),"tool":{"name":"redis-benchmark","version":tool_version(executable)}}}
+
+    @staticmethod
     def _web_tool(name: str) -> str:
         executable = find_web_binary(name)
         if not executable:
@@ -3218,7 +3285,9 @@ class AgentWorker:
 
     def _execute(self, task: dict[str, Any]) -> dict[str, Any]:
         kind = str(task.get("kind", ""))
-        payload = task.get("payload") or {}
+        payload = dict(task.get("payload") or {})
+        if task.get("ephemeral_secret") is not None:
+            payload["_ephemeral_secret"] = task["ephemeral_secret"]
         if kind == "network-server-start":
             return self._start_server(str(task["id"]), payload)
         if kind == "network-client":
@@ -3237,6 +3306,9 @@ class AgentWorker:
             return self._run_database_recovery(str(task["id"]), payload)
         if kind == "database-server-stop":
             return self._stop_database_task(payload)
+        if kind == "redis-service-start": return self._start_redis_server(str(task["id"]),payload)
+        if kind == "redis-client": return self._run_redis_client(str(task["id"]),payload)
+        if kind == "redis-service-stop": return self._stop_redis_server(str(payload.get("server_task_id","")))
         if kind == "web-service-start":
             return self._start_web_server(str(task["id"]), payload)
         if kind == "web-client":
@@ -3269,6 +3341,9 @@ class AgentWorker:
             if now < active.deadline and not controller_contact_expired:
                 continue
             self._stop_web_server(task_id)
+        for task_id, active in list(self.active_redis_servers.items()):
+            if now < active.deadline and not controller_contact_expired: continue
+            self._stop_redis_server(task_id)
 
     def once(self) -> bool:
         self._cleanup_expired()
@@ -3289,7 +3364,7 @@ class AgentWorker:
             completion = {"status": exc.status, "error": str(exc)}
             if exc.result is not None:
                 completion["result"] = exc.result
-        except (DatabaseBenchmarkError, NetworkError, WebBenchmarkError, OSError, ValueError) as exc:
+        except (DatabaseBenchmarkError, NetworkError, RedisBenchmarkError, WebBenchmarkError, OSError, ValueError) as exc:
             completion = {"status": "failed", "error": str(exc)}
         task_id = str(task["id"])
         self.pending_completions[task_id] = completion
@@ -3322,6 +3397,8 @@ class AgentWorker:
                 self._stop_database_server(task_id)
             for task_id in list(self.active_web_servers):
                 self._stop_web_server(task_id)
+            for task_id in list(self.active_redis_servers):
+                self._stop_redis_server(task_id)
 
 
 def join_and_work(

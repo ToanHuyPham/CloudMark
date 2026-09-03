@@ -404,3 +404,13 @@ per-run credential, but putting it in the durable task JSON would copy plaintext
 into SQLite and protected backups. A memory-only channel preserves the existing
 auditable task contract while failing closed after process loss instead of
 creating a long-lived secret-recovery mechanism.
+
+## D-029: Redis v1 is authenticated, persistent, paired, and bounded
+
+**Decision:** Redis uses the memory-only per-Run secret channel, binds the exact
+Target address on TCP 56379, enables AOF with fsync every second, and accepts
+only fixed GET/SET value-size, concurrency, pipeline, and request-count shapes.
+Generator CPU and complete workspace cleanup are comparison gates.
+
+**Reason:** An unauthenticated cache endpoint or caller-selected command would
+be unsafe, while persistence-off results would not represent a durable cache.

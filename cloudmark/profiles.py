@@ -243,6 +243,32 @@ DATABASE_PROFILES: dict[str, dict[str, Any]] = {
         ],
         "recovery_drill": {"type": "logical-backup-restore", "timeout": 300},
     },
+    "redis-peer-quick": {
+        "label": "Redis Peer Quick", "description": "Authenticated Redis GET/SET baseline with fixed value, concurrency, pipeline, persistence, and cleanup evidence.",
+        "estimated_minutes": 4, "requires_agents": 2, "engine": "redis", "port": 56379,
+        "profile_version": "1.0", "methodology_version": "database-redis-v1",
+        "jobs": [
+            {"name": "set-64b-c1-p1", "operation": "set", "value_bytes": 64, "clients": 1, "pipeline": 1, "requests": 10000},
+            {"name": "get-64b-c1-p1", "operation": "get", "value_bytes": 64, "clients": 1, "pipeline": 1, "requests": 10000},
+            {"name": "set-1k-c16-p1", "operation": "set", "value_bytes": 1024, "clients": 16, "pipeline": 1, "requests": 20000},
+            {"name": "get-1k-c16-p16", "operation": "get", "value_bytes": 1024, "clients": 16, "pipeline": 16, "requests": 20000},
+        ],
+    },
+    "redis-peer-standard": {
+        "label": "Redis Peer Standard", "description": "Authenticated Redis GET/SET concurrency, value-size, pipeline, AOF persistence, latency, Generator CPU, and cleanup evidence.",
+        "estimated_minutes": 8, "requires_agents": 2, "engine": "redis", "port": 56379,
+        "profile_version": "1.0", "methodology_version": "database-redis-v1",
+        "jobs": [
+            {"name": "set-64b-c1-p1", "operation": "set", "value_bytes": 64, "clients": 1, "pipeline": 1, "requests": 20000},
+            {"name": "get-64b-c1-p1", "operation": "get", "value_bytes": 64, "clients": 1, "pipeline": 1, "requests": 20000},
+            {"name": "set-64b-c16-p1", "operation": "set", "value_bytes": 64, "clients": 16, "pipeline": 1, "requests": 50000},
+            {"name": "get-64b-c16-p16", "operation": "get", "value_bytes": 64, "clients": 16, "pipeline": 16, "requests": 50000},
+            {"name": "set-1k-c16-p1", "operation": "set", "value_bytes": 1024, "clients": 16, "pipeline": 1, "requests": 50000},
+            {"name": "get-1k-c16-p16", "operation": "get", "value_bytes": 1024, "clients": 16, "pipeline": 16, "requests": 50000},
+            {"name": "set-1k-c64-p16", "operation": "set", "value_bytes": 1024, "clients": 64, "pipeline": 16, "requests": 50000},
+            {"name": "get-1k-c64-p16", "operation": "get", "value_bytes": 1024, "clients": 64, "pipeline": 16, "requests": 50000},
+        ],
+    },
 }
 
 

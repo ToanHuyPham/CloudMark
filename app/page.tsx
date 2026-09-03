@@ -341,6 +341,7 @@ type DatabaseMeasurement = {
     peak_host_utilization_percent?: number;
   };
 };
+type RedisMeasurement = {name:string;operation:"get"|"set";clients:number;pipeline:number;value_bytes:number;requests:number;metrics:{operation:string;requests_per_second:number;latency_ms:{average:number;minimum:number;p50:number;p95:number;p99:number;maximum:number}};generator_cpu?:{status:string;peak_process_cpu_percent_of_one_core?:number}};
 
 type WebMeasurement = {
   name: string;
@@ -430,6 +431,7 @@ type Run = {
     udp_measurements?: NetworkUdpMeasurement[];
     bidirectional_measurements?: NetworkBidirectionalMeasurement[];
     database_measurements?: DatabaseMeasurement[];
+    redis_measurements?: RedisMeasurement[];
     web_measurements?: WebMeasurement[];
     protocol_observations?: WebProtocolObservation[];
     server?: {
@@ -861,11 +863,15 @@ type Dashboard = {
       methodology_version: string;
       jobs: {
         name: string;
-        workload: string;
+        workload?: string;
+        operation?: "get" | "set";
         clients: number;
-        threads: number;
-        duration: number;
-        warmup: number;
+        threads?: number;
+        duration?: number;
+        warmup?: number;
+        value_bytes?: number;
+        pipeline?: number;
+        requests?: number;
         connect_per_transaction?: boolean;
         transactions_per_client?: number;
         timeout?: number;
@@ -1096,9 +1102,10 @@ export default function Home() {
     (run) => run.suite === "database" && ["queued", "running"].includes(run.status),
   );
   const latestDatabase = dashboard?.runs.find(
-    (run) => run.suite === "database" && run.status === "completed" && run.result?.database_measurements?.length,
+    (run) => run.suite === "database" && run.status === "completed" && (run.result?.database_measurements?.length || run.result?.redis_measurements?.length),
   );
   const databaseMeasurements = latestDatabase?.result?.database_measurements || [];
+  const redisMeasurements = latestDatabase?.result?.redis_measurements || [];
   const databaseProfile = dashboard?.profiles.database?.[selectedDatabaseProfile];
   const databaseAnalysis = latestDatabase?.result?.analysis;
   const databaseTailMeasurement = databaseMeasurements.find(
@@ -1106,20 +1113,22 @@ export default function Home() {
   );
   const selectedDatabaseV2 = databaseProfile?.methodology_version === "database-postgresql-v2";
   const selectedDatabaseRecovery = databaseProfile?.methodology_version === "database-postgresql-recovery-v1";
+  const selectedRedis = databaseProfile?.engine === "redis";
   const selectedDatabaseReady = Boolean(selectedSession)
     && ["target", "generator"].every((role) => {
       const agent = selectedSession?.agents.find((item) => item.role === role);
       const capabilities = agent?.system.inventory?.capabilities || {};
       return role === "target"
-        ? Boolean(capabilities.postgres && capabilities.initdb && capabilities.pgbench && capabilities.pg_isready
+        ? Boolean(selectedRedis ? (capabilities.redis_server && capabilities.redis_cli) : (capabilities.postgres && capabilities.initdb && capabilities.pgbench && capabilities.pg_isready
           && (!selectedDatabaseRecovery
-            || (capabilities.pg_dump && capabilities.pg_restore && capabilities.createdb && capabilities.dropdb && capabilities.psql)))
-        : Boolean(capabilities.pgbench
-          && (!selectedDatabaseV2 || (capabilities.pgbench_latency_log && capabilities.procfs_process_cpu)));
+            || (capabilities.pg_dump && capabilities.pg_restore && capabilities.createdb && capabilities.dropdb && capabilities.psql))))
+        : Boolean(selectedRedis ? (capabilities.redis_benchmark && capabilities.procfs_process_cpu) : (capabilities.pgbench
+          && (!selectedDatabaseV2 || (capabilities.pgbench_latency_log && capabilities.procfs_process_cpu))));
     });
   const maxDatabaseTps = Math.max(
     1,
     ...databaseMeasurements.map((item) => item.metrics.transactions_per_second || 0),
+    ...redisMeasurements.map((item) => item.metrics.requests_per_second || 0),
   );
   const activeWeb = dashboard?.runs.find(
     (run) => run.suite === "web" && ["queued", "running"].includes(run.status),
@@ -1494,6 +1503,13 @@ export default function Home() {
     const target = selectedSession.agents.find((agent) => agent.role === "target");
     const generator = selectedSession.agents.find((agent) => agent.role === "generator");
     const targetCapabilities = target?.system.inventory?.capabilities || {};
+    const selectedProfile = dashboard?.profiles.database?.[selectedDatabaseProfile];
+    if (selectedProfile?.engine === "redis") {
+      const generatorCapabilities = generator?.system.inventory?.capabilities || {};
+      if (!targetCapabilities.redis_server || !targetCapabilities.redis_cli || !generatorCapabilities.redis_benchmark || !generatorCapabilities.procfs_process_cpu) {
+        setNotice("Redis requires redis-server/redis-cli on Target and redis-benchmark with Linux CPU accounting on Generator."); return;
+      }
+    } else {
     if (!targetCapabilities.postgres || !targetCapabilities.initdb || !targetCapabilities.pgbench || !targetCapabilities.pg_isready) {
       setNotice("The target Agent needs PostgreSQL server tools and pgbench. Install the CloudMark database pack and restart the Agent.");
       return;
@@ -1507,6 +1523,7 @@ export default function Home() {
     if (!generator?.system.inventory?.capabilities?.pgbench) {
       setNotice("The generator Agent needs pgbench. Install the CloudMark database pack and restart the Agent.");
       return;
+    }
     }
     if (dashboard?.profiles.database?.[selectedDatabaseProfile]?.methodology_version === "database-postgresql-v2") {
       const generatorCapabilities = generator.system.inventory?.capabilities || {};
@@ -2008,7 +2025,7 @@ export default function Home() {
               <article className="panel database-profile-card">
                 <div className="panel-head"><div><span className="section-kicker">VERSIONED WORKLOAD</span><h3>{databaseProfile?.label || "PostgreSQL profile"}</h3></div><span className="run-id">SCALE {databaseProfile?.scale_factor || "—"}</span></div>
                 <p>{databaseProfile?.description}</p>
-                <div className="database-job-grid">{databaseProfile?.jobs.map((job) => <div key={job.name}><span>{job.transactions_per_client ? "TAIL LATENCY" : job.workload}</span><strong>{job.name}</strong><small>C{job.clients} · J{job.threads} · {job.transactions_per_client ? `${job.transactions_per_client.toLocaleString()} transactions/client` : `${job.duration}s`}{job.connect_per_transaction ? " · reconnect" : ""}</small></div>)}</div>
+                <div className="database-job-grid">{databaseProfile?.jobs.map((job) => <div key={job.name}><span>{job.operation ? `REDIS ${job.operation}` : job.transactions_per_client ? "TAIL LATENCY" : job.workload}</span><strong>{job.name}</strong><small>{job.operation ? `C${job.clients} · P${job.pipeline} · ${job.value_bytes} B · ${job.requests?.toLocaleString()} requests` : `C${job.clients} · J${job.threads} · ${job.transactions_per_client ? `${job.transactions_per_client.toLocaleString()} transactions/client` : `${job.duration}s`}${job.connect_per_transaction ? " · reconnect" : ""}`}</small></div>)}</div>
               </article>
               <article className="panel database-safety-card">
                 <span className="section-kicker">EXECUTION CONTRACT</span><h3>Ephemeral and bounded by design</h3>
@@ -2026,7 +2043,7 @@ export default function Home() {
             {activeDatabase && <section className="panel run-progress" aria-live="polite"><div><span className="section-kicker">ACTIVE DATABASE RUN / {activeDatabase.id}</span><strong>{activeDatabase.current_job || activeDatabase.phase || "Preparing PostgreSQL"}</strong><small>{activeDatabase.completed_steps || 0} of {activeDatabase.total_steps || 1} steps · {Math.round((activeDatabase.progress || 0) * 100)}%</small></div><div className="progress-track"><i style={{ width: `${Math.max(2, (activeDatabase.progress || 0) * 100)}%` }} /></div><button className="button danger" onClick={cancelDatabase} disabled={busy || activeDatabase.cancel_requested}>{activeDatabase.cancel_requested ? "Cancelling" : "Cancel run"}</button></section>}
             <section className="panel database-results">
               <div className="panel-head"><div><span className="section-kicker">LATEST COMPLETED RUN</span><h3>PostgreSQL transaction throughput</h3></div><span className="run-id">{latestDatabase?.id || "NO RUN YET"}</span></div>
-              {databaseMeasurements.length ? <div className="bar-chart">{databaseMeasurements.map((measurement) => { const tps = measurement.metrics.transactions_per_second || 0; return <div className="bar-row" key={measurement.name}><span>{measurement.name} · C{measurement.clients}</span><div><i style={{ width: `${Math.max(3, (tps / maxDatabaseTps) * 100)}%` }} /></div><strong>{Math.round(tps).toLocaleString()} TPS</strong></div>; })}</div> : <div className="empty-chart compact"><div className="chart-grid" /><strong>No PostgreSQL result yet</strong><p>Connect a prepared target and generator to establish the first database baseline.</p></div>}
+              {databaseMeasurements.length || redisMeasurements.length ? <div className="bar-chart">{databaseMeasurements.map((measurement) => { const tps = measurement.metrics.transactions_per_second || 0; return <div className="bar-row" key={measurement.name}><span>{measurement.name} · C{measurement.clients}</span><div><i style={{ width: `${Math.max(3, (tps / maxDatabaseTps) * 100)}%` }} /></div><strong>{Math.round(tps).toLocaleString()} TPS</strong></div>; })}{redisMeasurements.map((measurement)=>{const rps=measurement.metrics.requests_per_second;return <div className="bar-row" key={measurement.name}><span>{measurement.name} · C{measurement.clients}</span><div><i style={{width:`${Math.max(3,(rps/maxDatabaseTps)*100)}%`}}/></div><strong>{Math.round(rps).toLocaleString()} req/s</strong></div>})}</div> : <div className="empty-chart compact"><div className="chart-grid" /><strong>No database/cache result yet</strong><p>Connect a prepared target and generator to establish the first service baseline.</p></div>}
             </section>
             {databaseMeasurements.length > 0 && <section className="database-evidence-grid">
               {databaseMeasurements.map((measurement) => <article className="panel" key={measurement.name}><span>{measurement.workload.toUpperCase()} · C{measurement.clients} / J{measurement.threads}</span><strong>{measurement.metrics.latency_average_ms.toFixed(2)} ms</strong><small>{measurement.metrics.failed_transactions} failed · {measurement.metrics.transactions_processed.toLocaleString()} transactions</small></article>)}
@@ -2036,6 +2053,7 @@ export default function Home() {
               {latestDatabase?.result?.recovery?.type && <article className="panel"><span>LOGICAL BACKUP &amp; RESTORE</span><strong>{latestDatabase.result.recovery.status === "complete" ? "Verified" : "Incomplete"}</strong><small>{latestDatabase.result.recovery.backup_duration_seconds?.toFixed(2) ?? "—"}s backup · {latestDatabase.result.recovery.restore_duration_seconds?.toFixed(2) ?? "—"}s restore · {formatBytes(latestDatabase.result.recovery.backup_bytes)} · row counts {latestDatabase.result.recovery.verification?.row_counts_match ? "match" : "do not match"}</small></article>}
               <article className={`panel cleanup-evidence ${latestDatabase?.result?.cleanup?.cleanup_verified ? "verified" : "unknown"}`}><span>EPHEMERAL CLEANUP</span><strong>{latestDatabase?.result?.cleanup?.cleanup_verified ? "Verified" : "Unavailable"}</strong><small>{latestDatabase?.result?.server?.estimated_dataset_bytes ? `${formatBytes(latestDatabase.result.server.estimated_dataset_bytes)} estimated dataset` : "Dataset size unavailable"}</small></article>
             </section>}
+            {redisMeasurements.length > 0 && <section className="database-evidence-grid">{redisMeasurements.map((measurement)=><article className="panel" key={measurement.name}><span>{measurement.operation.toUpperCase()} · C{measurement.clients} / P{measurement.pipeline}</span><strong>{measurement.metrics.latency_ms.p99.toFixed(2)} ms p99</strong><small>{Math.round(measurement.metrics.requests_per_second).toLocaleString()} req/s · {measurement.value_bytes} B values</small></article>)}<article className={`panel ${latestDatabase?.result?.cleanup?.cleanup_verified?"cleanup-evidence verified":"cleanup-evidence unknown"}`}><span>REDIS VALIDITY</span><strong>{latestDatabase?.result?.analysis?.validity?.comparison_eligible?"Comparable":"Not comparable"}</strong><small>{latestDatabase?.result?.analysis?.validity?.reason_codes?.join(" · ")||"AOF, Generator, and cleanup evidence complete"}</small></article></section>}
           </div>
         )}
 

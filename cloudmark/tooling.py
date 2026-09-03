@@ -18,6 +18,12 @@ POSTGRES_TOOLS = {
     "postgres",
     "psql",
 }
+REDIS_TOOLS = {"redis-benchmark", "redis-cli", "redis-server"}
+
+def find_redis_binary(name: str) -> str | None:
+    if name not in REDIS_TOOLS:
+        raise ValueError(f"Unsupported Redis tool: {name}")
+    return shutil.which(name)
 WEB_TOOLS = {"ab", "curl", "nginx", "openssl"}
 
 

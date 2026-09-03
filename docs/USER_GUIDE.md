@@ -520,6 +520,12 @@ database and archive before cleaning the source cluster. Treat this as
 same-Target logical recovery evidence only—not snapshot, cross-zone DR, PITR,
 RPO, or RTO evidence.
 
+Select **Redis Peer Quick** or **Redis Peer Standard** for authenticated cache
+evidence. Open TCP `56379` only from the Generator to the Target. CloudMark uses
+a memory-only per-Run password, enables AOF with fsync every second, runs only
+fixed GET/SET profiles, and removes the entire Redis workspace afterward. See
+[`REDIS_METHODOLOGY.md`](REDIS_METHODOLOGY.md).
+
 ### Dispatch a single-system profile to an Agent
 
 After an Agent is online, open **Compute & Memory** or **Storage Assessment**

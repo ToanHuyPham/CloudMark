@@ -77,6 +77,7 @@ from cloudmark.profiles import (
 )
 from cloudmark.provider import _declared_manifest
 from cloudmark.runner import CancellationToken, JobContext, ProcessResult, RunCancelled, RunTimedOut
+from cloudmark.redis_benchmark import parse_redis_benchmark_csv, redis_analysis, redis_total_steps, validate_redis_run
 from cloudmark.server import CloudMarkController, Handler, Server, _dashboard_run_summaries, _json_bytes
 from cloudmark.suitability import SCENARIO_REQUIREMENTS, _run_valid, evaluate_suitability
 from cloudmark.topology import assess_pairing_topology
@@ -2285,6 +2286,23 @@ tps = 941.176470 (without initial connection time)
         with self.assertRaisesRegex(DatabaseBenchmarkError, "row counts"):
             parse_pgbench_row_counts("2000000|20|malformed|12345\n")
 
+    def test_redis_parser_and_validity_preserve_tail_latency_and_generator_gate(self) -> None:
+        metrics=parse_redis_benchmark_csv('"SET","125000.0","0.80","0.10","0.50","1.20","2.40","8.00"\n')
+        self.assertEqual(metrics["requests_per_second"],125000.0); self.assertEqual(metrics["latency_ms"]["p99"],2.4)
+        result={"server":{"persistence":{"appendonly":True}},"redis_measurements":[{"generator_cpu":{"status":"observed","peak_process_cpu_percent_of_one_core":45.0}}],"cleanup":{"cleanup_verified":True}}
+        self.assertTrue(redis_analysis(result)["validity"]["comparison_eligible"])
+        result["redis_measurements"][0]["generator_cpu"]["peak_process_cpu_percent_of_one_core"]=95.0
+        self.assertFalse(redis_analysis(result)["validity"]["comparison_eligible"])
+
+    def test_agent_redis_client_is_bounded_authenticated_and_redacts_secret(self) -> None:
+        worker=AgentWorker("http://127.0.0.1:8787","agent","token"); password="temporary-redis-secret-123456789"
+        def guarded(_task_id,command,**kwargs):
+            kwargs["cpu_samples"].append({"host_utilization_percent":20.0,"host_steal_percent":0.0,"process_cpu_percent_of_one_core":30.0})
+            return 0,'"GET","100000","1","0.1","0.5","1.0","2.0","5.0"\n',""
+        with patch("cloudmark.agent.find_redis_binary",return_value="redis-benchmark"),patch.object(worker,"_guarded_service_process",side_effect=guarded) as process,patch("cloudmark.agent.tool_version",return_value="redis 7"):
+            result=worker._run_redis_client("task_redis123",{"target_address":"10.0.0.10","port":56379,"operation":"get","clients":16,"pipeline":16,"value_bytes":1024,"requests":50000,"run_completed_steps":1,"run_total_steps":10,"_ephemeral_secret":{"redis_password":password}})
+        command=process.call_args.args[1]; self.assertIn(password,command); self.assertIn("--csv",command); self.assertNotIn(password,json.dumps(result)); self.assertEqual(result["redis_benchmark"]["generator_cpu"]["status"],"observed")
+
     def test_database_v2_requires_pgbench_fixed_transaction_log_support(self) -> None:
         responses = [
             SimpleNamespace(
@@ -3826,11 +3844,17 @@ Percentage of the requests served within a certain time (ms)
         )
         self.assertEqual(DATABASE_PROFILES["postgres-peer-recovery"]["recovery_drill"]["timeout"], 300)
         for profile in DATABASE_PROFILES.values():
-            self.assertLessEqual(profile["scale_factor"], 100)
-            self.assertTrue(all(job["duration"] <= 60 for job in profile["jobs"]))
+            if profile["engine"] == "postgresql":
+                self.assertLessEqual(profile["scale_factor"], 100)
+                self.assertTrue(all(job["duration"] <= 60 for job in profile["jobs"]))
         tail_job = DATABASE_PROFILES["postgres-peer-standard"]["jobs"][-1]
         self.assertEqual(tail_job["transactions_per_client"], 1000)
         self.assertEqual(tail_job["clients"] * tail_job["transactions_per_client"], 4000)
+        self.assertEqual(redis_total_steps("redis-peer-quick"),6)
+        self.assertEqual(redis_total_steps("redis-peer-standard"),10)
+        for name in ("redis-peer-quick","redis-peer-standard"):
+            profile=DATABASE_PROFILES[name]; self.assertEqual(profile["methodology_version"],"database-redis-v1")
+            self.assertTrue(all(job["requests"]<=50000 and job["clients"]<=64 and job["pipeline"]<=16 for job in profile["jobs"]))
 
     def test_bootstrap_web_pack_includes_nginx_apachebench_and_openssl(self) -> None:
         with patch("cloudmark.bootstrap.detect_manager", return_value="apt"):

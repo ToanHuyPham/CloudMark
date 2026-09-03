@@ -33,6 +33,11 @@ baseline is still the repository head.
   restart intentionally loses them so interrupted work cannot silently reuse a
   persisted service password; this milestone passes 122 Python tests, 3
   rendered-dashboard tests, dashboard lint, and the production build;
+- simulation-verified `database-redis-v1` Quick/Standard profiles with
+  memory-only per-Run authentication, fixed GET/SET value-size/concurrency/
+  pipeline shapes, AOF `appendfsync everysec`, CSV P50/P95/P99 latency,
+  Generator CPU validity, watchdog cleanup, and no plaintext credential in
+  evidence. The development head passes 124 Python tests;
 - guarded, bidirectional TCP measurements between paired Agents;
 - simulation-verified `network-v6` standard orchestration for allow-listed
   pre/post route-derived interface byte/packet/error/drop deltas,
@@ -244,7 +249,7 @@ Controller run: `run_1c572100e8704843`.
   concurrency, connection churn, fixed-count transaction tail percentiles, and
   Generator CPU validity are implemented; checkpoint isolation, replication,
   same-Target logical backup/restore, and artifact cleanup are implemented;
-  physical/PITR backup, cross-zone recovery, replication, MySQL/MariaDB, Redis,
+  physical/PITR backup, cross-zone recovery, replication, MySQL/MariaDB,
   and managed-service behavior remain unavailable;
 - an abrupt Agent or host termination can leave an isolated PostgreSQL task
   directory for manual operator review; the Agent refuses to overwrite or

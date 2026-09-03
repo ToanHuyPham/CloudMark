@@ -237,6 +237,13 @@ counts, scale-shape validation, recovery-artifact cleanup, and final cluster
 cleanup. The API cannot provide a database name, SQL query, path, archive
 format, or recovery command argument.
 
+Redis profiles `redis-peer-quick` and `redis-peer-standard` use the same
+database Run endpoint and confirmation flag. They require `redis_server` and
+`redis_cli` on Target plus `redis_benchmark` and Linux CPU accounting on
+Generator. The per-Run password is memory-only and never appears in the API
+result. Evidence includes fixed GET/SET request rate, P50/P95/P99 latency, value
+size, concurrency, pipeline depth, AOF policy, Generator validity, and cleanup.
+
 ## Create a Web/API/TLS peer run
 
 ```json

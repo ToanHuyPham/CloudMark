@@ -150,7 +150,8 @@ own generators for CPU and network resources.
 - PostgreSQL checkpoint isolation, physical/PITR backup, replication, failover,
   cross-zone recovery, and RPO/RTO — planned;
 - MySQL/MariaDB OLTP read/write and fsync-sensitive profiles;
-- Redis GET/SET, pipelines, persistence, and tail latency;
+- Redis authenticated GET/SET, pipelines, AOF persistence, P50/P95/P99 latency,
+  Generator validity, and cleanup — available in `database-redis-v1`;
 - static web, JSON API, TLS 1.2, keep-alive, connection churn, concurrency
   ramps, P50–P99 latency, error rate, and static transfer — available in
   `web-http-v1`;

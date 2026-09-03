@@ -153,6 +153,16 @@ systems.
   success and best-effort cleanup runs on failure; unverified recovery cleanup
   makes the Run comparison-ineligible.
 
+## Redis
+
+- Redis requires a two-Agent session and explicit database-load confirmation.
+- It binds only the Target address on TCP 56379 and requires a random per-Run
+  password delivered through the memory-only task-secret channel.
+- GET/SET, request count, clients, pipeline depth, and value size are fixed by
+  versioned profiles. AOF persistence remains enabled with fsync every second.
+- The Target watchdog terminates Redis and removes configuration, credentials,
+  AOF/RDB data, and logs on every terminal path.
+
 ## Web, API, and TLS
 
 - Web runs require two authenticated provider Agents and explicit
