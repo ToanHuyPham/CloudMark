@@ -40,7 +40,7 @@ test("keeps production metadata and project policy explicit", async () => {
   assert.doesNotMatch(page, /_sites-preview|SkeletonPreview/);
   assert.doesNotMatch(packageJson, /react-loading-skeleton/);
   assert.match(layout, /CloudMark — Infrastructure Assessment Platform/);
-  assert.match(layout, /og-v050\.png/);
+  assert.match(layout, /og-darkblue-v1\.png/);
   assert.match(page, /cloud_to_controller_network_test/);
   assert.match(page, /FULL-STACK INFRASTRUCTURE COVERAGE/);
   assert.match(page, /domainCounts\.total \|\| 17/);
@@ -75,14 +75,18 @@ test("keeps production metadata and project policy explicit", async () => {
   assert.match(styles, /\.sidebar nav[^}]*display: flex[^}]*overflow-x: auto/);
   assert.match(styles, /overflow-x: hidden/);
   assert.doesNotMatch(styles, /\.nav-item:not\(\.active\)\s*\{\s*font-size:\s*0/);
-  assert.match(styles, /--type-micro:\s*10px/);
-  assert.match(styles, /--type-body:\s*14px/);
+  assert.match(styles, /--ink:\s*#02050b/);
+  assert.match(styles, /--panel:\s*#07101d/);
+  assert.match(styles, /--lime:\s*#4f8cff/);
+  assert.match(styles, /--text:\s*#f4f8ff/);
+  assert.match(styles, /--type-micro:\s*11px/);
+  assert.match(styles, /--type-body:\s*15px/);
   assert.doesNotMatch(styles, /font-size:\s*[789]px/);
   assert.equal(JSON.parse(packageJson).version, "0.5.0");
   assert.doesNotMatch(`${page}\n${layout}\n${readme}`, /\bqualification lab\b|\b0\.1\.0-alpha\b|\bMVP\b/i);
   assert.match(readme, /cloud-to-controller performance measurement\s+is disabled by policy/i);
   assert.match(readme, /Version `0\.5\.0`/);
-  await access(new URL("../public/og-v050.png", import.meta.url));
+  await access(new URL("../public/og-darkblue-v1.png", import.meta.url));
   await assert.rejects(access(new URL("../app/_sites-preview/SkeletonPreview.tsx", import.meta.url)));
 });
 

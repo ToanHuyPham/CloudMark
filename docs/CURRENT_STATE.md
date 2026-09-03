@@ -1,6 +1,6 @@
 # CloudMark current state
 
-Last updated: 2026-09-01
+Last updated: 2026-09-03
 
 ## Repository baseline
 
@@ -123,6 +123,12 @@ baseline is still the repository head.
   navigation uses stable 12 px labels in a contained horizontal scroller and
   was browser-verified at 390 px and 1,280 px without page-level horizontal
   overflow;
+- production dashboard visual system updated to a black/dark-navy/white palette
+  with electric-blue status accents, higher-contrast panels, consistent rounded
+  geometry, improved focus states, 15 px body copy, 13 px mobile navigation,
+  and a matching favicon/social-preview asset. Browser verification at 1,280 px
+  and 390 px confirmed full-width cards, contained horizontal navigation, no
+  page-level horizontal overflow, and no console errors;
 - `suitability-v1` target-scoped Essential, Standard, and Demanding workload
   gates for all 12 use cases, with per-check Run ID/profile/methodology/time
   provenance, 30-day freshness, cleanup/methodology validity gates, explicit
