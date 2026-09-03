@@ -220,6 +220,11 @@ session, Agent task claims, and campaign creation order.
   token can enroll the small set of agents participating in that session.
 - Every joined worker receives a separate random credential. Only its SHA-256
   hash is persisted, and it can claim or finish tasks assigned to that agent.
+- Secret-bearing service tasks may attach a bounded ephemeral secret held only
+  in Controller memory. SQLite stores only the non-secret task payload. The
+  secret is merged only into an authenticated assigned-Agent claim response and
+  is removed on completion, failure, cancellation, or abort. It is intentionally
+  unavailable after Controller restart.
 - Remote joins require HTTPS unless the operator explicitly enables HTTP inside
   a trusted private network.
 - Version 0.5 does not yet provide mTLS enrollment. HTTPS/VPN termination and

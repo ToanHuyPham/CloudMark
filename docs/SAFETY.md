@@ -217,4 +217,12 @@ systems.
 - The browser retains it only in `sessionStorage`.
 - Pairing secrets are stored as hashes in SQLite.
 - Independent agent credentials are returned once and stored only as hashes.
+- Ephemeral task secrets are bounded to eight named string fields and exist only
+  in Controller memory. They never appear in `agent_tasks.payload_json`, task
+  read models, progress responses, runtime snapshots, dashboard responses, or
+  Git. Only the authenticated assigned Agent receives them while claiming the
+  queued task, and terminal task paths erase them from memory.
+- Controller restart intentionally loses ephemeral task secrets. Unfinished
+  task recovery closes the associated work rather than reconstructing or
+  persisting a plaintext credential.
 - Provider credentials and instance user-data are never included in reports.

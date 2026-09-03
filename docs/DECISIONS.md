@@ -388,3 +388,19 @@ silently lengthening Standard and lets operators schedule storage-heavy
 recovery work deliberately. Same-Target logical restore is useful but cannot
 establish snapshot durability, cross-zone recovery, PITR, RPO, RTO, or
 cryptographic data equality, so those claims remain unavailable.
+
+## D-028: Service task secrets are memory-only and fail closed on restart
+
+**Decision:** Agent tasks may carry a bounded ephemeral secret separately from
+their durable payload. The Controller stores at most eight validated string
+fields in process memory, injects them only into the authenticated claim
+response for the assigned Agent, and removes them on every terminal or abort
+path. SQLite payloads, task read models, progress responses, evidence exports,
+runtime backups, and Git never contain the plaintext. Controller restart does
+not restore the value; unfinished task recovery closes the work.
+
+**Reason:** Authenticated Redis and future service clients need a shared
+per-run credential, but putting it in the durable task JSON would copy plaintext
+into SQLite and protected backups. A memory-only channel preserves the existing
+auditable task contract while failing closed after process loss instead of
+creating a long-lived secret-recovery mechanism.

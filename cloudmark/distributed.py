@@ -60,9 +60,19 @@ def create_task(
     agent_id: str,
     kind: str,
     payload: dict[str, Any],
+    *,
+    ephemeral_secret: dict[str, str] | None = None,
 ) -> str:
     task_id = f"task_{uuid.uuid4().hex[:16]}"
-    database.create_agent_task(task_id, run_id, session_id, agent_id, kind, payload)
+    database.create_agent_task(
+        task_id,
+        run_id,
+        session_id,
+        agent_id,
+        kind,
+        payload,
+        ephemeral_secret=ephemeral_secret,
+    )
     return task_id
 
 

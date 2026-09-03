@@ -3,6 +3,7 @@ from __future__ import annotations
 import ipaddress
 import json
 import os
+import sqlite3
 import tempfile
 import sys
 import threading
@@ -941,6 +942,87 @@ class CloudMarkTests(unittest.TestCase):
                 {"target_address": "10.0.0.11"},
             )
             self.assertEqual(database.cancel_queued_run_tasks("run_network"), 1)
+
+    def test_ephemeral_agent_task_secrets_never_enter_sqlite_or_read_models(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "test.sqlite3"
+            database = Database(path)
+            database.create_session("session_secret", "secret", "hash", "2099-01-01T00:00:00+00:00")
+            database.add_agent("agent_secret", "session_secret", "agent", "target", {})
+            database.create_run("run_secret", "database", "redis-peer-quick", {}, total_steps=1)
+            secret = "redis-password-never-persisted-1234567890"
+            database.create_agent_task(
+                "task_secret",
+                "run_secret",
+                "session_secret",
+                "agent_secret",
+                "redis-service-start",
+                {"ephemeral_secret_required": True},
+                ephemeral_secret={"redis_password": secret},
+            )
+            stored = database.get_agent_task("task_secret")
+            self.assertNotIn("ephemeral_secret", stored)
+            self.assertNotIn(secret, json.dumps(stored))
+            connection = sqlite3.connect(path)
+            try:
+                payload_json = connection.execute(
+                    "SELECT payload_json FROM agent_tasks WHERE id = 'task_secret'"
+                ).fetchone()[0]
+            finally:
+                connection.close()
+            self.assertNotIn(secret, payload_json)
+            claimed = database.claim_agent_task("agent_secret")
+            self.assertEqual(claimed["ephemeral_secret"]["redis_password"], secret)
+            progress = database.update_agent_task_progress(
+                "task_secret",
+                "agent_secret",
+                progress=0.5,
+                phase="running",
+                current_job="redis",
+                completed_steps=0,
+                total_steps=1,
+                result=None,
+            )
+            self.assertNotIn("ephemeral_secret", progress)
+            self.assertTrue(
+                database.finish_agent_task(
+                    "task_secret", "agent_secret", status="completed", result={"ready": True}
+                )
+            )
+            self.assertNotIn("task_secret", database._ephemeral_task_secrets)
+
+            database.create_agent_task(
+                "task_cancel_secret",
+                "run_secret",
+                "session_secret",
+                "agent_secret",
+                "redis-client",
+                {"ephemeral_secret_required": True},
+                ephemeral_secret={"redis_password": secret},
+            )
+            self.assertEqual(database.cancel_queued_run_tasks("run_secret"), 1)
+            self.assertNotIn("task_cancel_secret", database._ephemeral_task_secrets)
+            database.create_agent_task(
+                "task_recovery_secret",
+                "run_secret",
+                "session_secret",
+                "agent_secret",
+                "redis-client",
+                {"ephemeral_secret_required": True},
+                ephemeral_secret={"redis_password": secret},
+            )
+            database.recover_incomplete_runs()
+            self.assertEqual(database._ephemeral_task_secrets, {})
+            with self.assertRaisesRegex(ValueError, "bounded contract"):
+                database.create_agent_task(
+                    "task_invalid_secret",
+                    "run_secret",
+                    "session_secret",
+                    "agent_secret",
+                    "redis-client",
+                    {},
+                    ephemeral_secret={"redis_password": "short"},
+                )
             self.assertIsNone(database.claim_agent_task("agent_a"))
 
     def test_agent_task_progress_is_persisted(self) -> None:

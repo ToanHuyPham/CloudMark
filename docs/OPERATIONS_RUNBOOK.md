@@ -220,6 +220,9 @@ be interpreted as HTTP/2 throughput.
 - confirm free space and tool versions;
 - do not immediately rerun a write-heavy or saturation profile;
 - verify cleanup before the next run.
+- after a Controller restart, do not attempt to resume a secret-bearing service
+  task; the credential was intentionally memory-only. Verify cleanup and start a
+  new Run so CloudMark generates a new ephemeral credential.
 
 ### A repeated network campaign window is blocked
 

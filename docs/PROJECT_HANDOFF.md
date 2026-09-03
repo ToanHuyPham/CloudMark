@@ -84,6 +84,10 @@ from Agent B. Its Standard Web v2 contract adds a packaged loopback-only Python
 application behind Nginx, Generator CPU-headroom validation, and fixed HTTP/2
 negotiation evidence. Both service lifecycles use Target-owned watchdogs and
 verified ephemeral cleanup; the Controller never carries benchmark traffic.
+Secret-bearing future service executors use a bounded Controller-memory task
+secret channel. SQLite, runtime snapshots, read models, and Git never contain
+the plaintext value; loss on Controller restart is intentional and closes the
+unfinished task through existing recovery behavior.
 
 The read-time `suitability-v1` engine partitions completed evidence by target,
 validates methodology and cleanup, and evaluates all 12 workload categories at

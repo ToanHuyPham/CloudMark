@@ -19,6 +19,7 @@ class Database:
         self.path = path
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.RLock()
+        self._ephemeral_task_secrets: dict[str, dict[str, str]] = {}
         self._initialize()
 
     def _connect(self) -> sqlite3.Connection:
@@ -322,6 +323,7 @@ class Database:
                 """,
                 (now,),
             )
+            self._ephemeral_task_secrets.clear()
         return cursor.rowcount
 
     @staticmethod
@@ -585,7 +587,15 @@ class Database:
         agent_id: str,
         kind: str,
         payload: dict[str, Any],
+        *,
+        ephemeral_secret: dict[str, str] | None = None,
     ) -> None:
+        if ephemeral_secret is not None:
+            if not ephemeral_secret or len(ephemeral_secret) > 8:
+                raise ValueError("Ephemeral task secret must contain between one and eight fields.")
+            for key, value in ephemeral_secret.items():
+                if not key.isidentifier() or len(key) > 64 or not isinstance(value, str) or not 16 <= len(value) <= 512:
+                    raise ValueError("Ephemeral task secret fields are outside the bounded contract.")
         with self._lock, self._connection() as connection:
             connection.execute(
                 """
@@ -604,6 +614,8 @@ class Database:
                     utc_now(),
                 ),
             )
+            if ephemeral_secret is not None:
+                self._ephemeral_task_secrets[task_id] = dict(ephemeral_secret)
 
     @staticmethod
     def _task_row(row: sqlite3.Row) -> dict[str, Any]:
@@ -638,7 +650,11 @@ class Database:
                 "SELECT * FROM agent_tasks WHERE id = ?",
                 (row["id"],),
             ).fetchone()
-        return self._task_row(updated)
+            task = self._task_row(updated)
+            secret = self._ephemeral_task_secrets.get(str(row["id"]))
+            if secret is not None:
+                task["ephemeral_secret"] = dict(secret)
+            return task
 
     def finish_agent_task(
         self,
@@ -668,12 +684,16 @@ class Database:
                 ),
             )
             if cursor.rowcount == 1:
+                self._ephemeral_task_secrets.pop(task_id, None)
                 return True
             existing = connection.execute(
                 "SELECT status FROM agent_tasks WHERE id = ? AND agent_id = ?",
                 (task_id, agent_id),
             ).fetchone()
-        return bool(existing and existing[0] in {"completed", "failed", "cancelled"})
+            terminal = bool(existing and existing[0] in {"completed", "failed", "cancelled"})
+            if terminal:
+                self._ephemeral_task_secrets.pop(task_id, None)
+            return terminal
 
     def update_agent_task_progress(
         self,
@@ -723,7 +743,10 @@ class Database:
                 """,
                 (error, utc_now(), utc_now(), task_id),
             )
-        return cursor.rowcount == 1
+            if cursor.rowcount == 1:
+                self._ephemeral_task_secrets.pop(task_id, None)
+                return True
+            return False
 
     def has_active_agent_task(self, agent_id: str) -> bool:
         with self._connection() as connection:
@@ -755,6 +778,13 @@ class Database:
 
     def cancel_queued_run_tasks(self, run_id: str) -> int:
         with self._lock, self._connection() as connection:
+            task_ids = [
+                str(row[0])
+                for row in connection.execute(
+                    "SELECT id FROM agent_tasks WHERE run_id = ? AND status = 'queued'",
+                    (run_id,),
+                ).fetchall()
+            ]
             cursor = connection.execute(
                 """
                 UPDATE agent_tasks SET status = 'cancelled', finished_at = ?,
@@ -763,4 +793,6 @@ class Database:
                 """,
                 (utc_now(), run_id),
             )
-        return cursor.rowcount
+            for task_id in task_ids:
+                self._ephemeral_task_secrets.pop(task_id, None)
+            return cursor.rowcount

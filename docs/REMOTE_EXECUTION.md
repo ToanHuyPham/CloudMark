@@ -114,6 +114,14 @@ single-system `agent_id` dispatches. They require a ready Target/Generator
 session and suite-specific confirmation. Service start/client/stop kinds remain
 fixed Agent allow-list entries and never accept arbitrary commands or targets.
 
+Secret-bearing service tasks use a separate in-memory delivery boundary. The
+durable SQLite task contains only non-secret workload fields and an explicit
+credential-required marker. A bounded secret is attached only to the assigned
+Agent's authenticated claim response; ordinary task reads and progress updates
+never include it. Terminal completion, failure, cancellation, and abort erase
+the in-memory value. Controller restart makes it unavailable and existing
+interrupted-task recovery prevents silent reuse under a new credential.
+
 Version `0.5.0` does not remotely install packages or execute provider
 control-plane mutations. Bootstrap remains an explicit operator action requiring
 root or administrator approval. Automatic Agent re-enrollment, fleet labels,

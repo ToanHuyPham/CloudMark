@@ -26,6 +26,13 @@ baseline is still the repository head.
 - local Controller API, authenticated mutations, SQLite history, and dashboard;
 - persistent authenticated Agents and explicit remote CPU/memory/storage
   dispatch;
+- bounded ephemeral Agent-task secret delivery: plaintext fields exist only in
+  Controller memory, are attached only to the authenticated assigned-Agent
+  claim response, never enter SQLite/read models/progress/runtime snapshots, and
+  are erased on task completion, failure, cancellation, or abort. Controller
+  restart intentionally loses them so interrupted work cannot silently reuse a
+  persisted service password; this milestone passes 122 Python tests, 3
+  rendered-dashboard tests, dashboard lint, and the production build;
 - guarded, bidirectional TCP measurements between paired Agents;
 - simulation-verified `network-v6` standard orchestration for allow-listed
   pre/post route-derived interface byte/packet/error/drop deltas,
