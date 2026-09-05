@@ -14,3 +14,10 @@ AOF/RDB files, and logs after success, failure, cancellation, timeout, or lost
 Controller contact. Comparison requires AOF evidence, Generator CPU below 90%
 of one logical core, and verified cleanup. This does not measure replication,
 cluster mode, eviction, failover, or managed Redis control planes.
+
+The non-load verification contract covers parser normalization, rejected
+out-of-policy client arguments, authenticated service configuration, exact
+Target bind/AOF settings, one shared memory-only password across Target and
+Generator tasks, complete orchestration, cleanup, and durable-record redaction.
+The failure-path contract separately proves that a client error still schedules
+Target cleanup and retains cleanup evidence in the partial Run result.

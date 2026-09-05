@@ -1,6 +1,6 @@
 # CloudMark current state
 
-Last updated: 2026-09-03
+Last updated: 2026-09-05
 
 ## Repository baseline
 
@@ -37,7 +37,10 @@ baseline is still the repository head.
   memory-only per-Run authentication, fixed GET/SET value-size/concurrency/
   pipeline shapes, AOF `appendfsync everysec`, CSV P50/P95/P99 latency,
   Generator CPU validity, watchdog cleanup, and no plaintext credential in
-  evidence. The development head passes 124 Python tests;
+  evidence. Dedicated service-configuration and end-to-end orchestration tests
+  verify one shared memory-only password, exact bind/AOF policy, Generator
+  evidence, cleanup, and absence of the password from durable task records. The
+  development head passes 127 Python tests;
 - guarded, bidirectional TCP measurements between paired Agents;
 - simulation-verified `network-v6` standard orchestration for allow-listed
   pre/post route-derived interface byte/packet/error/drop deltas,

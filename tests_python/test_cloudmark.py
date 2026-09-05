@@ -2303,6 +2303,120 @@ tps = 941.176470 (without initial connection time)
             result=worker._run_redis_client("task_redis123",{"target_address":"10.0.0.10","port":56379,"operation":"get","clients":16,"pipeline":16,"value_bytes":1024,"requests":50000,"run_completed_steps":1,"run_total_steps":10,"_ephemeral_secret":{"redis_password":password}})
         command=process.call_args.args[1]; self.assertIn(password,command); self.assertIn("--csv",command); self.assertNotIn(password,json.dumps(result)); self.assertEqual(result["redis_benchmark"]["generator_cpu"]["status"],"observed")
 
+    def test_agent_redis_service_enforces_auth_aof_bind_and_cleanup(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            worker=AgentWorker("http://127.0.0.1:8787","agent","token",workspace=Path(directory)/"agent")
+            process=MagicMock(); process.poll.return_value=None; process.returncode=0; password="temporary-redis-service-secret-123456"
+            pong=SimpleNamespace(returncode=0,stdout="PONG\n",stderr="")
+            with patch("cloudmark.agent.os.name","posix"),patch("cloudmark.agent.find_redis_binary",side_effect=lambda name:name),patch("cloudmark.agent.subprocess.Popen",return_value=process),patch("cloudmark.agent.subprocess.run",return_value=pong),patch("cloudmark.agent.tool_version",return_value="Redis server v=7"):
+                result=worker._start_redis_server("task_redisservice",{"listen_address":"10.0.0.10","port":56379,"deadline_seconds":600,"run_completed_steps":0,"run_total_steps":6,"_ephemeral_secret":{"redis_password":password}})
+            config=worker.active_redis_servers["task_redisservice"].root.joinpath("redis.conf").read_text(encoding="utf-8")
+            self.assertIn("bind 10.0.0.10",config); self.assertIn("appendonly yes",config); self.assertIn("appendfsync everysec",config); self.assertIn(f"requirepass {password}",config); self.assertNotIn(password,json.dumps(result))
+            cleanup=worker._stop_redis_server("task_redisservice"); self.assertTrue(cleanup["cleanup_verified"]); self.assertNotIn("task_redisservice",worker.active_redis_servers)
+
+    def test_redis_orchestrator_uses_one_memory_secret_and_verified_cleanup(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            db=Database(Path(directory)/"test.sqlite3"); db.create_session("session_redis","redis","hash","2099-01-01T00:00:00+00:00")
+            db.add_agent("redis_target","session_redis","target","target",{"inventory":{"capabilities":{"redis_server":True,"redis_cli":True}}},endpoint={"address":"10.0.0.10"})
+            db.add_agent("redis_generator","session_redis","generator","generator",{"inventory":{"capabilities":{"redis_benchmark":True,"procfs_process_cpu":True}}},endpoint={"address":"10.0.0.11"})
+            steps=database_total_steps("redis-peer-quick"); db.create_run("run_redis","database","redis-peer-quick",{"suite":"database"},total_steps=steps); done=threading.Event(); delivered=[]
+            def complete():
+                while not done.is_set():
+                    handled=False
+                    for aid in ("redis_target","redis_generator"):
+                        task=db.claim_agent_task(aid)
+                        if not task: continue
+                        handled=True
+                        if task.get("ephemeral_secret"): delivered.append(task["ephemeral_secret"]["redis_password"])
+                        if task["kind"]=="redis-service-start": value={"ready":True,"persistence":{"appendonly":True,"appendfsync":"everysec"}}
+                        elif task["kind"]=="redis-client": value={"redis_benchmark":{"operation":task["payload"]["operation"],"clients":task["payload"]["clients"],"pipeline":task["payload"]["pipeline"],"value_bytes":task["payload"]["value_bytes"],"requests":task["payload"]["requests"],"metrics":{"requests_per_second":100000.0,"latency_ms":{"p99":2.0}},"generator_cpu":{"status":"observed","peak_process_cpu_percent_of_one_core":40.0}}}
+                        else: value={"status":"completed","cleanup_verified":True}
+                        db.finish_agent_task(task["id"],aid,status="completed",result=value)
+                    if not handled: time.sleep(.005)
+            thread=threading.Thread(target=complete,daemon=True); thread.start()
+            try: result=run_database(db,"run_redis","session_redis","redis-peer-quick",context=JobContext("run_redis",total_steps=steps,timeout_seconds=30))
+            finally: done.set(); thread.join(timeout=2)
+            self.assertEqual(len(result["redis_measurements"]),4); self.assertTrue(result["analysis"]["validity"]["comparison_eligible"]); self.assertTrue(result["cleanup"]["cleanup_verified"]); self.assertEqual(len(set(delivered)),1); self.assertNotIn(delivered[0],json.dumps(db.list_run_tasks("run_redis")))
+
+    def test_redis_orchestrator_schedules_cleanup_after_client_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            database = Database(Path(directory) / "test.sqlite3")
+            database.create_session("session_redis", "redis", "hash", "2099-01-01T00:00:00+00:00")
+            database.add_agent(
+                "redis_target",
+                "session_redis",
+                "target",
+                "target",
+                {"inventory": {"capabilities": {"redis_server": True, "redis_cli": True}}},
+                endpoint={"address": "10.0.0.10"},
+            )
+            database.add_agent(
+                "redis_generator",
+                "session_redis",
+                "generator",
+                "generator",
+                {"inventory": {"capabilities": {"redis_benchmark": True, "procfs_process_cpu": True}}},
+                endpoint={"address": "10.0.0.11"},
+            )
+            total_steps = database_total_steps("redis-peer-quick")
+            database.create_run(
+                "run_redis_failure",
+                "database",
+                "redis-peer-quick",
+                {"suite": "database"},
+                total_steps=total_steps,
+            )
+            done = threading.Event()
+            cleanup_seen = threading.Event()
+
+            def complete_tasks() -> None:
+                while not done.is_set():
+                    handled = False
+                    for agent_id in ("redis_target", "redis_generator"):
+                        task = database.claim_agent_task(agent_id)
+                        if not task:
+                            continue
+                        handled = True
+                        if task["kind"] == "redis-service-start":
+                            database.finish_agent_task(
+                                task["id"],
+                                agent_id,
+                                status="completed",
+                                result={"ready": True, "persistence": {"appendonly": True, "appendfsync": "everysec"}},
+                            )
+                        elif task["kind"] == "redis-client":
+                            database.finish_agent_task(
+                                task["id"], agent_id, status="failed", error="simulated Redis client failure"
+                            )
+                        else:
+                            cleanup_seen.set()
+                            database.finish_agent_task(
+                                task["id"],
+                                agent_id,
+                                status="completed",
+                                result={"status": "completed", "cleanup_verified": True},
+                            )
+                    if not handled:
+                        time.sleep(0.005)
+
+            worker = threading.Thread(target=complete_tasks, daemon=True)
+            worker.start()
+            try:
+                context = JobContext("run_redis_failure", total_steps=total_steps, timeout_seconds=30)
+                with self.assertRaisesRegex(DistributedError, "simulated Redis client failure") as captured:
+                    run_database(
+                        database,
+                        "run_redis_failure",
+                        "session_redis",
+                        "redis-peer-quick",
+                        context=context,
+                    )
+            finally:
+                done.set()
+                worker.join(timeout=2)
+            self.assertTrue(cleanup_seen.is_set())
+            self.assertTrue(captured.exception.partial_result["cleanup"]["cleanup_verified"])
+
     def test_database_v2_requires_pgbench_fixed_transaction_log_support(self) -> None:
         responses = [
             SimpleNamespace(
