@@ -17,7 +17,7 @@ from .profiles import (
 
 SUITABILITY_ENGINE_VERSION = "suitability-v1"
 REQUIREMENTS_VERSION = "workload-requirements-1.0"
-PROVIDER_OBSERVATION_VERSION = "provider-observations-v3"
+PROVIDER_OBSERVATION_VERSION = "provider-observations-v4"
 EVIDENCE_MAX_AGE_DAYS = 30
 EVIDENCE_FUTURE_SKEW_SECONDS = 86_400
 COMPARISON_MIN_SAMPLES = 9
@@ -44,6 +44,13 @@ COMPARISON_METRICS: dict[str, dict[str, Any]] = {
     "database.tpcb_c4_tps": {"label": "Durable TPC-B-like throughput at C4", "direction": "higher"},
     "database.tpcb_c4_latency_ms": {"label": "Durable TPC-B-like average latency", "direction": "lower"},
     "database.tpcb_c4_failed": {"label": "Failed database transactions", "direction": "lower"},
+    "database.redis_set_1k_c16_p1_rps": {"label": "Redis 1 KiB SET throughput at C16/P1", "direction": "higher"},
+    "database.redis_set_1k_c16_p1_p99_ms": {"label": "Redis 1 KiB SET P99 at C16/P1", "direction": "lower"},
+    "database.redis_get_1k_c16_p16_rps": {"label": "Redis 1 KiB GET throughput at C16/P16", "direction": "higher"},
+    "database.redis_get_1k_c16_p16_p99_ms": {"label": "Redis 1 KiB GET P99 at C16/P16", "direction": "lower"},
+    "database.mysql_read_write_t4_tps": {"label": "MySQL/MariaDB read/write throughput at T4", "direction": "higher"},
+    "database.mysql_read_write_t4_p99_ms": {"label": "MySQL/MariaDB read/write P99 at T4", "direction": "lower"},
+    "database.mysql_read_write_t4_errors": {"label": "MySQL/MariaDB read/write ignored errors at T4", "direction": "lower"},
     "web.https_api_c16_rps": {"label": "HTTPS API throughput at C16", "direction": "higher"},
     "web.https_api_c16_p95_ms": {"label": "HTTPS API P95 at C16", "direction": "lower"},
     "web.https_api_c16_success_pct": {"label": "HTTPS API success rate", "direction": "higher"},
@@ -434,16 +441,71 @@ def _extract_run_evidence(evidence: dict[str, dict[str, Any]], run: dict[str, An
         if udp_jitter:
             _put(evidence, "network.udp_jitter_ms", _evidence_item(max(udp_jitter), "ms", run=run, source="network"))
     elif suite == "database":
-        measurement = next((item for item in result.get("database_measurements") or [] if item.get("name") == "tpcb-like-c4"), None)
-        if measurement:
-            values = {
-                "database.tpcb_c4_tps": (_number(_nested(measurement, "metrics", "transactions_per_second")), "TPS"),
-                "database.tpcb_c4_latency_ms": (_number(_nested(measurement, "metrics", "latency_average_ms")), "ms"),
-                "database.tpcb_c4_failed": (_number(_nested(measurement, "metrics", "failed_transactions")), "count"),
-            }
-            for key, (value, unit) in values.items():
-                if value is not None:
-                    _put(evidence, key, _evidence_item(value, unit, run=run, source="database"))
+        engine = str(result.get("engine") or "postgresql")
+        values: dict[str, tuple[float | None, str]] = {}
+        if engine == "redis":
+            measurements = result.get("redis_measurements") or []
+            set_measurement = next(
+                (item for item in measurements if item.get("name") == "set-1k-c16-p1"), None
+            )
+            get_measurement = next(
+                (item for item in measurements if item.get("name") == "get-1k-c16-p16"), None
+            )
+            if set_measurement:
+                values.update({
+                    "database.redis_set_1k_c16_p1_rps": (
+                        _number(_nested(set_measurement, "metrics", "requests_per_second")), "req/s"
+                    ),
+                    "database.redis_set_1k_c16_p1_p99_ms": (
+                        _number(_nested(set_measurement, "metrics", "latency_ms", "p99")), "ms"
+                    ),
+                })
+            if get_measurement:
+                values.update({
+                    "database.redis_get_1k_c16_p16_rps": (
+                        _number(_nested(get_measurement, "metrics", "requests_per_second")), "req/s"
+                    ),
+                    "database.redis_get_1k_c16_p16_p99_ms": (
+                        _number(_nested(get_measurement, "metrics", "latency_ms", "p99")), "ms"
+                    ),
+                })
+        elif engine == "mysql":
+            measurement = next(
+                (item for item in result.get("mysql_measurements") or [] if item.get("name") == "read-write-c4"),
+                None,
+            )
+            if measurement:
+                values = {
+                    "database.mysql_read_write_t4_tps": (
+                        _number(_nested(measurement, "metrics", "transactions_per_second")), "TPS"
+                    ),
+                    "database.mysql_read_write_t4_p99_ms": (
+                        _number(_nested(measurement, "metrics", "latency_ms", "p99")), "ms"
+                    ),
+                    "database.mysql_read_write_t4_errors": (
+                        _number(_nested(measurement, "metrics", "ignored_errors")), "count"
+                    ),
+                }
+        else:
+            measurement = next(
+                (item for item in result.get("database_measurements") or [] if item.get("name") == "tpcb-like-c4"),
+                None,
+            )
+            if measurement:
+                values = {
+                    "database.tpcb_c4_tps": (
+                        _number(_nested(measurement, "metrics", "transactions_per_second")), "TPS"
+                    ),
+                    "database.tpcb_c4_latency_ms": (
+                        _number(_nested(measurement, "metrics", "latency_average_ms")), "ms"
+                    ),
+                    "database.tpcb_c4_failed": (
+                        _number(_nested(measurement, "metrics", "failed_transactions")), "count"
+                    ),
+                }
+        for key, (value, unit) in values.items():
+            if value is not None:
+                _put(evidence, key, _evidence_item(value, unit, run=run, source="database"))
     elif suite == "web":
         measurement = next((item for item in result.get("web_measurements") or [] if item.get("name") == "https-api-c16"), None)
         if measurement:
@@ -599,6 +661,28 @@ def _run_topology_contract(run: dict[str, Any]) -> tuple[str, str]:
     return "undeclared", "unavailable"
 
 
+def _run_implementation_contract(run: dict[str, Any]) -> tuple[str, bool]:
+    if str(run.get("suite") or "") != "database":
+        return "not-applicable", True
+    result = run.get("result") if isinstance(run.get("result"), dict) else {}
+    engine = str(result.get("engine") or ("postgresql" if result.get("database_measurements") else "unknown"))
+    implementation = engine
+    version: Any = None
+    server = result.get("server") if isinstance(result.get("server"), dict) else {}
+    if engine == "mysql":
+        implementation = str(server.get("implementation") or "unknown")
+        version = _nested(server, "tool", "version")
+    elif engine == "redis":
+        version = _nested(server, "tool", "version")
+    elif engine == "postgresql":
+        version = _nested(server, "tools", "postgres")
+    value = str(version or "").strip()
+    verified = engine != "unknown" and implementation != "unknown" and bool(value)
+    safe_version = " ".join(value.split()).replace("|", "/") if value else "unknown-version"
+    safe_implementation = " ".join(implementation.split()).replace("|", "/")
+    return f"{engine}:{safe_implementation}:{safe_version}", verified
+
+
 def _percentile(values: list[float], fraction: float) -> float:
     ordered = sorted(values)
     if len(ordered) == 1:
@@ -652,7 +736,7 @@ def _provider_observations(targets: list[dict[str, Any]]) -> dict[str, Any]:
         peer_ids = {peer["id"] for peer in peers}
         identity_verified = all(_provider_identity_verified(peer["provider"]) for peer in peers)
         runs_by_id: dict[str, dict[str, Any]] = {}
-        metric_builders: dict[tuple[str, str, str, str, str, str], dict[str, Any]] = {}
+        metric_builders: dict[tuple[str, str, str, str, str, str, str], dict[str, Any]] = {}
         for peer in peers:
             for run in peer["_runs"]:
                 if not _run_is_fresh(run):
@@ -677,15 +761,28 @@ def _provider_observations(targets: list[dict[str, Any]]) -> dict[str, Any]:
                     methodology = str(item.get("methodology_version") or "")
                     unit = str(item.get("unit") or "")
                     topology_scope, topology_evidence = _run_topology_contract(run)
-                    contract_key = (metric_key, profile, methodology, unit, topology_scope, topology_evidence)
+                    implementation_contract, implementation_verified = _run_implementation_contract(run)
+                    contract_key = (
+                        metric_key,
+                        profile,
+                        methodology,
+                        unit,
+                        topology_scope,
+                        topology_evidence,
+                        implementation_contract,
+                    )
                     builder = metric_builders.setdefault(contract_key, {
                         "values": [],
                         "run_ids": [],
                         "target_ids": set(),
                         "windows": set(),
                         "observed_at": [],
+                        "implementation_verified": True,
                         "_seen_runs": set(),
                     })
+                    builder["implementation_verified"] = (
+                        builder["implementation_verified"] and implementation_verified
+                    )
                     if run_id in builder["_seen_runs"]:
                         builder["target_ids"].update(participating_targets)
                         continue
@@ -700,7 +797,15 @@ def _provider_observations(targets: list[dict[str, Any]]) -> dict[str, Any]:
 
         metric_cohorts: list[dict[str, Any]] = []
         for contract_key, builder in sorted(metric_builders.items()):
-            metric_key, profile, methodology, unit, topology_scope, topology_evidence = contract_key
+            (
+                metric_key,
+                profile,
+                methodology,
+                unit,
+                topology_scope,
+                topology_evidence,
+                implementation_contract,
+            ) = contract_key
             values = builder["values"]
             median = _percentile(values, 0.5)
             p10 = _percentile(values, 0.1)
@@ -721,6 +826,8 @@ def _provider_observations(targets: list[dict[str, Any]]) -> dict[str, Any]:
                 reasons.append("Paired benchmark topology evidence contradicts the operator declaration.")
             elif topology_scope == "undeclared":
                 reasons.append("Paired benchmark topology is not declared.")
+            if not builder["implementation_verified"]:
+                reasons.append("Database engine implementation or server version evidence is unavailable.")
             relative_spread, stability = _stability(values, median, p10, p90)
             metric_cohorts.append({
                 "contract_id": "|".join(contract_key),
@@ -733,6 +840,7 @@ def _provider_observations(targets: list[dict[str, Any]]) -> dict[str, Any]:
                 "methodology_version": methodology,
                 "topology_scope": topology_scope,
                 "topology_evidence": topology_evidence,
+                "implementation_contract": implementation_contract,
                 "status": "comparable" if not reasons else "observational",
                 "reasons": reasons,
                 "sample_count": len(values),
@@ -804,6 +912,7 @@ def _provider_observations(targets: list[dict[str, Any]]) -> dict[str, Any]:
             "exact_profile_and_methodology": True,
             "exact_pair_topology": True,
             "exact_pair_topology_evidence": True,
+            "exact_database_implementation_and_version": True,
             "cross_sku_aggregation": False,
             "cross_region_aggregation": False,
             "cross_os_aggregation": False,

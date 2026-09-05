@@ -54,6 +54,11 @@ intervals. Comparison eligibility requires:
 A failed, cancelled, timed-out, or cleanup-unverified Run remains partial
 evidence. Missing evidence is unavailable, never zero.
 
+Repeated provider observations expose the fixed four-thread read/write TPS,
+P99, and ignored-error metrics only inside an exact MySQL-versus-MariaDB
+implementation and server-version contract. Those descriptive cohorts do not
+create a provider score or calibrate workload suitability thresholds.
+
 ## Safety and limitations
 
 Free space must cover the fixed estimated dataset plus the larger of 1 GiB or

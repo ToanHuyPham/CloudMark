@@ -188,9 +188,9 @@ Demanding hard gates to all 12 use cases, preserves per-check run provenance,
 and reports missing/stale evidence, blockers, limitations, and next actions.
 It deliberately does not publish a provider rating.
 
-`provider-observations-v3` is also available at development head. It reports
-exact provider/SKU/region/OS/topology/evidence-class and profile/methodology
-cohorts with descriptive
+`provider-observations-v4` is also available at development head. It reports
+exact provider/SKU/region/OS/topology/evidence-class, profile/methodology, and
+database implementation/server-version cohorts with descriptive
 median, P10/P90, actual best/worst, and spread. Nine samples across three
 targets and three UTC-day windows are required before a metric is marked
 comparable; this remains distinct from a provider rating.

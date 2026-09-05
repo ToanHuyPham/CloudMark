@@ -402,9 +402,10 @@ class CloudMarkTests(unittest.TestCase):
 
         report = evaluate_suitability(runs, self._suitability_system("controller"), agents.get)
         observations = report["provider_observations"]
-        self.assertEqual(observations["version"], "provider-observations-v3")
+        self.assertEqual(observations["version"], "provider-observations-v4")
         self.assertTrue(observations["policy"]["exact_pair_topology"])
         self.assertTrue(observations["policy"]["exact_pair_topology_evidence"])
+        self.assertTrue(observations["policy"]["exact_database_implementation_and_version"])
         self.assertFalse(observations["policy"]["provider_ranking"])
         group = observations["groups"][0]
         self.assertEqual(group["target_count"], 3)
@@ -419,6 +420,109 @@ class CloudMarkTests(unittest.TestCase):
         self.assertEqual(metric["statistics"]["p90"], 1720)
         self.assertEqual(metric["statistics"]["worst"], 1000)
         self.assertEqual(group["rating_status"], "not-rated")
+
+    def test_provider_observations_extract_cache_metrics_and_separate_database_implementations(self) -> None:
+        completed_at = datetime.now(timezone.utc).isoformat()
+        systems = {
+            "agent_a": {"last_seen_at": completed_at, "system": self._suitability_system("agent-a")},
+        }
+        topology = {"scope": "same-zone", "source": "operator-declared"}
+
+        def mysql_run(run_id: str, implementation: str, version: str, tps: float) -> dict[str, object]:
+            return {
+                "id": run_id,
+                "suite": "database",
+                "profile": "mysql-peer-standard",
+                "status": "completed",
+                "finished_at": completed_at,
+                "methodology_version": "database-mysql-v1",
+                "request": {},
+                "result": {
+                    "engine": "mysql",
+                    "methodology_version": "database-mysql-v1",
+                    "session": {"topology": topology},
+                    "target": {"id": "agent_a"},
+                    "server": {
+                        "implementation": implementation,
+                        "tool": {"version": version},
+                    },
+                    "mysql_measurements": [{
+                        "name": "read-write-c4",
+                        "metrics": {
+                            "transactions_per_second": tps,
+                            "latency_ms": {"p99": 12.5},
+                            "ignored_errors": 0,
+                        },
+                    }],
+                    "cleanup": {"cleanup_verified": True},
+                    "analysis": {"validity": {"comparison_eligible": True}},
+                },
+            }
+
+        redis_run = {
+            "id": "run_redis",
+            "suite": "database",
+            "profile": "redis-peer-standard",
+            "status": "completed",
+            "finished_at": completed_at,
+            "methodology_version": "database-redis-v1",
+            "request": {},
+            "result": {
+                "engine": "redis",
+                "methodology_version": "database-redis-v1",
+                "session": {"topology": topology},
+                "target": {"id": "agent_a"},
+                "server": {"tool": {"version": "Redis server v=7.2.5"}},
+                "redis_measurements": [
+                    {
+                        "name": "set-1k-c16-p1",
+                        "metrics": {"requests_per_second": 85000.0, "latency_ms": {"p99": 2.5}},
+                    },
+                    {
+                        "name": "get-1k-c16-p16",
+                        "metrics": {"requests_per_second": 140000.0, "latency_ms": {"p99": 1.4}},
+                    },
+                ],
+                "cleanup": {"cleanup_verified": True},
+                "analysis": {"validity": {"comparison_eligible": True}},
+            },
+        }
+        report = evaluate_suitability(
+            [
+                mysql_run("run_mariadb", "mariadb", "mariadbd 11.4.3", 500.0),
+                mysql_run("run_mysql", "mysql", "mysqld 8.4.2", 510.0),
+                mysql_run("run_mysql_unknown", "mysql", "", 505.0),
+                redis_run,
+            ],
+            self._suitability_system("controller"),
+            systems.get,
+        )
+        observations = report["provider_observations"]
+        self.assertEqual(observations["version"], "provider-observations-v4")
+        metrics = observations["groups"][0]["metric_cohorts"]
+        mysql_tps = [item for item in metrics if item["key"] == "database.mysql_read_write_t4_tps"]
+        self.assertEqual(len(mysql_tps), 3)
+        self.assertEqual(
+            {item["implementation_contract"] for item in mysql_tps},
+            {
+                "mysql:mariadb:mariadbd 11.4.3",
+                "mysql:mysql:mysqld 8.4.2",
+                "mysql:mysql:unknown-version",
+            },
+        )
+        self.assertTrue(all(item["sample_count"] == 1 for item in mysql_tps))
+        unknown = next(item for item in mysql_tps if item["implementation_contract"].endswith("unknown-version"))
+        self.assertIn("implementation", " ".join(unknown["reasons"]).lower())
+        redis_keys = {item["key"] for item in metrics if item["implementation_contract"].startswith("redis:")}
+        self.assertEqual(
+            redis_keys,
+            {
+                "database.redis_set_1k_c16_p1_rps",
+                "database.redis_set_1k_c16_p1_p99_ms",
+                "database.redis_get_1k_c16_p16_rps",
+                "database.redis_get_1k_c16_p16_p99_ms",
+            },
+        )
 
     def test_provider_observations_do_not_merge_profiles_or_duplicate_peer_runs(self) -> None:
         completed_at = datetime.now(timezone.utc).isoformat()
@@ -4725,6 +4829,7 @@ max: 1.50
                 self.assertIn("disk-sustained", dashboard["profiles"]["storage"])
                 self.assertIn("network-peer-quick", dashboard["profiles"]["network"])
                 self.assertIn("postgres-peer-quick", dashboard["profiles"]["database"])
+                self.assertIn("mysql-peer-standard", dashboard["profiles"]["database"])
                 self.assertIn("web-peer-quick", dashboard["profiles"]["web"])
                 self.assertIn("sessions", dashboard)
                 self.assertEqual(dashboard["network_campaigns"], [])
@@ -4735,9 +4840,12 @@ max: 1.50
                 self.assertEqual(suitability["requirements_version"], "workload-requirements-1.0")
                 with urllib.request.urlopen(f"{base}/provider-comparisons", timeout=5) as response:
                     provider_observations = json.load(response)
-                self.assertEqual(provider_observations["version"], "provider-observations-v3")
+                self.assertEqual(provider_observations["version"], "provider-observations-v4")
                 self.assertEqual(provider_observations["rating_status"], "not-rated")
                 self.assertFalse(provider_observations["policy"]["provider_ranking"])
+                self.assertTrue(
+                    provider_observations["policy"]["exact_database_implementation_and_version"]
+                )
                 with urllib.request.urlopen(f"{base}/network-campaigns", timeout=5) as response:
                     campaigns = json.load(response)
                 self.assertEqual(campaigns["items"], [])

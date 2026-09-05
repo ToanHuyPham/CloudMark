@@ -432,3 +432,20 @@ password, durability-off setting, or unrestricted account would be unsafe and
 poorly reproducible. Separating preparation, timed Generator work, table
 cleanup, and Target cleanup produces auditable single-node OLTP evidence while
 avoiding unsupported replication, PITR, and managed-service claims.
+
+## D-031: Database provider cohorts require engine implementation identity
+
+**Decision:** Advance repeated provider observations to
+`provider-observations-v4`. PostgreSQL TPC-B-like, Redis fixed GET/SET, and
+MySQL/MariaDB fixed read/write measurements receive distinct descriptive metric
+keys. Every database/cache metric contract includes the engine implementation
+and exact server version in addition to provider, SKU, region, OS, profile,
+methodology, unit, topology, and topology-evidence class. Missing implementation
+or version evidence keeps the cohort observational. MySQL and MariaDB results,
+or results from different server versions, are never silently merged.
+
+**Reason:** A shared protocol or workload name does not make different database
+engines and server releases performance-equivalent. Adding the observed
+implementation to the acquisition contract prevents mixed-product statistics
+while preserving useful non-ranking provider observations for all implemented
+database/cache executors.

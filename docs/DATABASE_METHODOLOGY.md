@@ -5,6 +5,11 @@ This document covers PostgreSQL only. MySQL/MariaDB uses the independent
 [`database-redis-v1`](REDIS_METHODOLOGY.md). Results from different engines are
 not interchangeable.
 
+Repeated provider observations expose the fixed PostgreSQL TPC-B-like C4 TPS,
+average latency, and failed-transaction metrics only within an exact PostgreSQL
+server-version contract. They remain descriptive and do not change the
+versioned workload suitability thresholds.
+
 CloudMark Standard methodology `database-postgresql-v2` measures a real
 PostgreSQL service from a separate pgbench Generator, adds exact fixed-count
 transaction tail latency, and validates Generator process CPU. Quick remains on

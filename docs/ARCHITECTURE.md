@@ -81,10 +81,12 @@ measurement windows, observed suites, and missing operational domains, but
 does not produce a provider rating until the complete aggregation contract is
 implemented.
 
-`provider-observations-v3` adds a second read-time projection for repeated
+`provider-observations-v4` adds a second read-time projection for repeated
 measurements. Cohorts must match provider, SKU, region, operating system,
 profile, methodology, metric, unit, paired topology, and topology evidence
-class. It de-duplicates a paired network Run, uses UTC calendar days as
+class. Database/cache cohorts additionally match engine implementation and
+exact server version, and expose PostgreSQL, Redis, and MySQL/MariaDB metrics
+under distinct keys. It de-duplicates a paired network Run, uses UTC calendar days as
 windows, and reports descriptive distributions only. Trusted Agent metadata
 may independently derive a placement scope; contradictory operator
 declarations fail closed to observational evidence. Globally routable peer

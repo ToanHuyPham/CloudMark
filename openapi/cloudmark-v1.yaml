@@ -202,7 +202,7 @@ paths:
   /provider-comparisons:
     get:
       summary: Same-cohort repeated-window provider observations
-      description: Returns descriptive median, P10, P90, worst-value, and stability statistics only for exact provider, SKU, region, operating-system, profile, methodology, topology, and topology-evidence cohorts. Provider ratings remain disabled.
+      description: Returns provider-observations-v4 descriptive median, P10, P90, worst-value, and stability statistics only for exact provider, SKU, region, operating-system, profile, methodology, topology, topology-evidence, and database implementation/server-version cohorts. Provider ratings remain disabled.
       responses:
         "200": { description: Versioned provider observation report }
   /profiles:

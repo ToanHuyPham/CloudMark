@@ -21,3 +21,7 @@ Target bind/AOF settings, one shared memory-only password across Target and
 Generator tasks, complete orchestration, cleanup, and durable-record redaction.
 The failure-path contract separately proves that a client error still schedules
 Target cleanup and retains cleanup evidence in the partial Run result.
+
+Repeated provider observations expose the fixed 1 KiB C16/P1 SET and C16/P16
+GET request-rate and P99 metrics only within an exact Redis server-version
+contract. They remain descriptive evidence and do not create a provider score.

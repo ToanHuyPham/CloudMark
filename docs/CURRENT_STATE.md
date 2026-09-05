@@ -161,13 +161,16 @@ baseline is still the repository head.
   converted to zero and provider status remains `not-rated`; the milestone
   passes 70 Python tests, 3 rendered-dashboard tests, dashboard lint, and the
   production build without starting provider load;
-- `provider-observations-v3` exact provider/SKU/region/OS/topology/evidence-class
+- `provider-observations-v4` exact provider/SKU/region/OS/topology/evidence-class
   cohorts with strict profile/methodology/topology compatibility, UTC-day
-  windows, network Run
-  de-duplication, median/P10/P90/best/worst/spread statistics, and a guarded
-  nine-sample/three-target/three-window comparable state; the milestone passes
-  81 Python tests, 3 rendered-dashboard tests, dashboard lint, and the
-  production build without starting provider load;
+  windows, network Run de-duplication, and database/cache engine implementation
+  plus exact server-version isolation. PostgreSQL, Redis GET/SET, and
+  MySQL/MariaDB read/write metrics now enter descriptive cohorts without being
+  converted into a score. Median/P10/P90/best/worst/spread statistics retain a
+  guarded nine-sample/three-target/three-window comparable state. MySQL and
+  MariaDB or different server versions cannot be silently merged. The complete
+  development head passes 135 Python tests, 3 rendered-dashboard tests,
+  dashboard lint, and the production build without starting provider load;
 - repository-level Codex guidance, durable handoff documentation, consistent
   SQLite runtime snapshots, guarded secret backup, recoverable restore, and
   safe Windows local-process launch/stop scripts;

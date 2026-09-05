@@ -354,10 +354,11 @@ are satisfied.
 GET /api/v1/provider-comparisons
 ```
 
-The `provider-observations-v3` response groups fresh valid evidence only when
+The `provider-observations-v4` response groups fresh valid evidence only when
 provider, product/SKU, region, operating system, profile, methodology, metric,
-unit, paired topology, and topology evidence class match. A UTC calendar day is
-one measurement window. Each metric
+unit, paired topology, and topology evidence class match. Database and cache
+metrics additionally require the same engine, implementation, and exact server
+version. A UTC calendar day is one measurement window. Each metric
 cohort exposes sample, target, window, and Run ID sets plus median, P10, P90,
 actual minimum/maximum, direction-aware best/worst, and P10-P90 relative
 spread.
@@ -369,6 +370,9 @@ never returns a provider ranking; `rating_status` remains `not-rated`. Paired
 network, database, and web runs with undeclared or contradictory topology remain
 observational. Operator-declared and independently derived topology remain
 separate metric contracts.
+PostgreSQL, Redis, and MySQL/MariaDB expose separate descriptive metric keys.
+MySQL and MariaDB implementations or different server versions are never
+silently merged, even when the CloudMark profile name matches.
 
 The complete machine-readable contract is in
 [`openapi/cloudmark-v1.yaml`](../openapi/cloudmark-v1.yaml).

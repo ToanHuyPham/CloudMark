@@ -54,6 +54,8 @@ test("keeps production metadata and project policy explicit", async () => {
   assert.match(page, /PROVIDER EVALUATION READINESS/);
   assert.match(page, /REPEATED-WINDOW OBSERVATIONS/);
   assert.match(page, /COMPARISON CONTRACT/);
+  assert.match(page, /ENGINE \/ TOOL CONTRACT/);
+  assert.match(page, /provider-observations-v4/);
   assert.match(page, /SYSTEM RESOLVER/);
   assert.match(page, /QUEUE STEERING/);
   assert.match(page, /network-v9/i);
