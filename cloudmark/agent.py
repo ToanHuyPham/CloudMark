@@ -59,7 +59,16 @@ from .profiles import COMPUTE_PROFILES, MEMORY_PROFILES, STORAGE_PROFILES
 from .provider import detect_provider
 from .remote import REMOTE_METHODOLOGY_VERSION
 from .runner import CancellationToken, JobContext, RunCancelled, RunTimedOut
-from .tooling import find_postgres_binary, find_redis_binary, find_web_binary, tool_version, web_tool_version
+from .tooling import (
+    find_mysql_binary,
+    find_postgres_binary,
+    find_redis_binary,
+    find_web_binary,
+    mysql_tool_supports,
+    tool_version,
+    web_tool_version,
+)
+from .mysql_benchmark import MYSQL_PORT, MySQLBenchmarkError, parse_sysbench_mysql_output
 from .redis_benchmark import REDIS_PORT, RedisBenchmarkError, parse_redis_benchmark_csv
 from .web_benchmark import (
     WEB_ALLOWED_CONCURRENCY,
@@ -1178,6 +1187,21 @@ class ActiveRedisServer:
     port: int
 
 
+@dataclass
+class ActiveMySQLServer:
+    process: subprocess.Popen[str]
+    deadline: float
+    root: Path
+    data_dir: Path
+    socket_path: Path
+    log_path: Path
+    log_handle: Any
+    version: str | None
+    implementation: str
+    port: int
+    durability: dict[str, Any]
+
+
 class AgentBenchmarkFailure(RuntimeError):
     def __init__(self, message: str, *, status: str, result: dict[str, Any] | None):
         super().__init__(message)
@@ -1206,6 +1230,7 @@ class AgentWorker:
         self.active_database_servers: dict[str, ActiveDatabaseServer] = {}
         self.active_web_servers: dict[str, ActiveWebServer] = {}
         self.active_redis_servers: dict[str, ActiveRedisServer] = {}
+        self.active_mysql_servers: dict[str, ActiveMySQLServer] = {}
         self.pending_completions: dict[str, dict[str, Any]] = {}
         self.last_controller_contact = time.monotonic()
 
@@ -1885,7 +1910,7 @@ class AgentWorker:
         }
 
     def _start_database_server(self, task_id: str, payload: dict[str, Any]) -> dict[str, Any]:
-        if self.active_database_servers or self.active_web_servers:
+        if self.active_database_servers or self.active_web_servers or self.active_redis_servers or self.active_mysql_servers:
             raise DatabaseBenchmarkError("Agent already has an active paired service.")
         service_root = self.workspace / "database-services"
         if service_root.is_dir() and any(item.is_dir() for item in service_root.iterdir()):
@@ -2521,7 +2546,7 @@ class AgentWorker:
         return {"status":"completed","cleanup_verified":cleaned,"server_returncode":active.process.returncode,"redis_log_tail":tail}
 
     def _start_redis_server(self, task_id:str,payload:dict[str,Any])->dict[str,Any]:
-        if self.active_redis_servers or self.active_database_servers or self.active_web_servers: raise RedisBenchmarkError("Agent already has an active paired service.")
+        if self.active_redis_servers or self.active_database_servers or self.active_web_servers or self.active_mysql_servers: raise RedisBenchmarkError("Agent already has an active paired service.")
         if os.name=="nt": raise RedisBenchmarkError("Redis assessment currently requires a Linux Agent.")
         address=str(payload.get("listen_address","")); self._peer_address(address); port=int(payload.get("port",0)); deadline=int(payload.get("deadline_seconds",0)); password=self._redis_password(payload)
         if port!=REDIS_PORT or not 120<=deadline<=3600: raise RedisBenchmarkError("Redis service bounds do not match the methodology.")
@@ -2554,6 +2579,475 @@ class AgentWorker:
         code,stdout,stderr=self._guarded_service_process(task_id,command,environment={**os.environ,"LC_ALL":"C"},expected_duration=60,phase="measuring-redis",current_job=operation,completed_steps=int(payload.get("run_completed_steps",0)),total_steps=int(payload.get("run_total_steps",1)),cpu_samples=samples)
         if code!=0: raise RedisBenchmarkError(stderr.strip()[:256] or "redis-benchmark failed.")
         return {"redis_benchmark":{"operation":operation,"clients":clients,"pipeline":pipeline,"value_bytes":size,"requests":requests,"metrics":parse_redis_benchmark_csv(stdout),"generator_cpu":_generator_cpu_evidence(samples),"tool":{"name":"redis-benchmark","version":tool_version(executable)}}}
+
+    @staticmethod
+    def _mysql_password(payload: dict[str, Any]) -> str:
+        secret = payload.get("_ephemeral_secret") or {}
+        password = secret.get("mysql_password")
+        if not isinstance(password, str) or not re.fullmatch(r"[A-Za-z0-9_-]{16,512}", password):
+            raise MySQLBenchmarkError("MySQL/MariaDB task is missing its ephemeral credential.")
+        return password
+
+    @staticmethod
+    def _mysql_tool(name: str) -> str:
+        executable = find_mysql_binary(name)
+        if not executable:
+            raise MySQLBenchmarkError(
+                f"MySQL/MariaDB {name} tooling is unavailable. Run CloudMark bootstrap with the database pack."
+            )
+        return executable
+
+    def _mysql_root(self, task_id: str) -> Path:
+        if not task_id.startswith("task_") or not task_id.removeprefix("task_").isalnum():
+            raise MySQLBenchmarkError("MySQL/MariaDB task ID is invalid.")
+        base = (self.workspace / "mysql-services").resolve()
+        root = (base / task_id).resolve()
+        try:
+            root.relative_to(base)
+        except ValueError as exc:
+            raise MySQLBenchmarkError("MySQL/MariaDB path escaped the Agent workspace.") from exc
+        return root
+
+    def _remove_mysql_root(self, root: Path) -> bool:
+        base = (self.workspace / "mysql-services").resolve()
+        resolved = root.resolve()
+        try:
+            relative = resolved.relative_to(base)
+        except ValueError as exc:
+            raise MySQLBenchmarkError("Agent refused cleanup outside its MySQL/MariaDB workspace.") from exc
+        if not relative.parts:
+            raise MySQLBenchmarkError("Agent refused cleanup of the MySQL/MariaDB workspace root.")
+        if resolved.exists():
+            shutil.rmtree(resolved)
+        return not resolved.exists()
+
+    @staticmethod
+    def _mysql_server_command(
+        executable: str,
+        *,
+        data_dir: Path,
+        tmp_dir: Path,
+        socket_path: Path,
+        pid_path: Path,
+        log_path: Path,
+        max_connections: int,
+        listen_address: str | None = None,
+        port: int | None = None,
+    ) -> list[str]:
+        command = [
+            executable,
+            "--no-defaults",
+            f"--datadir={data_dir}",
+            f"--tmpdir={tmp_dir}",
+            f"--socket={socket_path}",
+            f"--pid-file={pid_path}",
+            f"--log-error={log_path}",
+            f"--max-connections={max_connections}",
+            "--innodb-flush-log-at-trx-commit=1",
+            "--innodb-doublewrite=ON",
+            "--skip-log-bin",
+            "--skip-name-resolve",
+        ]
+        if listen_address is None or port is None:
+            command.append("--skip-networking")
+        else:
+            command.extend([f"--bind-address={listen_address}", f"--port={port}"])
+        return command
+
+    def _wait_mysql_ready(
+        self,
+        task_id: str,
+        process: subprocess.Popen[str],
+        admin: str,
+        socket_path: Path,
+        *,
+        password: str | None,
+        completed_steps: int,
+        total_steps: int,
+    ) -> None:
+        environment = {**os.environ, "LC_ALL": "C"}
+        if password is not None:
+            environment["MYSQL_PWD"] = password
+        deadline = time.monotonic() + 40
+        next_control_update = time.monotonic()
+        while time.monotonic() < deadline:
+            if process.poll() is not None:
+                raise MySQLBenchmarkError("MySQL/MariaDB exited before becoming ready.")
+            if time.monotonic() >= next_control_update:
+                self._service_control_update(
+                    task_id,
+                    phase="mysql-initialization",
+                    current_job="server-readiness",
+                    completed_steps=completed_steps,
+                    total_steps=total_steps,
+                )
+                next_control_update = time.monotonic() + 2
+            ready = subprocess.run(
+                [admin, "--no-defaults", f"--socket={socket_path}", "--user=root", "ping"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                check=False,
+                shell=False,
+                env=environment,
+            )
+            if ready.returncode == 0:
+                return
+            time.sleep(0.25)
+        raise MySQLBenchmarkError("MySQL/MariaDB did not become ready within 40 seconds.")
+
+    def _stop_mysql_server(self, server_task_id: str) -> dict[str, Any]:
+        active = self.active_mysql_servers.get(server_task_id)
+        if not active:
+            root = self._mysql_root(server_task_id)
+            return {
+                "status": "already-absent",
+                "cleanup_verified": not root.exists(),
+                "server_task_id": server_task_id,
+            }
+        self._terminate_process(active.process, timeout=20)
+        active.log_handle.close()
+        log_tail = self._tail_text(active.log_path)
+        cleaned = self._remove_mysql_root(active.root)
+        self.active_mysql_servers.pop(server_task_id, None)
+        return {
+            "status": "completed",
+            "cleanup_verified": cleaned,
+            "server_task_id": server_task_id,
+            "server_returncode": active.process.returncode,
+            "mysql_log_tail": log_tail,
+        }
+
+    def _start_mysql_server(self, task_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+        if self.active_mysql_servers or self.active_database_servers or self.active_web_servers or self.active_redis_servers:
+            raise MySQLBenchmarkError("Agent already has an active paired service.")
+        if os.name == "nt":
+            raise MySQLBenchmarkError("MySQL/MariaDB assessment currently requires a Linux Agent.")
+        if hasattr(os, "geteuid") and os.geteuid() == 0:
+            raise MySQLBenchmarkError("MySQL/MariaDB assessment must run from a non-root Agent account.")
+        listen_address = str(payload.get("listen_address", ""))
+        allowed_client = str(payload.get("allowed_client_address", ""))
+        listen_address = str(self._peer_address(listen_address))
+        allowed_client = str(self._peer_address(allowed_client))
+        port = int(payload.get("port", 0))
+        max_connections = int(payload.get("max_connections", 0))
+        estimated_bytes = int(payload.get("estimated_dataset_bytes", 0))
+        deadline_seconds = int(payload.get("deadline_seconds", 0))
+        completed_steps = int(payload.get("run_completed_steps", -1))
+        total_steps = int(payload.get("run_total_steps", 0))
+        password = self._mysql_password(payload)
+        if str(payload.get("methodology_version", "")) != "database-mysql-v1":
+            raise MySQLBenchmarkError("MySQL/MariaDB methodology is outside the installed contract.")
+        if port != MYSQL_PORT or not 17 <= max_connections <= 80:
+            raise MySQLBenchmarkError("MySQL/MariaDB service bounds do not match the methodology.")
+        if estimated_bytes not in {128 * 1024 * 1024, 512 * 1024 * 1024}:
+            raise MySQLBenchmarkError("MySQL/MariaDB dataset estimate is outside the fixed contract.")
+        if not 120 <= deadline_seconds <= 3_600 or completed_steps != 0 or not 4 <= total_steps <= 64:
+            raise MySQLBenchmarkError("MySQL/MariaDB service progress or deadline metadata is invalid.")
+
+        service_root = self.workspace / "mysql-services"
+        if service_root.is_dir() and any(item.is_dir() for item in service_root.iterdir()):
+            raise MySQLBenchmarkError(
+                "Agent found residual MySQL/MariaDB service state. Follow the recovery runbook before retrying."
+            )
+        disk = shutil.disk_usage(self.workspace)
+        reserve = max(1024**3, int(disk.total * 0.05))
+        if disk.free < estimated_bytes + reserve:
+            raise MySQLBenchmarkError("Insufficient free space for the MySQL/MariaDB dataset and safety reserve.")
+
+        root = self._mysql_root(task_id)
+        data_dir = root / "data"
+        tmp_dir = root / "tmp"
+        socket_path = root / "mysql.sock"
+        pid_path = root / "mysql.pid"
+        log_path = root / "mysql.log"
+        root.mkdir(parents=True, exist_ok=False)
+        tmp_dir.mkdir()
+        if len(os.fsencode(socket_path)) > 100:
+            self._remove_mysql_root(root)
+            raise MySQLBenchmarkError("MySQL/MariaDB socket path is too long for a portable Linux service.")
+        server = self._mysql_tool("server")
+        client = self._mysql_tool("client")
+        admin = self._mysql_tool("admin")
+        initializer = find_mysql_binary("initializer")
+        environment = {**os.environ, "LC_ALL": "C"}
+        log_handle: Any | None = None
+        process: subprocess.Popen[str] | None = None
+        implementation = "mariadb" if "maria" in Path(server).name.casefold() else "mysql"
+        durability: dict[str, Any] = {}
+        try:
+            if initializer:
+                initialize_command = [initializer, "--no-defaults", f"--datadir={data_dir}", "--skip-test-db"]
+                if mysql_tool_supports(initializer, "auth-root-method"):
+                    initialize_command.append("--auth-root-authentication-method=normal")
+            elif mysql_tool_supports(server, "initialize-insecure"):
+                initialize_command = [server, "--no-defaults", "--initialize-insecure", f"--datadir={data_dir}"]
+            else:
+                raise MySQLBenchmarkError("No supported isolated MySQL/MariaDB initializer is available.")
+            code, stdout, stderr = self._guarded_service_process(
+                task_id,
+                initialize_command,
+                environment=environment,
+                expected_duration=180,
+                phase="mysql-initialization",
+                current_job="initialize-data-directory",
+                completed_steps=completed_steps,
+                total_steps=total_steps,
+            )
+            if code != 0:
+                raise MySQLBenchmarkError(stderr.strip() or stdout.strip() or "MySQL/MariaDB initialization failed.")
+
+            log_handle = log_path.open("a", encoding="utf-8")
+            bootstrap_command = self._mysql_server_command(
+                server,
+                data_dir=data_dir,
+                tmp_dir=tmp_dir,
+                socket_path=socket_path,
+                pid_path=pid_path,
+                log_path=log_path,
+                max_connections=max_connections,
+            )
+            process = subprocess.Popen(
+                bootstrap_command,
+                stdout=log_handle,
+                stderr=subprocess.STDOUT,
+                text=True,
+                shell=False,
+                env=environment,
+            )
+            self._wait_mysql_ready(
+                task_id,
+                process,
+                admin,
+                socket_path,
+                password=None,
+                completed_steps=completed_steps,
+                total_steps=total_steps,
+            )
+            setup_sql = (
+                f"ALTER USER 'root'@'localhost' IDENTIFIED BY '{password}';"
+                "CREATE DATABASE cloudmark CHARACTER SET utf8mb4 COLLATE utf8mb4_bin;"
+                f"CREATE USER 'cloudmark'@'{allowed_client}' IDENTIFIED BY '{password}';"
+                f"GRANT ALL PRIVILEGES ON cloudmark.* TO 'cloudmark'@'{allowed_client}';"
+                "FLUSH PRIVILEGES;"
+            )
+            configured = subprocess.run(
+                [client, "--no-defaults", f"--socket={socket_path}", "--user=root", "--batch"],
+                input=setup_sql,
+                capture_output=True,
+                text=True,
+                timeout=20,
+                check=False,
+                shell=False,
+                env=environment,
+            )
+            if configured.returncode != 0:
+                safe_error = configured.stderr.replace(password, "[REDACTED]").strip()
+                raise MySQLBenchmarkError(safe_error or "MySQL/MariaDB account setup failed.")
+            self._terminate_process(process, timeout=20)
+
+            final_command = self._mysql_server_command(
+                server,
+                data_dir=data_dir,
+                tmp_dir=tmp_dir,
+                socket_path=socket_path,
+                pid_path=pid_path,
+                log_path=log_path,
+                max_connections=max_connections,
+                listen_address=listen_address,
+                port=port,
+            )
+            process = subprocess.Popen(
+                final_command,
+                stdout=log_handle,
+                stderr=subprocess.STDOUT,
+                text=True,
+                shell=False,
+                env=environment,
+            )
+            self._wait_mysql_ready(
+                task_id,
+                process,
+                admin,
+                socket_path,
+                password=password,
+                completed_steps=completed_steps,
+                total_steps=total_steps,
+            )
+            verification_environment = {**environment, "MYSQL_PWD": password}
+            verified = subprocess.run(
+                [
+                    client,
+                    "--no-defaults",
+                    f"--socket={socket_path}",
+                    "--user=root",
+                    "--batch",
+                    "--skip-column-names",
+                    "--execute=SELECT @@innodb_flush_log_at_trx_commit, @@innodb_doublewrite, @@log_bin;",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                check=False,
+                shell=False,
+                env=verification_environment,
+            )
+            values = verified.stdout.strip().split()
+            if verified.returncode != 0 or len(values) != 3:
+                safe_error = verified.stderr.replace(password, "[REDACTED]").strip()
+                raise MySQLBenchmarkError(safe_error or "MySQL/MariaDB durability verification failed.")
+            flush_at_commit = int(values[0]) if values[0].isdigit() else -1
+            doublewrite = values[1].casefold() in {"1", "on", "true"}
+            binary_log = values[2].casefold() in {"1", "on", "true"}
+            if flush_at_commit != 1 or not doublewrite or binary_log:
+                raise MySQLBenchmarkError("MySQL/MariaDB runtime durability does not match the fixed contract.")
+            durability = {
+                "status": "observed-runtime",
+                "storage_engine": "InnoDB",
+                "innodb_flush_log_at_trx_commit": flush_at_commit,
+                "innodb_doublewrite": doublewrite,
+                "binary_log": "enabled" if binary_log else "disabled",
+            }
+            active = ActiveMySQLServer(
+                process=process,
+                deadline=time.monotonic() + deadline_seconds,
+                root=root,
+                data_dir=data_dir,
+                socket_path=socket_path,
+                log_path=log_path,
+                log_handle=log_handle,
+                version=tool_version(server),
+                implementation=implementation,
+                port=port,
+                durability=durability,
+            )
+            self.active_mysql_servers[task_id] = active
+            return {
+                "ready": True,
+                "engine": "mysql",
+                "implementation": implementation,
+                "port": port,
+                "estimated_dataset_bytes": estimated_bytes,
+                "authentication": "memory-only-per-run-secret",
+                "client_host_policy": "exact-paired-generator",
+                "durability": durability,
+                "tool": {"name": Path(server).name, "version": active.version},
+            }
+        except BaseException:
+            if process is not None:
+                self._terminate_process(process, timeout=20)
+            if log_handle is not None:
+                log_handle.close()
+            self._remove_mysql_root(root)
+            raise
+
+    def _run_mysql_client(self, task_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+        action = str(payload.get("action", ""))
+        address = str(payload.get("target_address", ""))
+        address = str(self._peer_address(address))
+        port = int(payload.get("port", 0))
+        tables = int(payload.get("tables", 0))
+        table_size = int(payload.get("table_size", 0))
+        password = self._mysql_password(payload)
+        completed_steps = int(payload.get("run_completed_steps", -1))
+        total_steps = int(payload.get("run_total_steps", 0))
+        if action not in {"prepare", "run", "cleanup"} or port != MYSQL_PORT:
+            raise MySQLBenchmarkError("MySQL/MariaDB client action or port is outside the fixed contract.")
+        if (tables, table_size) not in {(4, 10_000), (8, 50_000)}:
+            raise MySQLBenchmarkError("MySQL/MariaDB table shape is outside the fixed contract.")
+        if not 0 <= completed_steps < total_steps <= 64:
+            raise MySQLBenchmarkError("MySQL/MariaDB client progress metadata is invalid.")
+        executable = self._mysql_tool("sysbench")
+        common = [
+            "--db-driver=mysql",
+            f"--mysql-host={address}",
+            f"--mysql-port={port}",
+            "--mysql-user=cloudmark",
+            f"--mysql-password={password}",
+            "--mysql-db=cloudmark",
+            f"--tables={tables}",
+            f"--table-size={table_size}",
+        ]
+        environment = {**os.environ, "LC_ALL": "C"}
+        workload = str(payload.get("workload", ""))
+        threads = int(payload.get("threads", 0))
+        duration = int(payload.get("duration_seconds", 0))
+        warmup = int(payload.get("warmup_seconds", 0))
+        cpu_samples: list[dict[str, float]] = []
+        if action == "run":
+            if workload not in {"oltp_point_select", "oltp_read_only", "oltp_write_only", "oltp_read_write"}:
+                raise MySQLBenchmarkError("Sysbench workload is outside the CloudMark allow-list.")
+            allowed_shapes = {
+                (4, 10_000, "oltp_read_only", 1, 15, 3),
+                (4, 10_000, "oltp_read_write", 4, 30, 5),
+                (8, 50_000, "oltp_point_select", 1, 30, 5),
+                (8, 50_000, "oltp_read_only", 4, 45, 5),
+                (8, 50_000, "oltp_read_only", 16, 60, 5),
+                (8, 50_000, "oltp_write_only", 4, 45, 5),
+                (8, 50_000, "oltp_read_write", 1, 30, 5),
+                (8, 50_000, "oltp_read_write", 4, 45, 5),
+                (8, 50_000, "oltp_read_write", 16, 60, 5),
+            }
+            if (tables, table_size, workload, threads, duration, warmup) not in allowed_shapes:
+                raise MySQLBenchmarkError("Sysbench workload shape is outside the installed profile contracts.")
+            command = [
+                executable,
+                *common,
+                f"--threads={threads}",
+                f"--time={duration}",
+                f"--warmup-time={warmup}",
+                "--events=0",
+                "--report-interval=1",
+                "--percentile=99",
+                workload,
+                "run",
+            ]
+            expected_duration = duration + warmup
+            phase = "measuring-mysql"
+            current_job = workload
+        else:
+            command = [executable, *common, "oltp_read_write", action]
+            expected_duration = 240 if action == "prepare" else 120
+            phase = "preparing-mysql" if action == "prepare" else "cleaning-mysql-client"
+            current_job = f"sysbench-{action}"
+        code, stdout, stderr = self._guarded_service_process(
+            task_id,
+            command,
+            environment=environment,
+            expected_duration=expected_duration,
+            phase=phase,
+            current_job=current_job,
+            completed_steps=completed_steps,
+            total_steps=total_steps,
+            cpu_samples=cpu_samples if action == "run" else None,
+        )
+        safe_stdout = stdout.replace(password, "[REDACTED]")
+        safe_stderr = stderr.replace(password, "[REDACTED]")
+        if code != 0:
+            raise MySQLBenchmarkError(safe_stderr.strip()[:512] or safe_stdout.strip()[:512] or "Sysbench failed.")
+        if action != "run":
+            return {
+                "status": "complete",
+                "action": action,
+                "cleanup_verified": action == "cleanup",
+                "tables": tables,
+                "table_size": table_size,
+                "tool": {"name": "sysbench", "version": tool_version(executable)},
+            }
+        return {
+            "sysbench_mysql": {
+                "workload": workload,
+                "threads": threads,
+                "duration_seconds": duration,
+                "warmup_seconds": warmup,
+                "tables": tables,
+                "table_size": table_size,
+                "metrics": parse_sysbench_mysql_output(safe_stdout, safe_stderr),
+                "generator_cpu": _generator_cpu_evidence(cpu_samples),
+                "tool": {"name": "sysbench", "version": tool_version(executable)},
+                "raw": {"stdout": safe_stdout, "stderr": safe_stderr},
+            }
+        }
 
     @staticmethod
     def _web_tool(name: str) -> str:
@@ -2662,7 +3156,7 @@ class AgentWorker:
         }
 
     def _start_web_server(self, task_id: str, payload: dict[str, Any]) -> dict[str, Any]:
-        if self.active_web_servers or self.active_database_servers:
+        if self.active_web_servers or self.active_database_servers or self.active_redis_servers or self.active_mysql_servers:
             raise WebBenchmarkError("Agent already has an active paired service.")
         service_root = self.workspace / "web-services"
         if service_root.is_dir() and any(item.is_dir() for item in service_root.iterdir()):
@@ -3309,6 +3803,12 @@ class AgentWorker:
         if kind == "redis-service-start": return self._start_redis_server(str(task["id"]),payload)
         if kind == "redis-client": return self._run_redis_client(str(task["id"]),payload)
         if kind == "redis-service-stop": return self._stop_redis_server(str(payload.get("server_task_id","")))
+        if kind == "mysql-service-start":
+            return self._start_mysql_server(str(task["id"]), payload)
+        if kind == "mysql-client":
+            return self._run_mysql_client(str(task["id"]), payload)
+        if kind == "mysql-service-stop":
+            return self._stop_mysql_server(str(payload.get("server_task_id", "")))
         if kind == "web-service-start":
             return self._start_web_server(str(task["id"]), payload)
         if kind == "web-client":
@@ -3344,6 +3844,10 @@ class AgentWorker:
         for task_id, active in list(self.active_redis_servers.items()):
             if now < active.deadline and not controller_contact_expired: continue
             self._stop_redis_server(task_id)
+        for task_id, active in list(self.active_mysql_servers.items()):
+            if now < active.deadline and not controller_contact_expired:
+                continue
+            self._stop_mysql_server(task_id)
 
     def once(self) -> bool:
         self._cleanup_expired()
@@ -3364,7 +3868,15 @@ class AgentWorker:
             completion = {"status": exc.status, "error": str(exc)}
             if exc.result is not None:
                 completion["result"] = exc.result
-        except (DatabaseBenchmarkError, NetworkError, RedisBenchmarkError, WebBenchmarkError, OSError, ValueError) as exc:
+        except (
+            DatabaseBenchmarkError,
+            MySQLBenchmarkError,
+            NetworkError,
+            RedisBenchmarkError,
+            WebBenchmarkError,
+            OSError,
+            ValueError,
+        ) as exc:
             completion = {"status": "failed", "error": str(exc)}
         task_id = str(task["id"])
         self.pending_completions[task_id] = completion
@@ -3399,6 +3911,8 @@ class AgentWorker:
                 self._stop_web_server(task_id)
             for task_id in list(self.active_redis_servers):
                 self._stop_redis_server(task_id)
+            for task_id in list(self.active_mysql_servers):
+                self._stop_mysql_server(task_id)
 
 
 def join_and_work(

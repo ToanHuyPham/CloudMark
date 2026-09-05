@@ -419,6 +419,8 @@ class CloudMarkController:
                 tool_version = "postgresql/pgbench/pg-dump-restore-agent"
             elif methodology_version == "database-redis-v1":
                 tool_version = "redis-server/redis-benchmark-agent"
+            elif methodology_version == "database-mysql-v1":
+                tool_version = "mysql-compatible/sysbench-agent"
             else:
                 tool_version = "postgresql/pgbench-agent"
             default_timeout = database_default_timeout(profile)

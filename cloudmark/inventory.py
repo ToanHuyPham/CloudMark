@@ -10,7 +10,15 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
-from .tooling import find_postgres_binary, find_redis_binary, find_web_binary, postgres_tool_supports, web_tool_supports
+from .tooling import (
+    find_mysql_binary,
+    find_postgres_binary,
+    find_redis_binary,
+    find_web_binary,
+    mysql_tool_supports,
+    postgres_tool_supports,
+    web_tool_supports,
+)
 
 
 def _run(command: list[str], timeout: float = 3.0) -> str | None:
@@ -184,6 +192,9 @@ def collect_inventory(workspace: Path | None = None) -> dict[str, Any]:
     nginx = find_web_binary("nginx")
     curl = find_web_binary("curl")
     pgbench = find_postgres_binary("pgbench")
+    mysql_server = find_mysql_binary("server")
+    mysql_initializer = find_mysql_binary("initializer")
+    mysql_sysbench = find_mysql_binary("sysbench")
     return {
         "hostname": socket.gethostname(),
         "os": {
@@ -224,6 +235,16 @@ def collect_inventory(workspace: Path | None = None) -> dict[str, Any]:
             "redis_server": find_redis_binary("redis-server") is not None,
             "redis_cli": find_redis_binary("redis-cli") is not None,
             "redis_benchmark": find_redis_binary("redis-benchmark") is not None,
+            "mysql_server": mysql_server is not None,
+            "mysql_client": find_mysql_binary("client") is not None,
+            "mysql_admin": find_mysql_binary("admin") is not None,
+            "mysql_initializer": bool(
+                mysql_initializer
+                or (mysql_server and mysql_tool_supports(mysql_server, "initialize-insecure"))
+            ),
+            "sysbench_mysql": bool(
+                mysql_sysbench and mysql_tool_supports(mysql_sysbench, "mysql-driver")
+            ),
             "nginx": nginx is not None,
             "nginx_http2": bool(nginx and web_tool_supports("nginx", nginx, "http2")),
             "ab": find_web_binary("ab") is not None,

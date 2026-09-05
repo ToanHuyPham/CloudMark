@@ -35,9 +35,9 @@ PACKAGES = {
         "zypper": ["gcc", "libgomp1"],
     },
     "database": {
-        "apt": ["sysbench", "postgresql", "postgresql-contrib", "redis-server"],
-        "dnf": ["sysbench", "postgresql-server", "postgresql-contrib", "redis"],
-        "zypper": ["sysbench", "postgresql-server", "postgresql-contrib", "redis"],
+        "apt": ["sysbench", "postgresql", "postgresql-contrib", "redis-server", "mariadb-server", "mariadb-client"],
+        "dnf": ["sysbench", "postgresql-server", "postgresql-contrib", "redis", "mariadb-server"],
+        "zypper": ["sysbench", "postgresql-server", "postgresql-contrib", "redis", "mariadb", "mariadb-client"],
     },
     "web": {
         "apt": ["nginx", "apache2-utils", "curl", "openssl"],

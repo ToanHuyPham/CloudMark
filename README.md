@@ -29,6 +29,7 @@ timestamp, and raw result.
 | Partial | Guarded peer network executor: pre/post interface counters, route/MTU, read-only NIC/TCP-control evidence, directional TCP scaling, idle/loaded RTT, adaptive UDP sweeps, and simultaneous bidirectional TCP |
 | Partial | Guarded PostgreSQL v2 plus logical Backup & Restore with durable throughput, exact transaction P50/P95/P99/P99.9, Generator validity, row-count verification, and cleanup |
 | Partial | Authenticated Redis GET/SET, value-size/concurrency/pipeline curves, AOF persistence, P50/P95/P99 latency, Generator validity, and cleanup |
+| Partial | Isolated MySQL/MariaDB InnoDB with fixed Sysbench point-select/read-only/write-only/read-write profiles, P99 latency, Generator validity, and verified cleanup |
 | Partial | Guarded two-Agent Web v2 with Nginx, a packaged dynamic reverse-proxy application, Generator CPU validity, HTTP/TLS tail latency, static transfer, and HTTP/2 negotiation |
 | Available | Target-scoped, versioned Essential/Standard/Demanding workload gates with per-check run provenance and explicit unknown evidence |
 | Available | Exact-cohort repeated-window provider observations with median, P10/P90, best/worst, spread, topology/evidence-class contracts, and guarded comparison eligibility |
@@ -158,6 +159,7 @@ Controller is never an iperf3 endpoint.
 - [Remote Agent execution](docs/REMOTE_EXECUTION.md)
 - [Network methodology](docs/NETWORK_METHODOLOGY.md)
 - [PostgreSQL database methodology](docs/DATABASE_METHODOLOGY.md)
+- [MySQL/MariaDB methodology](docs/MYSQL_METHODOLOGY.md)
 - [Web, API, and TLS methodology](docs/WEB_METHODOLOGY.md)
 - [Workload suitability methodology](docs/SUITABILITY_METHODOLOGY.md)
 - [Safety model](docs/SAFETY.md)
@@ -171,13 +173,15 @@ provider/Agent attribution, and strict result-version validation. The current
 development head also implements the versioned `network-v9` Standard profile,
 Standard `database-postgresql-v2`, and Standard `web-http-v2` while preserving
 the Database/Web v1 Quick contracts. PostgreSQL also includes the separately
-versioned `database-postgresql-recovery-v1` logical backup/restore drill.
+versioned `database-postgresql-recovery-v1` logical backup/restore drill and
+the authenticated `database-mysql-v1` MySQL/MariaDB Sysbench OLTP contract.
 Compute and memory remain `Partial` until floating-point, crypto, compilation,
 latency, NUMA, and broader architecture coverage are implemented. Network
 remains partial until driver per-queue evidence is normalized across more NICs,
 controlled DNS coverage, cross-pair repeated windows, administrative path verification, and mTLS
-enrollment are implemented. PostgreSQL remains partial until checkpoint
-isolation, other engines, replication, and recovery evidence are available.
+enrollment are implemented. Database coverage remains partial until checkpoint
+isolation, replication, PITR, cross-zone recovery, and managed-service evidence
+are available.
 Web/API/TLS remains partial until database-backed applications, HTTP/2 load,
 HTTP/3, CDN, WAF, and autoscaling evidence are available.
 The current development head also implements `suitability-v1` target-scoped

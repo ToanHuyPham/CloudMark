@@ -182,6 +182,16 @@ equality, expected scale shape, backup size, restore timing, recovery cleanup,
 and final cluster cleanup. This is same-Target logical recovery evidence, not a
 provider snapshot or cross-zone disaster-recovery claim.
 
+For MySQL/MariaDB peer profiles, install the database pack and restart both
+Agents. Run the Target Agent as a non-root account and allow TCP `57306` only
+from the paired Generator. The Target must report `mysql_server`,
+`mysql_client`, `mysql_admin`, and `mysql_initializer`; the Generator must
+report `sysbench_mysql` and `procfs_process_cpu`. Review implementation/version,
+P99 latency, ignored errors, reconnects, InnoDB durability, Generator CPU,
+Sysbench table cleanup, and final service cleanup before treating the Run as
+comparable. Do not compare MySQL and MariaDB implementations without retaining
+their implementation/version distinction.
+
 For Web/API/TLS peer profiles, install the web pack on both Agents and run the
 Target Agent as a non-root account. Allow TCP `58080` and `58443` only between
 the paired Generator and Target; never expose loopback application port `58081`.
@@ -259,6 +269,23 @@ using the CloudMark workspace. Preserve the PostgreSQL log for diagnosis, then
 remove only the named `task_*` directory below the configured Agent
 `database-services` workspace. Never delete the workspace root or an unknown
 PostgreSQL data directory.
+
+### A MySQL/MariaDB peer run cannot start
+
+- verify the Target reports `mysql_server`, `mysql_client`, `mysql_admin`, and
+  `mysql_initializer`;
+- verify the Generator reports `sysbench_mysql` and `procfs_process_cpu`;
+- restart each Agent after installing the database pack;
+- verify TCP `57306` is reachable only from the Generator peer address;
+- run the Target Agent as a non-root account;
+- inspect `mysql_log_tail`, implementation/version, and the retained partial
+  result without attempting to reuse the generated database.
+
+After an abrupt Agent or host failure, stop the Agent and verify that no
+`mysqld` or `mariadbd` process uses the CloudMark workspace. Preserve the log,
+then remove only the named `task_*` directory below the configured
+`mysql-services` workspace. Never remove the workspace root, a system database
+directory, or any directory still used by a server process.
 
 ### A Web/API/TLS peer run cannot start
 

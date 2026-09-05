@@ -414,3 +414,21 @@ Generator CPU and complete workspace cleanup are comparison gates.
 
 **Reason:** An unauthenticated cache endpoint or caller-selected command would
 be unsafe, while persistence-off results would not represent a durable cache.
+
+## D-030: MySQL/MariaDB v1 uses isolated InnoDB and fixed Sysbench OLTP
+
+**Decision:** `database-mysql-v1` initializes a fresh MySQL-compatible data
+directory on a non-root Target Agent before enabling networking. It creates one
+fixed database and a password-authenticated account restricted to the exact
+Generator address, then binds TCP 57306 only to the Target address. Quick and
+Standard profiles accept fixed packaged Sysbench OLTP names, table shapes,
+thread counts, warm-up, duration, one-second reporting, and P99 latency.
+Flush-at-commit, doublewrite, Generator CPU, Sysbench table cleanup, and final
+service cleanup are comparison gates. Binary logging remains disabled and the
+implementation/version remains explicit.
+
+**Reason:** A system-wide database service, caller-provided SQL/Lua, empty
+password, durability-off setting, or unrestricted account would be unsafe and
+poorly reproducible. Separating preparation, timed Generator work, table
+cleanup, and Target cleanup produces auditable single-node OLTP evidence while
+avoiding unsupported replication, PITR, and managed-service claims.

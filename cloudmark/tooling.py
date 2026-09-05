@@ -19,6 +19,52 @@ POSTGRES_TOOLS = {
     "psql",
 }
 REDIS_TOOLS = {"redis-benchmark", "redis-cli", "redis-server"}
+MYSQL_TOOL_CANDIDATES = {
+    "server": ("mariadbd", "mysqld"),
+    "client": ("mariadb", "mysql"),
+    "admin": ("mariadb-admin", "mysqladmin"),
+    "initializer": ("mariadb-install-db", "mysql_install_db"),
+    "sysbench": ("sysbench",),
+}
+
+
+def find_mysql_binary(name: str) -> str | None:
+    if name not in MYSQL_TOOL_CANDIDATES:
+        raise ValueError(f"Unsupported MySQL/MariaDB tool role: {name}")
+    for candidate in MYSQL_TOOL_CANDIDATES[name]:
+        executable = shutil.which(candidate)
+        if executable:
+            return executable
+    known_directories = (Path("/usr/bin"), Path("/usr/sbin"), Path("/usr/local/bin"), Path("/usr/local/sbin"))
+    for directory in known_directories:
+        for candidate in MYSQL_TOOL_CANDIDATES[name]:
+            path = directory / candidate
+            if path.is_file():
+                return str(path)
+    return None
+
+
+def mysql_tool_supports(executable: str, feature: str) -> bool:
+    if feature not in {"auth-root-method", "initialize-insecure", "mysql-driver"}:
+        raise ValueError(f"Unsupported MySQL/MariaDB capability check: {feature}")
+    try:
+        result = subprocess.run(
+            [executable, "--help"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+            shell=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    output = f"{result.stdout}\n{result.stderr}".casefold()
+    expected = {
+        "auth-root-method": "--auth-root-authentication-method",
+        "initialize-insecure": "--initialize-insecure",
+        "mysql-driver": "mysql",
+    }[feature]
+    return expected in output
 
 def find_redis_binary(name: str) -> str | None:
     if name not in REDIS_TOOLS:

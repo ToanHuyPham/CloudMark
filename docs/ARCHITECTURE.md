@@ -156,6 +156,15 @@ four source/restored pgbench table counts, and removes the restored database
 and archive before final cluster cleanup. It does not claim provider snapshot
 or cross-zone disaster-recovery behavior.
 
+`database-mysql-v1` creates a separate MySQL-compatible InnoDB data directory
+on the Target. Initialization happens with networking disabled; the Agent then
+creates one fixed database and an authenticated account restricted to the exact
+Generator address before binding TCP 57306 to the exact Target address. The
+Generator accepts only fixed packaged Sysbench OLTP names, table shapes,
+threads, warm-up, duration, and P99 reporting. Flush-at-commit, doublewrite,
+Generator CPU, client-table cleanup, and Target-service cleanup are comparison
+gates. Binary logging is disabled, so this contract makes no replication claim.
+
 `web-http-v1` remains the Quick static-service baseline. Standard
 `web-http-v2` adds a packaged Python application on fixed Target loopback port
 58081 behind Nginx, dynamic ApacheBench workloads, bounded Linux Generator

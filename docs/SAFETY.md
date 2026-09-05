@@ -100,8 +100,9 @@ systems.
 ## Remote execution
 
 - Remote tasks are authenticated per Agent and restricted to compute, memory,
-  storage, guarded network, guarded PostgreSQL, and guarded Web/API/TLS kinds; arbitrary shell
-  commands are refused.
+  storage, guarded network, guarded PostgreSQL, guarded Redis, guarded
+  MySQL/MariaDB, and guarded Web/API/TLS kinds; arbitrary shell commands are
+  refused.
 - The Agent validates suite, installed profile, protocol version, explicit load
   confirmation, and timeout before executing.
 - The Agent workspace is configured locally and cannot be supplied by a remote
@@ -162,6 +163,28 @@ systems.
   versioned profiles. AOF persistence remains enabled with fsync every second.
 - The Target watchdog terminates Redis and removes configuration, credentials,
   AOF/RDB data, and logs on every terminal path.
+
+## MySQL and MariaDB
+
+- MySQL/MariaDB runs require two authenticated provider Agents and explicit
+  database-load confirmation.
+- The Target Agent must be a non-root Linux account. It initializes only a new
+  `mysql-services/task_*` data directory and refuses unknown residual state.
+- Free space must cover the profile's fixed dataset estimate plus the larger of
+  1 GiB or 5% of the filesystem.
+- Initialization runs with networking disabled and `--no-defaults`. The final
+  service binds only the exact Target address on TCP 57306.
+- The only remote database account is restricted to the exact paired Generator
+  address and uses a random per-Run password from the memory-only task-secret
+  channel. Any tool error retained as evidence is password-redacted.
+- InnoDB flush-at-commit and doublewrite are enabled. Binary logging remains
+  disabled and CloudMark makes no replication, PITR, or failover claim.
+- Sysbench accepts only the built-in point-select, read-only, write-only, and
+  read/write OLTP names; fixed 4/8-table shapes; 1/4/16 threads; fixed warm-up;
+  15-60 second durations; one-second reports; and P99 latency.
+- Generator table cleanup and Target process/data-directory cleanup are both
+  required. The failure path attempts both cleanups, and the Target watchdog
+  handles deadline or Controller-contact loss.
 
 ## Web, API, and TLS
 

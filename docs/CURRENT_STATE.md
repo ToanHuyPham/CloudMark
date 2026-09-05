@@ -41,6 +41,16 @@ baseline is still the repository head.
   verify one shared memory-only password, exact bind/AOF policy, Generator
   evidence, cleanup, and absence of the password from durable task records. The
   development head passes 127 Python tests;
+- simulation-verified `database-mysql-v1` Quick/Standard profiles for MySQL and
+  MariaDB with isolated non-root Target data directories, initialization before
+  network exposure, exact-address TCP 57306 binding, an exact-Generator account
+  and memory-only per-Run password, fixed Sysbench OLTP table/workload shapes,
+  one-second progress, direct P99 latency, InnoDB flush-at-commit/doublewrite
+  evidence, Generator CPU validity, table cleanup, watchdog service cleanup,
+  and durable-record credential redaction. Success and client-failure
+  orchestration paths are covered without running a real load; the complete
+  development head passes 134 Python tests, 3 rendered-dashboard tests,
+  dashboard lint, and the production build;
 - guarded, bidirectional TCP measurements between paired Agents;
 - simulation-verified `network-v6` standard orchestration for allow-listed
   pre/post route-derived interface byte/packet/error/drop deltas,
@@ -252,8 +262,10 @@ Controller run: `run_1c572100e8704843`.
   concurrency, connection churn, fixed-count transaction tail percentiles, and
   Generator CPU validity are implemented; checkpoint isolation, replication,
   same-Target logical backup/restore, and artifact cleanup are implemented;
-  physical/PITR backup, cross-zone recovery, replication, MySQL/MariaDB,
-  and managed-service behavior remain unavailable;
+  MySQL/MariaDB now adds isolated InnoDB point-select, read-only, write-only,
+  and read/write Sysbench profiles with P99 and Generator validity; physical/
+  PITR backup, cross-zone recovery, replication, database checkpoint isolation,
+  binary-log overhead, and managed-service behavior remain unavailable;
 - an abrupt Agent or host termination can leave an isolated PostgreSQL task
   directory for manual operator review; the Agent refuses to overwrite or
   automatically delete unknown residual state; the same review requirement
@@ -281,8 +293,9 @@ Controller run: `run_1c572100e8704843`.
    before promoting the network domain from Partial.
 2. Add database-backed Web applications, HTTP/2 load, HTTP/3, reverse-proxy
    variants, compression, CDN, WAF, and autoscaling evidence.
-3. Extend database coverage with checkpoint isolation, MySQL/MariaDB, Redis,
-   physical/PITR backup, replication, cross-zone recovery, and RPO/RTO evidence.
+3. Extend database coverage with checkpoint isolation, physical/PITR backup,
+   replication, cross-zone recovery, binary-log/replication overhead, and
+   RPO/RTO evidence.
 4. Complete remaining compute, memory/NUMA, GPU, security, reliability,
    observability, container, and control-plane executors.
 5. Extend campaigns across independent targets, then add timestamped price

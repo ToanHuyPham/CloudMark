@@ -206,7 +206,7 @@ profile or methodology changes, an unfinished older campaign is returned as
 `superseded`; its Runs remain readable, but the dispatch endpoint refuses to
 continue it under the new contract.
 
-## Create a PostgreSQL peer run
+## Create a database or cache peer run
 
 ```json
 {
@@ -243,6 +243,17 @@ database Run endpoint and confirmation flag. They require `redis_server` and
 Generator. The per-Run password is memory-only and never appears in the API
 result. Evidence includes fixed GET/SET request rate, P50/P95/P99 latency, value
 size, concurrency, pipeline depth, AOF policy, Generator validity, and cleanup.
+
+MySQL/MariaDB profiles `mysql-peer-quick` and `mysql-peer-standard` also use
+this endpoint and confirmation flag. Target capabilities are `mysql_server`,
+`mysql_client`, `mysql_admin`, and `mysql_initializer`; Generator capabilities
+are `sysbench_mysql` and Linux CPU accounting. The API accepts no SQL, Lua
+script, database name, account, table shape, address, or port override. Results
+contain `mysql_measurements`, implementation/version, fixed InnoDB durability,
+transactions, TPS, queries, QPS, ignored errors, reconnects, minimum/average/
+P99/maximum latency, Generator validity, Sysbench table cleanup, and Target
+service cleanup. The per-Run password never appears in the API result or task
+read models.
 
 ## Create a Web/API/TLS peer run
 

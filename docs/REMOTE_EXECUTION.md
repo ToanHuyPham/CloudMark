@@ -108,7 +108,7 @@ never becomes a completed assessment.
 
 ## Current boundary
 
-Paired network, PostgreSQL, and Web/API/TLS assessments use durable Agent tasks
+Paired network, PostgreSQL, Redis, MySQL/MariaDB, and Web/API/TLS assessments use durable Agent tasks
 and the same authenticated heartbeat/cancellation transport, but they are not
 single-system `agent_id` dispatches. They require a ready Target/Generator
 session and suite-specific confirmation. Service start/client/stop kinds remain

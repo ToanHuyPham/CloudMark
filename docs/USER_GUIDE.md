@@ -166,10 +166,12 @@ In the dashboard:
   Network remains `Partial` because cross-pair automation, physical-fabric
   verification, wider vendor queue normalization, administrative public-path
   classification, and mTLS enrollment are incomplete.
-- **Database Assessment** uses the same paired Agents for an isolated
-  PostgreSQL service and guarded pgbench workloads. PostgreSQL remains
-  `Partial` until tail-percentile, replication, recovery, MySQL, and Redis
-  methodologies are implemented.
+- **Database Assessment** uses the same paired Agents for isolated PostgreSQL,
+  MySQL/MariaDB, and Redis services. Fixed pgbench, Sysbench OLTP, and
+  redis-benchmark contracts retain engine-specific durability, latency,
+  Generator validity, and cleanup evidence. The domain remains `Partial`
+  because replication, PITR, failover, cross-zone recovery, and managed-service
+  behavior are incomplete.
 - **Web & API Assessment** starts an isolated Nginx service on the Target and
   runs fixed HTTP, HTTPS, connection-churn, JSON, and static-transfer workloads
   from the Generator. It reports request rate, failures, P50–P99 latency, TLS,
@@ -229,7 +231,7 @@ This command displays a plan and does not modify the system.
 | `memory` | GCC and the OpenMP runtime |
 | `storage` | fio, smartmontools, nvme-cli |
 | `network` | iperf3, ethtool, mtr, DNS tools |
-| `database` | sysbench, PostgreSQL server/client tools including pgbench, Redis |
+| `database` | sysbench, PostgreSQL/pgbench, Redis, and MariaDB server/client tools |
 | `web` | Nginx, ApacheBench, curl, and OpenSSL |
 
 ## 7. Bootstrap tools
@@ -480,7 +482,7 @@ checked against trusted region/zone metadata when those facts are available;
 the dashboard keeps claims and independent observations separate. Public IP
 address class is not treated as proof of public-Internet traversal.
 
-## 11. Run a PostgreSQL peer assessment
+## 11. Run a database or cache peer assessment
 
 Use the same Target and Generator roles as the network topology. Install the
 database pack on both machines, then restart both Agents so their capabilities
@@ -525,6 +527,22 @@ evidence. Open TCP `56379` only from the Generator to the Target. CloudMark uses
 a memory-only per-Run password, enables AOF with fsync every second, runs only
 fixed GET/SET profiles, and removes the entire Redis workspace afterward. See
 [`REDIS_METHODOLOGY.md`](REDIS_METHODOLOGY.md).
+
+Select **MySQL/MariaDB Peer Quick** or **MySQL/MariaDB Peer Standard** for an
+isolated InnoDB OLTP assessment. Run the Target Agent as a non-root account and
+allow TCP `57306` only from the paired Generator. The Target must report the
+server, client, admin, and isolated initializer capabilities; the Generator
+must report Sysbench MySQL support and Linux process CPU accounting.
+
+CloudMark initializes the data directory with networking disabled, creates a
+random memory-only password and an account restricted to the Generator address,
+then starts the server on the exact Target address. Quick uses four 10,000-row
+tables. Standard uses eight 50,000-row tables and fixed point-select, read-only,
+write-only, and read/write concurrency workloads. Review implementation and
+version, TPS/QPS, P99 latency, errors, reconnects, InnoDB durability, Generator
+CPU, client table cleanup, and service cleanup. Binary logging is disabled, so
+the result is not replication or PITR evidence. See
+[`MYSQL_METHODOLOGY.md`](MYSQL_METHODOLOGY.md).
 
 ### Dispatch a single-system profile to an Agent
 

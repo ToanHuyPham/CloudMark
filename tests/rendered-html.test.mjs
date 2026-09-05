@@ -64,6 +64,8 @@ test("keeps production metadata and project policy explicit", async () => {
   assert.match(page, /database-postgresql-v2/i);
   assert.match(page, /LOGICAL BACKUP &amp; RESTORE/);
   assert.match(page, /database-postgresql-recovery-v1/i);
+  assert.match(page, /selectedMySQL/);
+  assert.match(page, /MYSQL\/MARIADB VALIDITY/);
   assert.match(page, /Provider Comparison/);
   assert.match(page, /CloudMark does not rank providers/);
   assert.match(page, /profiles\.database\?\.\[selectedDatabaseProfile\]/);
@@ -98,6 +100,7 @@ test("keeps public product copy English-only", async () => {
     "../docs/ASSESSMENT_CATALOG.md",
     "../docs/COMPUTE_MEMORY_METHODOLOGY.md",
     "../docs/DATABASE_METHODOLOGY.md",
+    "../docs/MYSQL_METHODOLOGY.md",
     "../docs/WEB_METHODOLOGY.md",
     "../docs/SUITABILITY_METHODOLOGY.md",
     "../docs/REMOTE_EXECUTION.md",

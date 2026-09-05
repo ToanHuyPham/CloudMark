@@ -342,6 +342,26 @@ type DatabaseMeasurement = {
   };
 };
 type RedisMeasurement = {name:string;operation:"get"|"set";clients:number;pipeline:number;value_bytes:number;requests:number;metrics:{operation:string;requests_per_second:number;latency_ms:{average:number;minimum:number;p50:number;p95:number;p99:number;maximum:number}};generator_cpu?:{status:string;peak_process_cpu_percent_of_one_core?:number}};
+type MySQLMeasurement = {
+  name: string;
+  workload: "oltp_point_select" | "oltp_read_only" | "oltp_write_only" | "oltp_read_write";
+  threads: number;
+  duration_seconds: number;
+  warmup_seconds: number;
+  tables: number;
+  table_size: number;
+  metrics: {
+    transactions: number;
+    transactions_per_second: number;
+    queries: number;
+    queries_per_second: number;
+    ignored_errors: number;
+    reconnects: number;
+    elapsed_seconds: number;
+    latency_ms: { minimum: number; average: number; p99: number; maximum: number };
+  };
+  generator_cpu?: { status: string; peak_process_cpu_percent_of_one_core?: number };
+};
 
 type WebMeasurement = {
   name: string;
@@ -432,6 +452,7 @@ type Run = {
     bidirectional_measurements?: NetworkBidirectionalMeasurement[];
     database_measurements?: DatabaseMeasurement[];
     redis_measurements?: RedisMeasurement[];
+    mysql_measurements?: MySQLMeasurement[];
     web_measurements?: WebMeasurement[];
     protocol_observations?: WebProtocolObservation[];
     server?: {
@@ -618,6 +639,12 @@ type Run = {
         backup_duration_seconds?: number;
         restore_duration_seconds?: number;
         backup_bytes?: number;
+      };
+      durability?: {
+        status: "observed" | "unavailable";
+        innodb_flush_log_at_trx_commit?: number;
+        innodb_doublewrite?: boolean;
+        binary_log?: string;
       };
       concurrency_curves?: {
         scheme: string;
@@ -857,7 +884,10 @@ type Dashboard = {
       estimated_minutes: number;
       requires_agents: number;
       engine: string;
-      scale_factor: number;
+      scale_factor?: number;
+      tables?: number;
+      table_size?: number;
+      estimated_dataset_bytes?: number;
       port: number;
       profile_version: string;
       methodology_version: string;
@@ -865,7 +895,7 @@ type Dashboard = {
         name: string;
         workload?: string;
         operation?: "get" | "set";
-        clients: number;
+        clients?: number;
         threads?: number;
         duration?: number;
         warmup?: number;
@@ -1102,10 +1132,12 @@ export default function Home() {
     (run) => run.suite === "database" && ["queued", "running"].includes(run.status),
   );
   const latestDatabase = dashboard?.runs.find(
-    (run) => run.suite === "database" && run.status === "completed" && (run.result?.database_measurements?.length || run.result?.redis_measurements?.length),
+    (run) => run.suite === "database" && run.profile === selectedDatabaseProfile && run.status === "completed"
+      && (run.result?.database_measurements?.length || run.result?.redis_measurements?.length || run.result?.mysql_measurements?.length),
   );
   const databaseMeasurements = latestDatabase?.result?.database_measurements || [];
   const redisMeasurements = latestDatabase?.result?.redis_measurements || [];
+  const mysqlMeasurements = latestDatabase?.result?.mysql_measurements || [];
   const databaseProfile = dashboard?.profiles.database?.[selectedDatabaseProfile];
   const databaseAnalysis = latestDatabase?.result?.analysis;
   const databaseTailMeasurement = databaseMeasurements.find(
@@ -1114,21 +1146,28 @@ export default function Home() {
   const selectedDatabaseV2 = databaseProfile?.methodology_version === "database-postgresql-v2";
   const selectedDatabaseRecovery = databaseProfile?.methodology_version === "database-postgresql-recovery-v1";
   const selectedRedis = databaseProfile?.engine === "redis";
+  const selectedMySQL = databaseProfile?.engine === "mysql";
+  const databaseRoleReady = (role: string, capabilities: Record<string, boolean>) => role === "target"
+    ? Boolean(selectedRedis ? (capabilities.redis_server && capabilities.redis_cli) : selectedMySQL
+      ? (capabilities.mysql_server && capabilities.mysql_client && capabilities.mysql_admin && capabilities.mysql_initializer)
+      : (capabilities.postgres && capabilities.initdb && capabilities.pgbench && capabilities.pg_isready
+        && (!selectedDatabaseRecovery
+          || (capabilities.pg_dump && capabilities.pg_restore && capabilities.createdb && capabilities.dropdb && capabilities.psql))))
+    : Boolean(selectedRedis ? (capabilities.redis_benchmark && capabilities.procfs_process_cpu) : selectedMySQL
+      ? (capabilities.sysbench_mysql && capabilities.procfs_process_cpu)
+      : (capabilities.pgbench
+        && (!selectedDatabaseV2 || (capabilities.pgbench_latency_log && capabilities.procfs_process_cpu))));
   const selectedDatabaseReady = Boolean(selectedSession)
     && ["target", "generator"].every((role) => {
       const agent = selectedSession?.agents.find((item) => item.role === role);
       const capabilities = agent?.system.inventory?.capabilities || {};
-      return role === "target"
-        ? Boolean(selectedRedis ? (capabilities.redis_server && capabilities.redis_cli) : (capabilities.postgres && capabilities.initdb && capabilities.pgbench && capabilities.pg_isready
-          && (!selectedDatabaseRecovery
-            || (capabilities.pg_dump && capabilities.pg_restore && capabilities.createdb && capabilities.dropdb && capabilities.psql))))
-        : Boolean(selectedRedis ? (capabilities.redis_benchmark && capabilities.procfs_process_cpu) : (capabilities.pgbench
-          && (!selectedDatabaseV2 || (capabilities.pgbench_latency_log && capabilities.procfs_process_cpu))));
+      return databaseRoleReady(role, capabilities);
     });
   const maxDatabaseTps = Math.max(
     1,
     ...databaseMeasurements.map((item) => item.metrics.transactions_per_second || 0),
     ...redisMeasurements.map((item) => item.metrics.requests_per_second || 0),
+    ...mysqlMeasurements.map((item) => item.metrics.transactions_per_second || 0),
   );
   const activeWeb = dashboard?.runs.find(
     (run) => run.suite === "web" && ["queued", "running"].includes(run.status),
@@ -1508,6 +1547,14 @@ export default function Home() {
       const generatorCapabilities = generator?.system.inventory?.capabilities || {};
       if (!targetCapabilities.redis_server || !targetCapabilities.redis_cli || !generatorCapabilities.redis_benchmark || !generatorCapabilities.procfs_process_cpu) {
         setNotice("Redis requires redis-server/redis-cli on Target and redis-benchmark with Linux CPU accounting on Generator."); return;
+      }
+    } else if (selectedProfile?.engine === "mysql") {
+      const generatorCapabilities = generator?.system.inventory?.capabilities || {};
+      if (!targetCapabilities.mysql_server || !targetCapabilities.mysql_client || !targetCapabilities.mysql_admin || !targetCapabilities.mysql_initializer) {
+        setNotice("MySQL/MariaDB requires server, client, admin, and isolated data-directory initialization tools on the Target."); return;
+      }
+      if (!generatorCapabilities.sysbench_mysql || !generatorCapabilities.procfs_process_cpu) {
+        setNotice("MySQL/MariaDB requires Sysbench with its MySQL driver and Linux CPU accounting on the Generator."); return;
       }
     } else {
     if (!targetCapabilities.postgres || !targetCapabilities.initdb || !targetCapabilities.pgbench || !targetCapabilities.pg_isready) {
@@ -2018,32 +2065,31 @@ export default function Home() {
         {activeView === "database" && (
           <div className="view database-view">
             <section className="section-intro">
-              <div><span className="section-kicker">TWO-AGENT DATABASE ASSESSMENT</span><h2>Measure durable throughput and transaction tail latency without hiding Generator limits.</h2><p>CloudMark creates an isolated PostgreSQL cluster on the Target. Database v2 separates timed throughput jobs from one bounded 4,000-transaction tail-latency workload and records pgbench CPU headroom.</p></div>
+              <div><span className="section-kicker">TWO-AGENT DATABASE &amp; CACHE ASSESSMENT</span><h2>Measure production-shaped service behavior without hiding Generator limits.</h2><p>CloudMark runs isolated PostgreSQL, MySQL/MariaDB, or Redis services on the Target and fixed clients on the paired Generator. Every engine keeps its own versioned durability, latency, authentication, and cleanup contract.</p></div>
               <div className="runner-actions"><label><span>PROFILE</span><select value={selectedDatabaseProfile} onChange={(event) => setSelectedDatabaseProfile(event.target.value)} disabled={Boolean(activeDatabase)}>{Object.entries(dashboard?.profiles.database || {}).map(([id, profile]) => <option key={id} value={id}>{profile.label} · ≈ {profile.estimated_minutes} min</option>)}</select></label><label><span>PAIR TOPOLOGY</span><select value={selectedTopologyScope} onChange={(event) => setSelectedTopologyScope(event.target.value as TopologyScope)}>{TOPOLOGY_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label><button className="button primary" onClick={createPairing} disabled={busy}>New session</button></div>
             </section>
             <section className="database-contract-grid">
               <article className="panel database-profile-card">
-                <div className="panel-head"><div><span className="section-kicker">VERSIONED WORKLOAD</span><h3>{databaseProfile?.label || "PostgreSQL profile"}</h3></div><span className="run-id">SCALE {databaseProfile?.scale_factor || "—"}</span></div>
+                <div className="panel-head"><div><span className="section-kicker">VERSIONED WORKLOAD</span><h3>{databaseProfile?.label || "Database profile"}</h3></div><span className="run-id">{selectedRedis ? `PORT ${databaseProfile?.port || "—"}` : selectedMySQL ? `${databaseProfile?.tables || "—"} TABLES` : `SCALE ${databaseProfile?.scale_factor || "—"}`}</span></div>
                 <p>{databaseProfile?.description}</p>
-                <div className="database-job-grid">{databaseProfile?.jobs.map((job) => <div key={job.name}><span>{job.operation ? `REDIS ${job.operation}` : job.transactions_per_client ? "TAIL LATENCY" : job.workload}</span><strong>{job.name}</strong><small>{job.operation ? `C${job.clients} · P${job.pipeline} · ${job.value_bytes} B · ${job.requests?.toLocaleString()} requests` : `C${job.clients} · J${job.threads} · ${job.transactions_per_client ? `${job.transactions_per_client.toLocaleString()} transactions/client` : `${job.duration}s`}${job.connect_per_transaction ? " · reconnect" : ""}`}</small></div>)}</div>
+                <div className="database-job-grid">{databaseProfile?.jobs.map((job) => <div key={job.name}><span>{job.operation ? `REDIS ${job.operation}` : selectedMySQL ? String(job.workload || "OLTP").replace("oltp_", "").replaceAll("_", " ") : job.transactions_per_client ? "TAIL LATENCY" : job.workload}</span><strong>{job.name}</strong><small>{job.operation ? `C${job.clients} · P${job.pipeline} · ${job.value_bytes} B · ${job.requests?.toLocaleString()} requests` : selectedMySQL ? `${job.threads} threads · ${job.duration}s · P99 latency` : `C${job.clients} · J${job.threads} · ${job.transactions_per_client ? `${job.transactions_per_client.toLocaleString()} transactions/client` : `${job.duration}s`}${job.connect_per_transaction ? " · reconnect" : ""}`}</small></div>)}</div>
               </article>
               <article className="panel database-safety-card">
                 <span className="section-kicker">EXECUTION CONTRACT</span><h3>Ephemeral and bounded by design</h3>
-                <ul><li>Target-only temporary PostgreSQL cluster</li><li>Generator address is the only remote database client</li><li>Durability remains enabled: fsync, full-page writes, synchronous commit</li><li>Fixed port 55432 and allow-listed built-in pgbench scripts</li><li>Tail job is capped at 1,000 transactions per client and 16,000 total</li><li>Dataset and Generator logs are removed after every terminal path</li></ul>
-                <p>Database v2 computes P50/P95/P99/P99.9 from every transaction in the fixed-count tail job. It does not infer percentiles from one-second averages.</p>
+                {selectedMySQL ? <><ul><li>Fresh InnoDB data directory owned by the Target Agent</li><li>Random per-Run password delivered only through memory</li><li>Exact Generator host account and fixed TCP port 57306</li><li>Flush-at-commit and doublewrite remain enabled</li><li>Only packaged Sysbench OLTP scripts and fixed table shapes are accepted</li><li>Tables, process, logs, and data directory are removed on terminal paths</li></ul><p>P99 is emitted directly by the fixed Sysbench percentile contract. Binary logging and replication are intentionally outside this baseline.</p></> : selectedRedis ? <><ul><li>Exact Target bind on fixed TCP port 56379</li><li>Random per-Run password delivered only through memory</li><li>AOF persistence with fsync every second</li><li>Fixed GET/SET sizes, concurrency, pipelines, and request counts</li><li>Generator CPU headroom is required for comparison</li><li>Configuration, AOF/RDB, logs, and process are removed</li></ul><p>Redis v1 measures a durable single-node cache. It does not claim cluster, replication, eviction, or failover behavior.</p></> : <><ul><li>Target-only temporary PostgreSQL cluster</li><li>Generator address is the only remote database client</li><li>Durability remains enabled: fsync, full-page writes, synchronous commit</li><li>Fixed port 55432 and allow-listed built-in pgbench scripts</li><li>Tail job is capped at 1,000 transactions per client and 16,000 total</li><li>Dataset and Generator logs are removed after every terminal path</li></ul><p>Database v2 computes P50/P95/P99/P99.9 from every transaction in the fixed-count tail job. It does not infer percentiles from one-second averages.</p></>}
               </article>
             </section>
             {pairing && <section className="pairing-card"><div><span>SHORT-LIVED JOIN CREDENTIAL</span><strong>{pairing.id}</strong><small>{pairing.topology.scope} · {pairing.topology.source} · verification {pairing.topology.verification.status} · expires {new Date(pairing.expires_at).toLocaleTimeString("en-US")}</small></div><code>{pairing.join_token}</code></section>}
-            {pairing && <section className="panel agent-commands"><div><span className="section-kicker">RUN ON PROVIDER VMS</span><h3>Target hosts PostgreSQL; Generator runs pgbench</h3></div><code>cloudmark agent --controller https://CONTROLLER --session {pairing.id} --token {pairing.join_token} --role target --advertise-address VM_A_IP</code><code>cloudmark agent --controller https://CONTROLLER --session {pairing.id} --token {pairing.join_token} --role generator --advertise-address VM_B_IP</code><p>Install the <strong>database</strong> pack on both machines before starting their Agents.</p></section>}
+            {pairing && <section className="panel agent-commands"><div><span className="section-kicker">RUN ON PROVIDER VMS</span><h3>Target hosts {selectedRedis ? "Redis" : selectedMySQL ? "MySQL/MariaDB" : "PostgreSQL"}; Generator runs {selectedRedis ? "redis-benchmark" : selectedMySQL ? "Sysbench OLTP" : "pgbench"}</h3></div><code>cloudmark agent --controller https://CONTROLLER --session {pairing.id} --token {pairing.join_token} --role target --advertise-address VM_A_IP</code><code>cloudmark agent --controller https://CONTROLLER --session {pairing.id} --token {pairing.join_token} --role generator --advertise-address VM_B_IP</code><p>Install the <strong>database</strong> pack on both machines before starting their Agents.</p></section>}
             <section className="panel session-panel">
               <div className="panel-head"><div><span className="section-kicker">PAIRED EXECUTION</span><h3>Database readiness</h3></div><label className="compact-select"><span>SESSION</span><select value={selectedSession?.id || ""} onChange={(event) => setSelectedSessionId(event.target.value)}>{dashboard?.sessions.map((session) => <option key={session.id} value={session.id}>{session.label} · {session.topology.scope} / {session.topology.verification.status} · {session.status}</option>)}</select></label></div>
-              {selectedSession ? <div className="agent-roster">{["target", "generator"].map((role) => { const agent = selectedSession.agents.find((item) => item.role === role); const capabilities = agent?.system.inventory?.capabilities || {}; const ready = role === "target" ? Boolean(capabilities.postgres && capabilities.initdb && capabilities.pgbench && capabilities.pg_isready && (!selectedDatabaseRecovery || (capabilities.pg_dump && capabilities.pg_restore && capabilities.createdb && capabilities.dropdb && capabilities.psql))) : Boolean(capabilities.pgbench && (!selectedDatabaseV2 || (capabilities.pgbench_latency_log && capabilities.procfs_process_cpu))); return <article key={role} className={agent && ready ? "connected" : "waiting"}><span>{role.toUpperCase()}</span><strong>{agent?.name || `Waiting for ${role}`}</strong><small>{agent ? `${agent.endpoint.address || "No advertised IP"} · ${ready ? selectedDatabaseV2 ? "Database v2 ready" : selectedDatabaseRecovery ? "Recovery tools ready" : "Database v1 ready" : "database prerequisites missing"}` : "Join command has not connected"}</small></article>; })}</div> : <div className="empty-row">Create a session, then connect both provider Agents.</div>}
-              <div className="session-actions"><p><strong>{selectedSession?.status !== "ready" ? "Two Agents required" : selectedDatabaseReady ? "Pair ready" : "Database prerequisites missing"}</strong><small>{selectedDatabaseRecovery ? "Recovery requires fixed PostgreSQL logical backup/restore tools on the Target." : "Database v2 requires pgbench transaction logging and Linux process CPU accounting on the Generator."}</small></p><button className="button primary" onClick={startDatabase} disabled={busy || Boolean(activeDatabase) || selectedSession?.status !== "ready" || !selectedDatabaseReady}>Run database assessment</button></div>
+              {selectedSession ? <div className="agent-roster">{["target", "generator"].map((role) => { const agent = selectedSession.agents.find((item) => item.role === role); const capabilities = agent?.system.inventory?.capabilities || {}; const ready = databaseRoleReady(role, capabilities); const contract = selectedRedis ? "Redis v1" : selectedMySQL ? "MySQL/MariaDB v1" : selectedDatabaseV2 ? "Database v2" : selectedDatabaseRecovery ? "Recovery" : "Database v1"; return <article key={role} className={agent && ready ? "connected" : "waiting"}><span>{role.toUpperCase()}</span><strong>{agent?.name || `Waiting for ${role}`}</strong><small>{agent ? `${agent.endpoint.address || "No advertised IP"} · ${ready ? `${contract} ready` : "database prerequisites missing"}` : "Join command has not connected"}</small></article>; })}</div> : <div className="empty-row">Create a session, then connect both provider Agents.</div>}
+              <div className="session-actions"><p><strong>{selectedSession?.status !== "ready" ? "Two Agents required" : selectedDatabaseReady ? "Pair ready" : "Database prerequisites missing"}</strong><small>{selectedMySQL ? "MySQL/MariaDB requires isolated initialization tools on Target and Sysbench MySQL plus Linux CPU accounting on Generator." : selectedRedis ? "Redis requires authenticated server/client tools and Linux CPU accounting on Generator." : selectedDatabaseRecovery ? "Recovery requires fixed PostgreSQL logical backup/restore tools on the Target." : "Database v2 requires pgbench transaction logging and Linux process CPU accounting on the Generator."}</small></p><button className="button primary" onClick={startDatabase} disabled={busy || Boolean(activeDatabase) || selectedSession?.status !== "ready" || !selectedDatabaseReady}>Run database assessment</button></div>
             </section>
-            {activeDatabase && <section className="panel run-progress" aria-live="polite"><div><span className="section-kicker">ACTIVE DATABASE RUN / {activeDatabase.id}</span><strong>{activeDatabase.current_job || activeDatabase.phase || "Preparing PostgreSQL"}</strong><small>{activeDatabase.completed_steps || 0} of {activeDatabase.total_steps || 1} steps · {Math.round((activeDatabase.progress || 0) * 100)}%</small></div><div className="progress-track"><i style={{ width: `${Math.max(2, (activeDatabase.progress || 0) * 100)}%` }} /></div><button className="button danger" onClick={cancelDatabase} disabled={busy || activeDatabase.cancel_requested}>{activeDatabase.cancel_requested ? "Cancelling" : "Cancel run"}</button></section>}
+            {activeDatabase && <section className="panel run-progress" aria-live="polite"><div><span className="section-kicker">ACTIVE DATABASE RUN / {activeDatabase.id}</span><strong>{activeDatabase.current_job || activeDatabase.phase || "Preparing isolated service"}</strong><small>{activeDatabase.completed_steps || 0} of {activeDatabase.total_steps || 1} steps · {Math.round((activeDatabase.progress || 0) * 100)}%</small></div><div className="progress-track"><i style={{ width: `${Math.max(2, (activeDatabase.progress || 0) * 100)}%` }} /></div><button className="button danger" onClick={cancelDatabase} disabled={busy || activeDatabase.cancel_requested}>{activeDatabase.cancel_requested ? "Cancelling" : "Cancel run"}</button></section>}
             <section className="panel database-results">
-              <div className="panel-head"><div><span className="section-kicker">LATEST COMPLETED RUN</span><h3>PostgreSQL transaction throughput</h3></div><span className="run-id">{latestDatabase?.id || "NO RUN YET"}</span></div>
-              {databaseMeasurements.length || redisMeasurements.length ? <div className="bar-chart">{databaseMeasurements.map((measurement) => { const tps = measurement.metrics.transactions_per_second || 0; return <div className="bar-row" key={measurement.name}><span>{measurement.name} · C{measurement.clients}</span><div><i style={{ width: `${Math.max(3, (tps / maxDatabaseTps) * 100)}%` }} /></div><strong>{Math.round(tps).toLocaleString()} TPS</strong></div>; })}{redisMeasurements.map((measurement)=>{const rps=measurement.metrics.requests_per_second;return <div className="bar-row" key={measurement.name}><span>{measurement.name} · C{measurement.clients}</span><div><i style={{width:`${Math.max(3,(rps/maxDatabaseTps)*100)}%`}}/></div><strong>{Math.round(rps).toLocaleString()} req/s</strong></div>})}</div> : <div className="empty-chart compact"><div className="chart-grid" /><strong>No database/cache result yet</strong><p>Connect a prepared target and generator to establish the first service baseline.</p></div>}
+              <div className="panel-head"><div><span className="section-kicker">LATEST COMPLETED RUN</span><h3>{selectedRedis ? "Redis request throughput" : selectedMySQL ? "MySQL/MariaDB transaction throughput" : "PostgreSQL transaction throughput"}</h3></div><span className="run-id">{latestDatabase?.id || "NO RUN YET"}</span></div>
+              {databaseMeasurements.length || redisMeasurements.length || mysqlMeasurements.length ? <div className="bar-chart">{databaseMeasurements.map((measurement) => { const tps = measurement.metrics.transactions_per_second || 0; return <div className="bar-row" key={measurement.name}><span>{measurement.name} · C{measurement.clients}</span><div><i style={{ width: `${Math.max(3, (tps / maxDatabaseTps) * 100)}%` }} /></div><strong>{Math.round(tps).toLocaleString()} TPS</strong></div>; })}{redisMeasurements.map((measurement)=>{const rps=measurement.metrics.requests_per_second;return <div className="bar-row" key={measurement.name}><span>{measurement.name} · C{measurement.clients}</span><div><i style={{width:`${Math.max(3,(rps/maxDatabaseTps)*100)}%`}}/></div><strong>{Math.round(rps).toLocaleString()} req/s</strong></div>})}{mysqlMeasurements.map((measurement) => { const tps = measurement.metrics.transactions_per_second; return <div className="bar-row" key={measurement.name}><span>{measurement.name} · T{measurement.threads}</span><div><i style={{ width: `${Math.max(3, (tps / maxDatabaseTps) * 100)}%` }} /></div><strong>{Math.round(tps).toLocaleString()} TPS</strong></div>; })}</div> : <div className="empty-chart compact"><div className="chart-grid" /><strong>No result for this profile yet</strong><p>Connect a prepared target and generator to establish the first service baseline.</p></div>}
             </section>
             {databaseMeasurements.length > 0 && <section className="database-evidence-grid">
               {databaseMeasurements.map((measurement) => <article className="panel" key={measurement.name}><span>{measurement.workload.toUpperCase()} · C{measurement.clients} / J{measurement.threads}</span><strong>{measurement.metrics.latency_average_ms.toFixed(2)} ms</strong><small>{measurement.metrics.failed_transactions} failed · {measurement.metrics.transactions_processed.toLocaleString()} transactions</small></article>)}
@@ -2054,6 +2100,12 @@ export default function Home() {
               <article className={`panel cleanup-evidence ${latestDatabase?.result?.cleanup?.cleanup_verified ? "verified" : "unknown"}`}><span>EPHEMERAL CLEANUP</span><strong>{latestDatabase?.result?.cleanup?.cleanup_verified ? "Verified" : "Unavailable"}</strong><small>{latestDatabase?.result?.server?.estimated_dataset_bytes ? `${formatBytes(latestDatabase.result.server.estimated_dataset_bytes)} estimated dataset` : "Dataset size unavailable"}</small></article>
             </section>}
             {redisMeasurements.length > 0 && <section className="database-evidence-grid">{redisMeasurements.map((measurement)=><article className="panel" key={measurement.name}><span>{measurement.operation.toUpperCase()} · C{measurement.clients} / P{measurement.pipeline}</span><strong>{measurement.metrics.latency_ms.p99.toFixed(2)} ms p99</strong><small>{Math.round(measurement.metrics.requests_per_second).toLocaleString()} req/s · {measurement.value_bytes} B values</small></article>)}<article className={`panel ${latestDatabase?.result?.cleanup?.cleanup_verified?"cleanup-evidence verified":"cleanup-evidence unknown"}`}><span>REDIS VALIDITY</span><strong>{latestDatabase?.result?.analysis?.validity?.comparison_eligible?"Comparable":"Not comparable"}</strong><small>{latestDatabase?.result?.analysis?.validity?.reason_codes?.join(" · ")||"AOF, Generator, and cleanup evidence complete"}</small></article></section>}
+            {mysqlMeasurements.length > 0 && <section className="database-evidence-grid">
+              {mysqlMeasurements.map((measurement) => <article className="panel" key={measurement.name}><span>{measurement.workload.replace("oltp_", "").replaceAll("_", " ").toUpperCase()} · {measurement.threads} THREADS</span><strong>{measurement.metrics.latency_ms.p99.toFixed(2)} ms p99</strong><small>{Math.round(measurement.metrics.transactions_per_second).toLocaleString()} TPS · {measurement.metrics.ignored_errors} errors · {measurement.metrics.queries.toLocaleString()} queries</small></article>)}
+              <article className="panel"><span>GENERATOR CPU HEADROOM</span><strong>{latestDatabase?.result?.analysis?.generator_headroom?.status || "Unavailable"}</strong><small>{latestDatabase?.result?.analysis?.generator_headroom?.peak_process_cpu_percent_of_one_core?.toFixed(1) ?? "—"}% peak Sysbench CPU of one core</small></article>
+              <article className="panel"><span>INNODB DURABILITY</span><strong>{latestDatabase?.result?.analysis?.durability?.status === "observed" ? "Verified" : "Unavailable"}</strong><small>Flush at commit {latestDatabase?.result?.analysis?.durability?.innodb_flush_log_at_trx_commit ?? "—"} · doublewrite {latestDatabase?.result?.analysis?.durability?.innodb_doublewrite ? "on" : "unknown"} · binary log disabled</small></article>
+              <article className={`panel cleanup-evidence ${latestDatabase?.result?.analysis?.validity?.comparison_eligible ? "verified" : "unknown"}`}><span>MYSQL/MARIADB VALIDITY</span><strong>{latestDatabase?.result?.analysis?.validity?.comparison_eligible ? "Comparable" : "Not comparable"}</strong><small>{latestDatabase?.result?.analysis?.validity?.reason_codes?.join(" · ") || "Durability, Generator, table cleanup, and service cleanup evidence complete"}</small></article>
+            </section>}
           </div>
         )}
 

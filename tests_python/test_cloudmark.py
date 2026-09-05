@@ -65,6 +65,12 @@ from cloudmark.network import (
     run_network,
     validate_network_run,
 )
+from cloudmark.mysql_benchmark import (
+    MySQLBenchmarkError,
+    mysql_analysis,
+    mysql_total_steps,
+    parse_sysbench_mysql_output,
+)
 from cloudmark.profiles import (
     ASSESSMENT_DOMAINS,
     COMPUTE_PROFILES,
@@ -81,7 +87,7 @@ from cloudmark.redis_benchmark import parse_redis_benchmark_csv, redis_analysis,
 from cloudmark.server import CloudMarkController, Handler, Server, _dashboard_run_summaries, _json_bytes
 from cloudmark.suitability import SCENARIO_REQUIREMENTS, _run_valid, evaluate_suitability
 from cloudmark.topology import assess_pairing_topology
-from cloudmark.tooling import postgres_tool_supports, web_tool_supports
+from cloudmark.tooling import mysql_tool_supports, postgres_tool_supports, web_tool_supports
 from cloudmark.web_benchmark import (
     WebBenchmarkError,
     _web_analysis,
@@ -2417,6 +2423,383 @@ tps = 941.176470 (without initial connection time)
             self.assertTrue(cleanup_seen.is_set())
             self.assertTrue(captured.exception.partial_result["cleanup"]["cleanup_verified"])
 
+    def test_mysql_parser_and_validity_preserve_oltp_p99_and_generator_gate(self) -> None:
+        output = """
+SQL statistics:
+    transactions:                        32320  (538.57 per sec.)
+    queries:                             646400 (10771.30 per sec.)
+    ignored errors:                      2      (0.03 per sec.)
+    reconnects:                          1      (0.02 per sec.)
+
+General statistics:
+    total time:                          60.0123s
+    total number of events:              32320
+
+Latency (ms):
+         min:                                    1.53
+         avg:                                    7.42
+         max:                                   32.91
+         99th percentile:                       18.61
+         sum:                               239814.40
+
+[ 1s ] thds: 4 tps: 535.10 qps: 10702.00 (r/w/o: 7491.40/2140.40/1070.20) lat (ms,99%): 18.28 err/s: 0.00 reconn/s: 0.00
+"""
+        metrics = parse_sysbench_mysql_output(output)
+        self.assertEqual(metrics["transactions"], 32320)
+        self.assertEqual(metrics["ignored_errors"], 2)
+        self.assertEqual(metrics["latency_ms"]["p99"], 18.61)
+        self.assertEqual(metrics["progress"][0]["threads"], 4)
+        result = {
+            "server": {
+                "durability": {
+                    "status": "observed-runtime",
+                    "innodb_flush_log_at_trx_commit": 1,
+                    "innodb_doublewrite": True,
+                    "binary_log": "disabled",
+                }
+            },
+            "preparation": {"status": "complete"},
+            "mysql_measurements": [
+                {
+                    "generator_cpu": {
+                        "status": "observed",
+                        "peak_process_cpu_percent_of_one_core": 45.0,
+                    }
+                }
+            ],
+            "client_cleanup": {"cleanup_verified": True},
+            "cleanup": {"cleanup_verified": True},
+        }
+        self.assertTrue(mysql_analysis(result)["validity"]["comparison_eligible"])
+        result["mysql_measurements"][0]["generator_cpu"]["peak_process_cpu_percent_of_one_core"] = 95.0
+        self.assertFalse(mysql_analysis(result)["validity"]["comparison_eligible"])
+
+    def test_agent_mysql_client_is_bounded_authenticated_and_redacts_secret(self) -> None:
+        worker = AgentWorker("http://127.0.0.1:8787", "agent", "token")
+        password = "temporary-mysql-secret-123456789"
+        output = """
+transactions: 1000 (100.00 per sec.)
+queries: 20000 (2000.00 per sec.)
+ignored errors: 0 (0.00 per sec.)
+reconnects: 0 (0.00 per sec.)
+total time: 10.0000s
+Latency (ms):
+ min: 1.00
+ avg: 5.00
+ max: 20.00
+ 99th percentile: 12.00
+"""
+
+        def guarded(*args, **kwargs):
+            kwargs["cpu_samples"].append(
+                {
+                    "process_cpu_percent_of_one_core": 30.0,
+                    "host_utilization_percent": 20.0,
+                    "host_steal_percent": 0.0,
+                }
+            )
+            return 0, output, ""
+
+        with patch("cloudmark.agent.find_mysql_binary", return_value="sysbench"), patch.object(
+            worker, "_guarded_service_process", side_effect=guarded
+        ) as process, patch("cloudmark.agent.tool_version", return_value="sysbench 1.0.20"):
+            result = worker._run_mysql_client(
+                "task_mysql123",
+                {
+                    "action": "run",
+                    "target_address": "10.0.0.10",
+                    "port": 57306,
+                    "tables": 4,
+                    "table_size": 10000,
+                    "workload": "oltp_read_write",
+                    "threads": 4,
+                    "duration_seconds": 30,
+                    "warmup_seconds": 5,
+                    "run_completed_steps": 2,
+                    "run_total_steps": 6,
+                    "_ephemeral_secret": {"mysql_password": password},
+                },
+            )
+        command = process.call_args.args[1]
+        self.assertIn(f"--mysql-password={password}", command)
+        self.assertIn("--percentile=99", command)
+        self.assertNotIn(password, json.dumps(result))
+        self.assertEqual(result["sysbench_mysql"]["generator_cpu"]["status"], "observed")
+        with self.assertRaises(MySQLBenchmarkError):
+            worker._run_mysql_client(
+                "task_mysqlbad",
+                {
+                    "action": "run",
+                    "target_address": "10.0.0.10",
+                    "port": 57306,
+                    "tables": 4,
+                    "table_size": 10000,
+                    "workload": "custom.lua",
+                    "threads": 4,
+                    "duration_seconds": 30,
+                    "warmup_seconds": 5,
+                    "run_completed_steps": 2,
+                    "run_total_steps": 6,
+                    "_ephemeral_secret": {"mysql_password": password},
+                },
+            )
+
+    def test_agent_mysql_service_uses_isolated_durable_exact_bind_and_cleanup(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            worker = AgentWorker(
+                "http://127.0.0.1:8787",
+                "agent",
+                "token",
+                workspace=Path(directory) / "agent",
+            )
+            bootstrap_process = MagicMock()
+            bootstrap_process.poll.return_value = None
+            bootstrap_process.returncode = 0
+            final_process = MagicMock()
+            final_process.poll.return_value = None
+            final_process.returncode = 0
+            tool_paths = {
+                "server": "/usr/sbin/mariadbd",
+                "client": "/usr/bin/mariadb",
+                "admin": "/usr/bin/mariadb-admin",
+                "initializer": "/usr/bin/mariadb-install-db",
+            }
+            password = "temporary-mysql-service-secret-123456"
+            completed = SimpleNamespace(returncode=0, stdout="mysqld is alive\n", stderr="")
+            durability = SimpleNamespace(returncode=0, stdout="1\tON\t0\n", stderr="")
+
+            def mysql_command(command, **kwargs):
+                if any(str(argument).startswith("--execute=SELECT @@innodb") for argument in command):
+                    return durability
+                return completed
+
+            with patch("cloudmark.agent.os.name", "posix"), patch(
+                "cloudmark.agent.find_mysql_binary", side_effect=lambda name: tool_paths.get(name)
+            ), patch("cloudmark.agent.mysql_tool_supports", return_value=True), patch.object(
+                worker, "_guarded_service_process", return_value=(0, "", "")
+            ), patch.object(
+                worker, "_service_control_update"
+            ), patch("cloudmark.agent.subprocess.Popen", side_effect=[bootstrap_process, final_process]) as popen, patch(
+                "cloudmark.agent.subprocess.run", side_effect=mysql_command
+            ) as run, patch("cloudmark.agent.tool_version", return_value="mariadbd 11.4"):
+                result = worker._start_mysql_server(
+                    "task_mysqlservice",
+                    {
+                        "listen_address": "10.0.0.10",
+                        "allowed_client_address": "10.0.0.11",
+                        "port": 57306,
+                        "max_connections": 32,
+                        "estimated_dataset_bytes": 128 * 1024 * 1024,
+                        "deadline_seconds": 600,
+                        "methodology_version": "database-mysql-v1",
+                        "run_completed_steps": 0,
+                        "run_total_steps": 6,
+                        "_ephemeral_secret": {"mysql_password": password},
+                    },
+                )
+            final_command = popen.call_args_list[-1].args[0]
+            self.assertIn("--bind-address=10.0.0.10", final_command)
+            self.assertIn("--port=57306", final_command)
+            self.assertIn("--innodb-flush-log-at-trx-commit=1", final_command)
+            self.assertIn("--innodb-doublewrite=ON", final_command)
+            setup_call = next(call for call in run.call_args_list if call.kwargs.get("input"))
+            self.assertIn("'cloudmark'@'10.0.0.11'", setup_call.kwargs["input"])
+            self.assertIn(password, setup_call.kwargs["input"])
+            self.assertNotIn(password, json.dumps(result))
+            self.assertEqual(result["durability"]["status"], "observed-runtime")
+            self.assertEqual(result["durability"]["binary_log"], "disabled")
+            cleanup = worker._stop_mysql_server("task_mysqlservice")
+            self.assertTrue(cleanup["cleanup_verified"])
+            self.assertNotIn("task_mysqlservice", worker.active_mysql_servers)
+
+    def test_mysql_orchestrator_uses_one_memory_secret_and_verified_cleanup(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            database = Database(Path(directory) / "test.sqlite3")
+            database.create_session("session_mysql", "mysql", "hash", "2099-01-01T00:00:00+00:00")
+            database.add_agent(
+                "mysql_target",
+                "session_mysql",
+                "target",
+                "target",
+                {"inventory": {"capabilities": {
+                    "mysql_server": True,
+                    "mysql_client": True,
+                    "mysql_admin": True,
+                    "mysql_initializer": True,
+                }}},
+                endpoint={"address": "10.0.0.10"},
+            )
+            database.add_agent(
+                "mysql_generator",
+                "session_mysql",
+                "generator",
+                "generator",
+                {"inventory": {"capabilities": {"sysbench_mysql": True, "procfs_process_cpu": True}}},
+                endpoint={"address": "10.0.0.11"},
+            )
+            total_steps = database_total_steps("mysql-peer-quick")
+            database.create_run(
+                "run_mysql", "database", "mysql-peer-quick", {"suite": "database"}, total_steps=total_steps
+            )
+            done = threading.Event()
+            delivered: list[str] = []
+
+            def complete_tasks() -> None:
+                while not done.is_set():
+                    handled = False
+                    for agent_id in ("mysql_target", "mysql_generator"):
+                        task = database.claim_agent_task(agent_id)
+                        if not task:
+                            continue
+                        handled = True
+                        if task.get("ephemeral_secret"):
+                            delivered.append(task["ephemeral_secret"]["mysql_password"])
+                        if task["kind"] == "mysql-service-start":
+                            value = {
+                                "ready": True,
+                                "durability": {
+                                    "status": "observed-runtime",
+                                    "innodb_flush_log_at_trx_commit": 1,
+                                    "innodb_doublewrite": True,
+                                    "binary_log": "disabled",
+                                },
+                            }
+                        elif task["kind"] == "mysql-client" and task["payload"]["action"] == "run":
+                            value = {"sysbench_mysql": {
+                                "workload": task["payload"]["workload"],
+                                "threads": task["payload"]["threads"],
+                                "metrics": {"transactions_per_second": 500.0, "latency_ms": {"p99": 12.0}},
+                                "generator_cpu": {
+                                    "status": "observed",
+                                    "peak_process_cpu_percent_of_one_core": 40.0,
+                                },
+                            }}
+                        elif task["kind"] == "mysql-client":
+                            value = {
+                                "status": "complete",
+                                "action": task["payload"]["action"],
+                                "cleanup_verified": task["payload"]["action"] == "cleanup",
+                            }
+                        else:
+                            value = {"status": "completed", "cleanup_verified": True}
+                        database.finish_agent_task(task["id"], agent_id, status="completed", result=value)
+                    if not handled:
+                        time.sleep(0.005)
+
+            worker = threading.Thread(target=complete_tasks, daemon=True)
+            worker.start()
+            try:
+                result = run_database(
+                    database,
+                    "run_mysql",
+                    "session_mysql",
+                    "mysql-peer-quick",
+                    context=JobContext("run_mysql", total_steps=total_steps, timeout_seconds=30),
+                )
+            finally:
+                done.set()
+                worker.join(timeout=2)
+            self.assertEqual(len(result["mysql_measurements"]), 2)
+            self.assertTrue(result["analysis"]["validity"]["comparison_eligible"])
+            self.assertTrue(result["client_cleanup"]["cleanup_verified"])
+            self.assertTrue(result["cleanup"]["cleanup_verified"])
+            self.assertEqual(len(set(delivered)), 1)
+            self.assertNotIn(delivered[0], json.dumps(database.list_run_tasks("run_mysql")))
+
+    def test_mysql_orchestrator_cleans_client_and_target_after_run_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            database = Database(Path(directory) / "test.sqlite3")
+            database.create_session("session_mysql", "mysql", "hash", "2099-01-01T00:00:00+00:00")
+            target_capabilities = {
+                "mysql_server": True,
+                "mysql_client": True,
+                "mysql_admin": True,
+                "mysql_initializer": True,
+            }
+            database.add_agent(
+                "mysql_target",
+                "session_mysql",
+                "target",
+                "target",
+                {"inventory": {"capabilities": target_capabilities}},
+                endpoint={"address": "10.0.0.10"},
+            )
+            database.add_agent(
+                "mysql_generator",
+                "session_mysql",
+                "generator",
+                "generator",
+                {"inventory": {"capabilities": {"sysbench_mysql": True, "procfs_process_cpu": True}}},
+                endpoint={"address": "10.0.0.11"},
+            )
+            total_steps = database_total_steps("mysql-peer-quick")
+            database.create_run(
+                "run_mysql_failure",
+                "database",
+                "mysql-peer-quick",
+                {"suite": "database"},
+                total_steps=total_steps,
+            )
+            done = threading.Event()
+            client_cleanup_seen = threading.Event()
+            service_cleanup_seen = threading.Event()
+
+            def complete_tasks() -> None:
+                while not done.is_set():
+                    handled = False
+                    for agent_id in ("mysql_target", "mysql_generator"):
+                        task = database.claim_agent_task(agent_id)
+                        if not task:
+                            continue
+                        handled = True
+                        if task["kind"] == "mysql-service-start":
+                            database.finish_agent_task(task["id"], agent_id, status="completed", result={"ready": True})
+                        elif task["kind"] == "mysql-client" and task["payload"]["action"] == "prepare":
+                            database.finish_agent_task(
+                                task["id"], agent_id, status="completed", result={"status": "complete"}
+                            )
+                        elif task["kind"] == "mysql-client" and task["payload"]["action"] == "run":
+                            database.finish_agent_task(
+                                task["id"], agent_id, status="failed", error="simulated MySQL client failure"
+                            )
+                        elif task["kind"] == "mysql-client":
+                            client_cleanup_seen.set()
+                            database.finish_agent_task(
+                                task["id"],
+                                agent_id,
+                                status="completed",
+                                result={"status": "complete", "cleanup_verified": True},
+                            )
+                        else:
+                            service_cleanup_seen.set()
+                            database.finish_agent_task(
+                                task["id"],
+                                agent_id,
+                                status="completed",
+                                result={"status": "completed", "cleanup_verified": True},
+                            )
+                    if not handled:
+                        time.sleep(0.005)
+
+            worker = threading.Thread(target=complete_tasks, daemon=True)
+            worker.start()
+            try:
+                with self.assertRaisesRegex(DistributedError, "simulated MySQL client failure") as captured:
+                    run_database(
+                        database,
+                        "run_mysql_failure",
+                        "session_mysql",
+                        "mysql-peer-quick",
+                        context=JobContext("run_mysql_failure", total_steps=total_steps, timeout_seconds=30),
+                    )
+            finally:
+                done.set()
+                worker.join(timeout=2)
+            self.assertTrue(client_cleanup_seen.is_set())
+            self.assertTrue(service_cleanup_seen.is_set())
+            self.assertTrue(captured.exception.partial_result["client_cleanup"]["cleanup_verified"])
+            self.assertTrue(captured.exception.partial_result["cleanup"]["cleanup_verified"])
+
     def test_database_v2_requires_pgbench_fixed_transaction_log_support(self) -> None:
         responses = [
             SimpleNamespace(
@@ -2429,6 +2812,19 @@ tps = 941.176470 (without initial connection time)
         with patch("cloudmark.tooling.subprocess.run", side_effect=responses):
             self.assertTrue(postgres_tool_supports("pgbench", "pgbench", "transaction-log"))
             self.assertFalse(postgres_tool_supports("pgbench", "pgbench", "transaction-log"))
+
+    def test_mysql_capability_checks_require_initializer_and_sysbench_driver_evidence(self) -> None:
+        responses = [
+            SimpleNamespace(returncode=0, stdout="--auth-root-authentication-method=normal", stderr=""),
+            SimpleNamespace(returncode=0, stdout="--initialize-insecure", stderr=""),
+            SimpleNamespace(returncode=0, stdout="Compiled-in database drivers: mysql", stderr=""),
+            SimpleNamespace(returncode=0, stdout="Compiled-in database drivers: pgsql", stderr=""),
+        ]
+        with patch("cloudmark.tooling.subprocess.run", side_effect=responses):
+            self.assertTrue(mysql_tool_supports("mariadb-install-db", "auth-root-method"))
+            self.assertTrue(mysql_tool_supports("mysqld", "initialize-insecure"))
+            self.assertTrue(mysql_tool_supports("sysbench", "mysql-driver"))
+            self.assertFalse(mysql_tool_supports("sysbench", "mysql-driver"))
 
     def test_database_v2_analysis_rejects_generator_or_tail_evidence_gaps(self) -> None:
         result = {
@@ -3165,6 +3561,45 @@ tps = 400.000000 (without initial connection time)
             self.assertEqual(stored["total_steps"], 5)
             self.assertEqual(stored["methodology_version"], "database-postgresql-v1")
             self.assertEqual(stored["tool_version"], "postgresql/pgbench-agent")
+
+    def test_controller_admits_only_capable_confirmed_mysql_pair_runs(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            controller = CloudMarkController(Path(directory))
+            controller.database.create_session("session_mysql", "mysql", "hash", "2099-01-01T00:00:00+00:00")
+            controller.database.add_agent(
+                "mysql_target",
+                "session_mysql",
+                "target",
+                "target",
+                {"inventory": {"capabilities": {
+                    "mysql_server": True,
+                    "mysql_client": True,
+                    "mysql_admin": True,
+                    "mysql_initializer": True,
+                }}},
+                endpoint={"address": "10.0.0.10"},
+            )
+            controller.database.add_agent(
+                "mysql_generator",
+                "session_mysql",
+                "generator",
+                "generator",
+                {"inventory": {"capabilities": {"sysbench_mysql": True, "procfs_process_cpu": True}}},
+                endpoint={"address": "10.0.0.11"},
+            )
+            request = {
+                "suite": "database",
+                "profile": "mysql-peer-quick",
+                "session_id": "session_mysql",
+            }
+            with self.assertRaisesRegex(ValueError, "confirm_database_load"):
+                controller.submit_run(request)
+            with patch.object(controller, "_execute_run"):
+                run = controller.submit_run({**request, "confirm_database_load": True})
+            stored = controller.database.get_run(run["id"])
+            self.assertEqual(stored["total_steps"], 6)
+            self.assertEqual(stored["methodology_version"], "database-mysql-v1")
+            self.assertEqual(stored["tool_version"], "mysql-compatible/sysbench-agent")
 
     def test_database_orchestrator_schedules_cleanup_after_client_failure(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -3932,11 +4367,14 @@ Percentage of the requests served within a certain time (ms)
         self.assertIn("gcc", plan.packages)
         self.assertIn("libgomp1", plan.packages)
 
-    def test_bootstrap_database_pack_includes_postgresql_and_pgbench_packages(self) -> None:
+    def test_bootstrap_database_pack_includes_postgresql_redis_and_mariadb_packages(self) -> None:
         with patch("cloudmark.bootstrap.detect_manager", return_value="apt"):
             plan = create_plan(["database"])
         self.assertIn("postgresql", plan.packages)
         self.assertIn("postgresql-contrib", plan.packages)
+        self.assertIn("redis-server", plan.packages)
+        self.assertIn("mariadb-server", plan.packages)
+        self.assertIn("mariadb-client", plan.packages)
         self.assertIn("database", plan.packs)
 
     def test_database_profiles_are_versioned_and_bounded(self) -> None:
@@ -3969,6 +4407,14 @@ Percentage of the requests served within a certain time (ms)
         for name in ("redis-peer-quick","redis-peer-standard"):
             profile=DATABASE_PROFILES[name]; self.assertEqual(profile["methodology_version"],"database-redis-v1")
             self.assertTrue(all(job["requests"]<=50000 and job["clients"]<=64 and job["pipeline"]<=16 for job in profile["jobs"]))
+        self.assertEqual(mysql_total_steps("mysql-peer-quick"), 6)
+        self.assertEqual(mysql_total_steps("mysql-peer-standard"), 11)
+        for name in ("mysql-peer-quick", "mysql-peer-standard"):
+            profile = DATABASE_PROFILES[name]
+            self.assertEqual(profile["methodology_version"], "database-mysql-v1")
+            self.assertLessEqual(profile["tables"], 8)
+            self.assertLessEqual(profile["table_size"], 50_000)
+            self.assertTrue(all(job["duration"] <= 60 and job["threads"] <= 16 for job in profile["jobs"]))
 
     def test_bootstrap_web_pack_includes_nginx_apachebench_and_openssl(self) -> None:
         with patch("cloudmark.bootstrap.detect_manager", return_value="apt"):

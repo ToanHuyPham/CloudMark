@@ -149,7 +149,10 @@ own generators for CPU and network resources.
   available in `database-postgresql-recovery-v1`;
 - PostgreSQL checkpoint isolation, physical/PITR backup, replication, failover,
   cross-zone recovery, and RPO/RTO — planned;
-- MySQL/MariaDB OLTP read/write and fsync-sensitive profiles;
+- MySQL/MariaDB isolated InnoDB point-select/read-only/write-only/read-write,
+  P99 latency, Generator validity, and cleanup — available in
+  `database-mysql-v1`; checkpoint isolation, binary-log overhead, replication,
+  and recovery remain planned;
 - Redis authenticated GET/SET, pipelines, AOF persistence, P50/P95/P99 latency,
   Generator validity, and cleanup — available in `database-redis-v1`;
 - static web, JSON API, TLS 1.2, keep-alive, connection churn, concurrency

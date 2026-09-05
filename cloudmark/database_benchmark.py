@@ -255,6 +255,9 @@ def database_total_steps(profile_name: str) -> int:
     if profile.get("engine") == "redis":
         from .redis_benchmark import redis_total_steps
         return redis_total_steps(profile_name)
+    if profile.get("engine") == "mysql":
+        from .mysql_benchmark import mysql_total_steps
+        return mysql_total_steps(profile_name)
     return len(profile["jobs"]) + 2 + (1 if profile.get("recovery_drill") else 0)
 
 
@@ -263,6 +266,9 @@ def database_default_timeout(profile_name: str) -> int:
     if profile.get("engine") == "redis":
         from .redis_benchmark import redis_default_timeout
         return redis_default_timeout(profile_name)
+    if profile.get("engine") == "mysql":
+        from .mysql_benchmark import mysql_default_timeout
+        return mysql_default_timeout(profile_name)
     job_seconds = sum(
         int(job.get("timeout", int(job["duration"]) + 45)) + int(job.get("warmup", 0))
         for job in profile["jobs"]
@@ -283,6 +289,9 @@ def validate_database_run(
     if DATABASE_PROFILES[profile_name].get("engine") == "redis":
         from .redis_benchmark import validate_redis_run
         return validate_redis_run(database, session_id, profile_name)
+    if DATABASE_PROFILES[profile_name].get("engine") == "mysql":
+        from .mysql_benchmark import validate_mysql_run
+        return validate_mysql_run(database, session_id, profile_name)
     profile = DATABASE_PROFILES[profile_name]
     target_capabilities = ["postgres", "initdb", "pgbench", "pg_isready"]
     generator_capabilities = ["pgbench"]
@@ -309,6 +318,9 @@ def run_database(
     if DATABASE_PROFILES[profile_name].get("engine") == "redis":
         from .redis_benchmark import run_redis
         return run_redis(database, run_id, session_id, profile_name, context=context)
+    if DATABASE_PROFILES[profile_name].get("engine") == "mysql":
+        from .mysql_benchmark import run_mysql
+        return run_mysql(database, run_id, session_id, profile_name, context=context)
     session, target, generator = validate_database_run(database, session_id, profile_name)
     profile = DATABASE_PROFILES[profile_name]
     target_address = peer_address(target)

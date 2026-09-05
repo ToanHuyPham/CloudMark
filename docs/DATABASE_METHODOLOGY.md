@@ -1,5 +1,10 @@
 # PostgreSQL database methodology
 
+This document covers PostgreSQL only. MySQL/MariaDB uses the independent
+[`database-mysql-v1`](MYSQL_METHODOLOGY.md) contract, and Redis uses
+[`database-redis-v1`](REDIS_METHODOLOGY.md). Results from different engines are
+not interchangeable.
+
 CloudMark Standard methodology `database-postgresql-v2` measures a real
 PostgreSQL service from a separate pgbench Generator, adds exact fixed-count
 transaction tail latency, and validates Generator process CPU. Quick remains on

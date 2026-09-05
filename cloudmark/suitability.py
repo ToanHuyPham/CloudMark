@@ -279,6 +279,7 @@ def _run_valid(run: dict[str, Any]) -> tuple[bool, str | None]:
         "database-postgresql-v2",
         "database-postgresql-recovery-v1",
         "database-redis-v1",
+        "database-mysql-v1",
     }:
         if _nested(result, "analysis", "validity", "comparison_eligible") is not True:
             return False, "Database Generator validity, required tail/recovery evidence, or cleanup evidence is insufficient for comparison."
