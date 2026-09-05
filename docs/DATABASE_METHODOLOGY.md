@@ -4,6 +4,8 @@ This document covers PostgreSQL only. MySQL/MariaDB uses the independent
 [`database-mysql-v1`](MYSQL_METHODOLOGY.md) contract, and Redis uses
 [`database-redis-v1`](REDIS_METHODOLOGY.md). Results from different engines are
 not interchangeable.
+The separately scheduled checkpoint workload is documented in
+[`POSTGRES_CHECKPOINT_METHODOLOGY.md`](POSTGRES_CHECKPOINT_METHODOLOGY.md).
 
 Repeated provider observations expose the fixed PostgreSQL TPC-B-like C4 TPS,
 average latency, and failed-transaction metrics only within an exact PostgreSQL

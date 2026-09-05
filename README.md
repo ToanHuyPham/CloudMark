@@ -28,6 +28,7 @@ timestamp, and raw result.
 | Available | Explicit remote Agent dispatch for CPU, memory, and storage with live progress, cancellation, and result attribution |
 | Partial | Guarded peer network executor: pre/post interface counters, route/MTU, read-only NIC/TCP-control evidence, directional TCP scaling, idle/loaded RTT, adaptive UDP sweeps, and simultaneous bidirectional TCP |
 | Partial | Guarded PostgreSQL v2 plus logical Backup & Restore with durable throughput, exact transaction P50/P95/P99/P99.9, Generator validity, row-count verification, and cleanup |
+| Partial | PostgreSQL checkpoint isolation with pre/post version-aware counters, forced-checkpoint wall time, Generator validity, and cleanup |
 | Partial | Authenticated Redis GET/SET, value-size/concurrency/pipeline curves, AOF persistence, P50/P95/P99 latency, Generator validity, and cleanup |
 | Partial | Isolated MySQL/MariaDB InnoDB with fixed Sysbench point-select/read-only/write-only/read-write profiles, P99 latency, Generator validity, and verified cleanup |
 | Partial | Guarded two-Agent Web v2 with Nginx, a packaged dynamic reverse-proxy application, Generator CPU validity, HTTP/TLS tail latency, static transfer, and HTTP/2 negotiation |
@@ -159,6 +160,7 @@ Controller is never an iperf3 endpoint.
 - [Remote Agent execution](docs/REMOTE_EXECUTION.md)
 - [Network methodology](docs/NETWORK_METHODOLOGY.md)
 - [PostgreSQL database methodology](docs/DATABASE_METHODOLOGY.md)
+- [PostgreSQL checkpoint-isolation methodology](docs/POSTGRES_CHECKPOINT_METHODOLOGY.md)
 - [MySQL/MariaDB methodology](docs/MYSQL_METHODOLOGY.md)
 - [Web, API, and TLS methodology](docs/WEB_METHODOLOGY.md)
 - [Workload suitability methodology](docs/SUITABILITY_METHODOLOGY.md)
@@ -174,6 +176,7 @@ development head also implements the versioned `network-v9` Standard profile,
 Standard `database-postgresql-v2`, and Standard `web-http-v2` while preserving
 the Database/Web v1 Quick contracts. PostgreSQL also includes the separately
 versioned `database-postgresql-recovery-v1` logical backup/restore drill and
+the separate `database-postgresql-checkpoint-v1` forced-checkpoint drill, plus
 the authenticated `database-mysql-v1` MySQL/MariaDB Sysbench OLTP contract.
 Compute and memory remain `Partial` until floating-point, crypto, compilation,
 latency, NUMA, and broader architecture coverage are implemented. Network

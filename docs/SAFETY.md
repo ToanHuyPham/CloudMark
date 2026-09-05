@@ -153,6 +153,18 @@ systems.
   exceed twice the estimate. The restored database and archive are removed on
   success and best-effort cleanup runs on failure; unverified recovery cleanup
   makes the Run comparison-ineligible.
+- Checkpoint isolation accepts only the active generated PostgreSQL service,
+  fixed `SHOW server_version_num`, fixed `CHECKPOINT`, and one version-selected
+  cumulative-statistics query. It accepts no caller SQL or checkpoint mode and
+  never resets statistics.
+- The checkpoint profile forces one baseline and one post-load checkpoint
+  around a fixed 60-second durable write workload. It therefore requires
+  explicit database-load confirmation and must not overlap another saturation
+  suite on either Agent.
+- Counter decreases, mismatched server versions/views, a missing requested-
+  checkpoint increment, missing Generator CPU, or unverified cluster cleanup
+  make checkpoint evidence comparison-ineligible. The profile never targets a
+  raw device or claims crash/power-loss recovery behavior.
 
 ## Redis
 

@@ -182,6 +182,15 @@ equality, expected scale shape, backup size, restore timing, recovery cleanup,
 and final cluster cleanup. This is same-Target logical recovery evidence, not a
 provider snapshot or cross-zone disaster-recovery claim.
 
+For `PostgreSQL Checkpoint Isolation`, the Target additionally requires `psql`
+and the Generator requires Linux procfs CPU accounting. Keep both Agents idle,
+because the profile intentionally forces a baseline checkpoint, runs one
+60-second durable write workload, and forces a post-load checkpoint. Review the
+PostgreSQL version/source view, requested and timed checkpoint deltas, write and
+sync time, buffers written, forced-checkpoint wall time, Generator CPU, and
+cluster cleanup. Do not interpret this as crash recovery, WAL replay, PITR,
+provider snapshot, or power-loss evidence.
+
 For MySQL/MariaDB peer profiles, install the database pack and restart both
 Agents. Run the Target Agent as a non-root account and allow TCP `57306` only
 from the paired Generator. The Target must report `mysql_server`,
@@ -257,6 +266,8 @@ be interpreted as HTTP/2 throughput.
   `procfs_process_cpu`;
 - for Backup & Restore, verify the Target reports `pg_dump`, `pg_restore`,
   `createdb`, `dropdb`, and `psql`;
+- for Checkpoint Isolation, verify the Target reports `psql` and the Generator
+  reports `procfs_process_cpu`;
 - restart each Agent after installing the database pack so inventory refreshes;
 - verify TCP `55432` is reachable only from the Generator peer address;
 - run the Target Agent as a non-root account;

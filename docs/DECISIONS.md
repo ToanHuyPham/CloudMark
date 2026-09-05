@@ -449,3 +449,22 @@ engines and server releases performance-equivalent. Adding the observed
 implementation to the acquisition contract prevents mixed-product statistics
 while preserving useful non-ranking provider observations for all implemented
 database/cache executors.
+
+## D-032: PostgreSQL checkpoint isolation is a separate forced-I/O contract
+
+**Decision:** Add `database-postgresql-checkpoint-v1` as a separately scheduled
+profile. The Target completes a baseline `CHECKPOINT`, captures cumulative
+checkpointer statistics, receives one fixed 60-second durable TPC-B-like C4
+workload from the Generator, completes a post-load `CHECKPOINT`, and captures
+the same statistics again. CloudMark normalizes `pg_stat_bgwriter` before
+PostgreSQL 17 and `pg_stat_checkpointer` from PostgreSQL 17 onward, retaining
+the source view and server version. Non-decreasing counters, an observed
+requested-checkpoint increment, Generator headroom, and cluster cleanup are
+comparison gates. The Target wall-clock duration includes local psql overhead.
+
+**Reason:** Transaction throughput alone does not show how much dirty-buffer
+work accumulates or how long an explicit durability boundary takes. A separate
+profile avoids silently lengthening Standard, makes the storage-heavy action
+operator-controlled, supports both PostgreSQL statistics schemas, and prevents
+the measurement from being mislabeled as transaction tail latency, crash
+recovery, PITR, or power-loss testing.

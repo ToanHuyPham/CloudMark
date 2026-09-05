@@ -492,6 +492,20 @@ type Run = {
       restore_database_removed?: boolean;
       backup_artifact_removed?: boolean;
     };
+    checkpoint?: {
+      status: "complete" | "partial" | "pending" | "baseline-complete" | "not-requested";
+      forced_checkpoint_duration_seconds?: number;
+      requested_checkpoint_observed?: boolean;
+      deltas?: {
+        checkpoints_timed?: number;
+        checkpoints_requested?: number;
+        write_time_ms?: number;
+        sync_time_ms?: number;
+        buffers_written?: number;
+      };
+      post_load?: { source_view?: string; server_version_num?: number };
+      reason_codes?: string[];
+    };
     cleanup?: { status: string; cleanup_verified?: boolean };
     analysis?: {
       scored: boolean;
@@ -639,6 +653,19 @@ type Run = {
         backup_duration_seconds?: number;
         restore_duration_seconds?: number;
         backup_bytes?: number;
+      };
+      checkpoint_isolation?: {
+        status: "complete" | "partial" | "unavailable";
+        required: boolean;
+        forced_checkpoint_duration_seconds?: number;
+        source_view?: string;
+        deltas?: {
+          checkpoints_timed?: number;
+          checkpoints_requested?: number;
+          write_time_ms?: number;
+          sync_time_ms?: number;
+          buffers_written?: number;
+        };
       };
       durability?: {
         status: "observed" | "unavailable";
@@ -909,6 +936,7 @@ type Dashboard = {
         timeout?: number;
       }[];
       recovery_drill?: { type: string; timeout: number };
+      checkpoint_drill?: { type: string; timeout: number };
       protocol_probes?: { name: string; scheme: "https"; path: string }[];
     }>;
     web?: Record<string, {
@@ -1147,6 +1175,7 @@ export default function Home() {
   );
   const selectedDatabaseV2 = databaseProfile?.methodology_version === "database-postgresql-v2";
   const selectedDatabaseRecovery = databaseProfile?.methodology_version === "database-postgresql-recovery-v1";
+  const selectedDatabaseCheckpoint = databaseProfile?.methodology_version === "database-postgresql-checkpoint-v1";
   const selectedRedis = databaseProfile?.engine === "redis";
   const selectedMySQL = databaseProfile?.engine === "mysql";
   const databaseRoleReady = (role: string, capabilities: Record<string, boolean>) => role === "target"
@@ -1154,11 +1183,13 @@ export default function Home() {
       ? (capabilities.mysql_server && capabilities.mysql_client && capabilities.mysql_admin && capabilities.mysql_initializer)
       : (capabilities.postgres && capabilities.initdb && capabilities.pgbench && capabilities.pg_isready
         && (!selectedDatabaseRecovery
-          || (capabilities.pg_dump && capabilities.pg_restore && capabilities.createdb && capabilities.dropdb && capabilities.psql))))
+          || (capabilities.pg_dump && capabilities.pg_restore && capabilities.createdb && capabilities.dropdb && capabilities.psql))
+        && (!selectedDatabaseCheckpoint || capabilities.psql)))
     : Boolean(selectedRedis ? (capabilities.redis_benchmark && capabilities.procfs_process_cpu) : selectedMySQL
       ? (capabilities.sysbench_mysql && capabilities.procfs_process_cpu)
       : (capabilities.pgbench
-        && (!selectedDatabaseV2 || (capabilities.pgbench_latency_log && capabilities.procfs_process_cpu))));
+        && (!selectedDatabaseV2 || (capabilities.pgbench_latency_log && capabilities.procfs_process_cpu))
+        && (!selectedDatabaseCheckpoint || capabilities.procfs_process_cpu)));
   const selectedDatabaseReady = Boolean(selectedSession)
     && ["target", "generator"].every((role) => {
       const agent = selectedSession?.agents.find((item) => item.role === role);
@@ -1578,6 +1609,13 @@ export default function Home() {
       const generatorCapabilities = generator.system.inventory?.capabilities || {};
       if (!generatorCapabilities.pgbench_latency_log || !generatorCapabilities.procfs_process_cpu) {
         setNotice("Database v2 requires pgbench transaction logging and Linux procfs CPU accounting on the Generator.");
+        return;
+      }
+    }
+    if (dashboard?.profiles.database?.[selectedDatabaseProfile]?.methodology_version === "database-postgresql-checkpoint-v1") {
+      const generatorCapabilities = generator.system.inventory?.capabilities || {};
+      if (!targetCapabilities.psql || !generatorCapabilities.procfs_process_cpu) {
+        setNotice("PostgreSQL checkpoint isolation requires psql on Target and Linux process CPU accounting on Generator.");
         return;
       }
     }
@@ -2078,15 +2116,15 @@ export default function Home() {
               </article>
               <article className="panel database-safety-card">
                 <span className="section-kicker">EXECUTION CONTRACT</span><h3>Ephemeral and bounded by design</h3>
-                {selectedMySQL ? <><ul><li>Fresh InnoDB data directory owned by the Target Agent</li><li>Random per-Run password delivered only through memory</li><li>Exact Generator host account and fixed TCP port 57306</li><li>Flush-at-commit and doublewrite remain enabled</li><li>Only packaged Sysbench OLTP scripts and fixed table shapes are accepted</li><li>Tables, process, logs, and data directory are removed on terminal paths</li></ul><p>P99 is emitted directly by the fixed Sysbench percentile contract. Binary logging and replication are intentionally outside this baseline.</p></> : selectedRedis ? <><ul><li>Exact Target bind on fixed TCP port 56379</li><li>Random per-Run password delivered only through memory</li><li>AOF persistence with fsync every second</li><li>Fixed GET/SET sizes, concurrency, pipelines, and request counts</li><li>Generator CPU headroom is required for comparison</li><li>Configuration, AOF/RDB, logs, and process are removed</li></ul><p>Redis v1 measures a durable single-node cache. It does not claim cluster, replication, eviction, or failover behavior.</p></> : <><ul><li>Target-only temporary PostgreSQL cluster</li><li>Generator address is the only remote database client</li><li>Durability remains enabled: fsync, full-page writes, synchronous commit</li><li>Fixed port 55432 and allow-listed built-in pgbench scripts</li><li>Tail job is capped at 1,000 transactions per client and 16,000 total</li><li>Dataset and Generator logs are removed after every terminal path</li></ul><p>Database v2 computes P50/P95/P99/P99.9 from every transaction in the fixed-count tail job. It does not infer percentiles from one-second averages.</p></>}
+                {selectedMySQL ? <><ul><li>Fresh InnoDB data directory owned by the Target Agent</li><li>Random per-Run password delivered only through memory</li><li>Exact Generator host account and fixed TCP port 57306</li><li>Flush-at-commit and doublewrite remain enabled</li><li>Only packaged Sysbench OLTP scripts and fixed table shapes are accepted</li><li>Tables, process, logs, and data directory are removed on terminal paths</li></ul><p>P99 is emitted directly by the fixed Sysbench percentile contract. Binary logging and replication are intentionally outside this baseline.</p></> : selectedRedis ? <><ul><li>Exact Target bind on fixed TCP port 56379</li><li>Random per-Run password delivered only through memory</li><li>AOF persistence with fsync every second</li><li>Fixed GET/SET sizes, concurrency, pipelines, and request counts</li><li>Generator CPU headroom is required for comparison</li><li>Configuration, AOF/RDB, logs, and process are removed</li></ul><p>Redis v1 measures a durable single-node cache. It does not claim cluster, replication, eviction, or failover behavior.</p></> : selectedDatabaseCheckpoint ? <><ul><li>Fresh durable PostgreSQL cluster on the Target</li><li>Baseline checkpoint completes before the measured write workload</li><li>One fixed 60-second TPC-B-like C4 workload runs from Generator</li><li>A post-load forced checkpoint records wall time and cumulative counter deltas</li><li>PostgreSQL 9.x–16 and 17+ statistics views are normalized separately</li><li>Generator CPU and final cluster cleanup are comparison gates</li></ul><p>The forced checkpoint duration includes local psql startup overhead and is reported separately from transaction latency. It is not a crash-recovery or storage-device power-loss test.</p></> : <><ul><li>Target-only temporary PostgreSQL cluster</li><li>Generator address is the only remote database client</li><li>Durability remains enabled: fsync, full-page writes, synchronous commit</li><li>Fixed port 55432 and allow-listed built-in pgbench scripts</li><li>Tail job is capped at 1,000 transactions per client and 16,000 total</li><li>Dataset and Generator logs are removed after every terminal path</li></ul><p>Database v2 computes P50/P95/P99/P99.9 from every transaction in the fixed-count tail job. It does not infer percentiles from one-second averages.</p></>}
               </article>
             </section>
             {pairing && <section className="pairing-card"><div><span>SHORT-LIVED JOIN CREDENTIAL</span><strong>{pairing.id}</strong><small>{pairing.topology.scope} · {pairing.topology.source} · verification {pairing.topology.verification.status} · expires {new Date(pairing.expires_at).toLocaleTimeString("en-US")}</small></div><code>{pairing.join_token}</code></section>}
             {pairing && <section className="panel agent-commands"><div><span className="section-kicker">RUN ON PROVIDER VMS</span><h3>Target hosts {selectedRedis ? "Redis" : selectedMySQL ? "MySQL/MariaDB" : "PostgreSQL"}; Generator runs {selectedRedis ? "redis-benchmark" : selectedMySQL ? "Sysbench OLTP" : "pgbench"}</h3></div><code>cloudmark agent --controller https://CONTROLLER --session {pairing.id} --token {pairing.join_token} --role target --advertise-address VM_A_IP</code><code>cloudmark agent --controller https://CONTROLLER --session {pairing.id} --token {pairing.join_token} --role generator --advertise-address VM_B_IP</code><p>Install the <strong>database</strong> pack on both machines before starting their Agents.</p></section>}
             <section className="panel session-panel">
               <div className="panel-head"><div><span className="section-kicker">PAIRED EXECUTION</span><h3>Database readiness</h3></div><label className="compact-select"><span>SESSION</span><select value={selectedSession?.id || ""} onChange={(event) => setSelectedSessionId(event.target.value)}>{dashboard?.sessions.map((session) => <option key={session.id} value={session.id}>{session.label} · {session.topology.scope} / {session.topology.verification.status} · {session.status}</option>)}</select></label></div>
-              {selectedSession ? <div className="agent-roster">{["target", "generator"].map((role) => { const agent = selectedSession.agents.find((item) => item.role === role); const capabilities = agent?.system.inventory?.capabilities || {}; const ready = databaseRoleReady(role, capabilities); const contract = selectedRedis ? "Redis v1" : selectedMySQL ? "MySQL/MariaDB v1" : selectedDatabaseV2 ? "Database v2" : selectedDatabaseRecovery ? "Recovery" : "Database v1"; return <article key={role} className={agent && ready ? "connected" : "waiting"}><span>{role.toUpperCase()}</span><strong>{agent?.name || `Waiting for ${role}`}</strong><small>{agent ? `${agent.endpoint.address || "No advertised IP"} · ${ready ? `${contract} ready` : "database prerequisites missing"}` : "Join command has not connected"}</small></article>; })}</div> : <div className="empty-row">Create a session, then connect both provider Agents.</div>}
-              <div className="session-actions"><p><strong>{selectedSession?.status !== "ready" ? "Two Agents required" : selectedDatabaseReady ? "Pair ready" : "Database prerequisites missing"}</strong><small>{selectedMySQL ? "MySQL/MariaDB requires isolated initialization tools on Target and Sysbench MySQL plus Linux CPU accounting on Generator." : selectedRedis ? "Redis requires authenticated server/client tools and Linux CPU accounting on Generator." : selectedDatabaseRecovery ? "Recovery requires fixed PostgreSQL logical backup/restore tools on the Target." : "Database v2 requires pgbench transaction logging and Linux process CPU accounting on the Generator."}</small></p><button className="button primary" onClick={startDatabase} disabled={busy || Boolean(activeDatabase) || selectedSession?.status !== "ready" || !selectedDatabaseReady}>Run database assessment</button></div>
+              {selectedSession ? <div className="agent-roster">{["target", "generator"].map((role) => { const agent = selectedSession.agents.find((item) => item.role === role); const capabilities = agent?.system.inventory?.capabilities || {}; const ready = databaseRoleReady(role, capabilities); const contract = selectedRedis ? "Redis v1" : selectedMySQL ? "MySQL/MariaDB v1" : selectedDatabaseCheckpoint ? "Checkpoint isolation" : selectedDatabaseV2 ? "Database v2" : selectedDatabaseRecovery ? "Recovery" : "Database v1"; return <article key={role} className={agent && ready ? "connected" : "waiting"}><span>{role.toUpperCase()}</span><strong>{agent?.name || `Waiting for ${role}`}</strong><small>{agent ? `${agent.endpoint.address || "No advertised IP"} · ${ready ? `${contract} ready` : "database prerequisites missing"}` : "Join command has not connected"}</small></article>; })}</div> : <div className="empty-row">Create a session, then connect both provider Agents.</div>}
+              <div className="session-actions"><p><strong>{selectedSession?.status !== "ready" ? "Two Agents required" : selectedDatabaseReady ? "Pair ready" : "Database prerequisites missing"}</strong><small>{selectedMySQL ? "MySQL/MariaDB requires isolated initialization tools on Target and Sysbench MySQL plus Linux CPU accounting on Generator." : selectedRedis ? "Redis requires authenticated server/client tools and Linux CPU accounting on Generator." : selectedDatabaseCheckpoint ? "Checkpoint isolation requires psql on Target and Linux process CPU accounting on Generator." : selectedDatabaseRecovery ? "Recovery requires fixed PostgreSQL logical backup/restore tools on the Target." : "Database v2 requires pgbench transaction logging and Linux process CPU accounting on the Generator."}</small></p><button className="button primary" onClick={startDatabase} disabled={busy || Boolean(activeDatabase) || selectedSession?.status !== "ready" || !selectedDatabaseReady}>Run database assessment</button></div>
             </section>
             {activeDatabase && <section className="panel run-progress" aria-live="polite"><div><span className="section-kicker">ACTIVE DATABASE RUN / {activeDatabase.id}</span><strong>{activeDatabase.current_job || activeDatabase.phase || "Preparing isolated service"}</strong><small>{activeDatabase.completed_steps || 0} of {activeDatabase.total_steps || 1} steps · {Math.round((activeDatabase.progress || 0) * 100)}%</small></div><div className="progress-track"><i style={{ width: `${Math.max(2, (activeDatabase.progress || 0) * 100)}%` }} /></div><button className="button danger" onClick={cancelDatabase} disabled={busy || activeDatabase.cancel_requested}>{activeDatabase.cancel_requested ? "Cancelling" : "Cancel run"}</button></section>}
             <section className="panel database-results">
@@ -2099,6 +2137,7 @@ export default function Home() {
               <article className="panel"><span>GENERATOR CPU HEADROOM</span><strong>{databaseAnalysis?.generator_headroom?.status || "Unavailable"}</strong><small>{databaseAnalysis?.generator_headroom?.peak_process_cpu_percent_of_one_core?.toFixed(1) ?? "—"}% peak pgbench CPU of one core · {databaseAnalysis?.generator_headroom?.peak_host_utilization_percent?.toFixed(1) ?? "—"}% host CPU</small></article>
               <article className={`panel ${databaseAnalysis?.validity?.comparison_eligible ? "cleanup-evidence verified" : "cleanup-evidence unknown"}`}><span>MEASUREMENT VALIDITY</span><strong>{databaseAnalysis?.validity?.comparison_eligible ? "Comparable" : "Not comparable"}</strong><small>{databaseAnalysis?.validity?.reason_codes?.join(" · ") || "All methodology-required evidence and cleanup complete"}</small></article>
               {latestDatabase?.result?.recovery?.type && <article className="panel"><span>LOGICAL BACKUP &amp; RESTORE</span><strong>{latestDatabase.result.recovery.status === "complete" ? "Verified" : "Incomplete"}</strong><small>{latestDatabase.result.recovery.backup_duration_seconds?.toFixed(2) ?? "—"}s backup · {latestDatabase.result.recovery.restore_duration_seconds?.toFixed(2) ?? "—"}s restore · {formatBytes(latestDatabase.result.recovery.backup_bytes)} · row counts {latestDatabase.result.recovery.verification?.row_counts_match ? "match" : "do not match"}</small></article>}
+              {latestDatabase?.result?.checkpoint && latestDatabase.result.checkpoint.status !== "not-requested" && <article className={`panel cleanup-evidence ${latestDatabase.result.checkpoint.status === "complete" ? "verified" : "unknown"}`}><span>CHECKPOINT ISOLATION</span><strong>{latestDatabase.result.checkpoint.forced_checkpoint_duration_seconds != null ? `${(latestDatabase.result.checkpoint.forced_checkpoint_duration_seconds * 1000).toFixed(1)} ms` : "Incomplete"}</strong><small>{latestDatabase.result.checkpoint.deltas?.buffers_written?.toLocaleString() ?? "—"} buffers · {latestDatabase.result.checkpoint.deltas?.write_time_ms?.toFixed(1) ?? "—"} ms write · {latestDatabase.result.checkpoint.deltas?.sync_time_ms?.toFixed(1) ?? "—"} ms sync · {latestDatabase.result.checkpoint.post_load?.source_view || "counter source unavailable"}</small></article>}
               <article className={`panel cleanup-evidence ${latestDatabase?.result?.cleanup?.cleanup_verified ? "verified" : "unknown"}`}><span>EPHEMERAL CLEANUP</span><strong>{latestDatabase?.result?.cleanup?.cleanup_verified ? "Verified" : "Unavailable"}</strong><small>{latestDatabase?.result?.server?.estimated_dataset_bytes ? `${formatBytes(latestDatabase.result.server.estimated_dataset_bytes)} estimated dataset` : "Dataset size unavailable"}</small></article>
             </section>}
             {redisMeasurements.length > 0 && <section className="database-evidence-grid">{redisMeasurements.map((measurement)=><article className="panel" key={measurement.name}><span>{measurement.operation.toUpperCase()} · C{measurement.clients} / P{measurement.pipeline}</span><strong>{measurement.metrics.latency_ms.p99.toFixed(2)} ms p99</strong><small>{Math.round(measurement.metrics.requests_per_second).toLocaleString()} req/s · {measurement.value_bytes} B values</small></article>)}<article className={`panel ${latestDatabase?.result?.cleanup?.cleanup_verified?"cleanup-evidence verified":"cleanup-evidence unknown"}`}><span>REDIS VALIDITY</span><strong>{latestDatabase?.result?.analysis?.validity?.comparison_eligible?"Comparable":"Not comparable"}</strong><small>{latestDatabase?.result?.analysis?.validity?.reason_codes?.join(" · ")||"AOF, Generator, and cleanup evidence complete"}</small></article></section>}

@@ -223,8 +223,8 @@ Standard Database v2 additionally requires Generator `pgbench_latency_log` and
 `procfs_process_cpu` capabilities.
 `confirm_database_load` is mandatory because the run creates a temporary
 dataset and generates read/write transactions. Supported profiles are
-`postgres-peer-quick`, `postgres-peer-standard`, and
-`postgres-peer-recovery`. The result contains
+`postgres-peer-quick`, `postgres-peer-standard`, `postgres-peer-recovery`, and
+`postgres-peer-checkpoint`. The result contains
 `database_measurements`, fixed durability settings, tool versions, target and
 generator identity, Generator CPU validity, exact fixed-count transaction
 P50/P95/P99/P99.9, Generator-log cleanup, comparison eligibility, and Target
@@ -236,6 +236,14 @@ returns backup bytes, backup/restore duration, four source/restored pgbench row
 counts, scale-shape validation, recovery-artifact cleanup, and final cluster
 cleanup. The API cannot provide a database name, SQL query, path, archive
 format, or recovery command argument.
+
+`postgres-peer-checkpoint` uses the same endpoint and confirmation flag under
+`database-postgresql-checkpoint-v1`. The Target additionally requires `psql`;
+the Generator requires pgbench and Linux process CPU accounting. The fixed
+result includes baseline/post-load version-aware counters, requested/timed
+checkpoint deltas, write/sync time, buffers written, forced-checkpoint Target
+wall time, Generator validity, and cluster cleanup. API callers cannot supply
+SQL, checkpoint mode, statistics view, scale, workload shape, or timing.
 
 Redis profiles `redis-peer-quick` and `redis-peer-standard` use the same
 database Run endpoint and confirmation flag. They require `redis_server` and

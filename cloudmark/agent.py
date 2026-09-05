@@ -35,6 +35,7 @@ from .database_benchmark import (
     DATABASE_TAIL_MAX_TOTAL_TRANSACTIONS,
     DATABASE_TAIL_TRANSACTIONS_PER_CLIENT,
     DatabaseBenchmarkError,
+    parse_postgres_checkpoint_stats,
     parse_pgbench_latency_log,
     parse_pgbench_output,
     parse_pgbench_row_counts,
@@ -1926,7 +1927,11 @@ class AgentWorker:
         parsed_client = self._peer_address(allowed_client)
         port = self._database_port(payload.get("port"))
         methodology_version = str(payload.get("methodology_version") or "database-postgresql-v1")
-        if methodology_version not in {"database-postgresql-v1", "database-postgresql-v2"}:
+        if methodology_version not in {
+            "database-postgresql-v1",
+            "database-postgresql-v2",
+            "database-postgresql-checkpoint-v1",
+        }:
             raise DatabaseBenchmarkError("Database service methodology is outside the installed contract.")
         scale_factor = int(payload.get("scale_factor", 0))
         max_connections = int(payload.get("max_connections", 0))
@@ -2197,7 +2202,11 @@ class AgentWorker:
         warmup = int(payload.get("warmup_seconds", 0))
         transactions_per_client = int(payload.get("transactions_per_client", 0))
         methodology_version = str(payload.get("methodology_version") or "database-postgresql-v1")
-        if methodology_version not in {"database-postgresql-v1", "database-postgresql-v2"}:
+        if methodology_version not in {
+            "database-postgresql-v1",
+            "database-postgresql-v2",
+            "database-postgresql-checkpoint-v1",
+        }:
             raise DatabaseBenchmarkError("Database client methodology is outside the installed contract.")
         if clients not in DATABASE_ALLOWED_CLIENTS or threads not in DATABASE_ALLOWED_THREADS or threads > clients:
             raise DatabaseBenchmarkError("Database concurrency is outside the CloudMark allow-list.")
@@ -2292,7 +2301,7 @@ class AgentWorker:
             "completed_steps": completed_steps,
             "total_steps": total_steps,
         }
-        if methodology_version == "database-postgresql-v2":
+        if methodology_version in {"database-postgresql-v2", "database-postgresql-checkpoint-v1"}:
             measured_arguments["cpu_samples"] = cpu_samples
         if log_root is not None:
             measured_arguments["working_directory"] = log_root
@@ -2331,6 +2340,91 @@ class AgentWorker:
                 "tool": {"name": "pgbench", "version": tool_version(pgbench)},
                 "raw": {"stdout": stdout, "stderr": stderr},
             }
+        }
+
+    def _run_database_checkpoint(self, task_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+        server_task_id = str(payload.get("server_task_id", ""))
+        active = self.active_database_servers.get(server_task_id)
+        if not active:
+            raise DatabaseBenchmarkError("Checkpoint isolation requires the active CloudMark PostgreSQL service.")
+        if str(payload.get("methodology_version", "")) != "database-postgresql-checkpoint-v1":
+            raise DatabaseBenchmarkError("Checkpoint methodology is outside the installed contract.")
+        action = str(payload.get("action", ""))
+        if action not in {"baseline", "post-load"}:
+            raise DatabaseBenchmarkError("Checkpoint action is outside the CloudMark allow-list.")
+        completed_steps = int(payload.get("run_completed_steps", -1))
+        total_steps = int(payload.get("run_total_steps", 0))
+        if not 0 <= completed_steps < total_steps <= 64:
+            raise DatabaseBenchmarkError("Checkpoint progress metadata is invalid.")
+        psql = self._postgres_tool("psql")
+        environment = {**os.environ, "LC_ALL": "C", "PGCONNECT_TIMEOUT": "5"}
+
+        def execute(sql: str, *, current_job: str, expected_duration: int) -> str:
+            code, stdout, stderr = self._guarded_service_process(
+                task_id,
+                [
+                    psql,
+                    "-h",
+                    "127.0.0.1",
+                    "-p",
+                    str(active.port),
+                    "-U",
+                    "cloudmark",
+                    "-d",
+                    "postgres",
+                    "-At",
+                    "-v",
+                    "ON_ERROR_STOP=1",
+                    "-c",
+                    sql,
+                ],
+                environment=environment,
+                expected_duration=expected_duration,
+                phase="measuring-checkpoint",
+                current_job=current_job,
+                completed_steps=completed_steps,
+                total_steps=total_steps,
+            )
+            if code != 0:
+                raise DatabaseBenchmarkError(
+                    stderr.strip() or stdout.strip() or f"PostgreSQL {current_job} failed."
+                )
+            return stdout
+
+        version_output = execute(
+            "SHOW server_version_num;",
+            current_job="checkpoint-version-probe",
+            expected_duration=15,
+        )
+        version_line = next((line.strip() for line in version_output.splitlines() if line.strip()), "")
+        if not version_line.isdigit() or not 90_000 <= int(version_line) <= 999_999:
+            raise DatabaseBenchmarkError("PostgreSQL returned an invalid server_version_num.")
+        server_version_num = int(version_line)
+        checkpoint_started = time.monotonic()
+        execute("CHECKPOINT;", current_job=f"checkpoint-{action}", expected_duration=120)
+        checkpoint_seconds = round(time.monotonic() - checkpoint_started, 6)
+        if server_version_num >= 170_000:
+            stats_sql = (
+                "SELECT num_timed || '|' || num_requested || '|' || write_time || '|' || "
+                "sync_time || '|' || buffers_written FROM pg_stat_checkpointer;"
+            )
+        else:
+            stats_sql = (
+                "SELECT checkpoints_timed || '|' || checkpoints_req || '|' || checkpoint_write_time || '|' || "
+                "checkpoint_sync_time || '|' || buffers_checkpoint FROM pg_stat_bgwriter;"
+            )
+        stats_output = execute(
+            stats_sql,
+            current_job="checkpoint-statistics",
+            expected_duration=15,
+        )
+        return {
+            "status": "complete",
+            "action": action,
+            "forced_checkpoint_duration_seconds": checkpoint_seconds,
+            **parse_postgres_checkpoint_stats(stats_output, server_version_num=server_version_num),
+            "tool": {"name": "psql", "version": tool_version(psql)},
+            "timing_scope": "target-wall-clock-including-local-psql-overhead",
         }
 
     def _run_database_recovery(self, task_id: str, payload: dict[str, Any]) -> dict[str, Any]:
@@ -3796,6 +3890,8 @@ class AgentWorker:
             return self._start_database_server(str(task["id"]), payload)
         if kind == "database-client":
             return self._run_database_client(str(task["id"]), payload)
+        if kind == "database-checkpoint-probe":
+            return self._run_database_checkpoint(str(task["id"]), payload)
         if kind == "database-recovery-drill":
             return self._run_database_recovery(str(task["id"]), payload)
         if kind == "database-server-stop":

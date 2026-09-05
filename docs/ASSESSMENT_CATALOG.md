@@ -59,9 +59,11 @@ cleanup. A separate recovery profile adds same-Target logical backup/restore,
 four-table row-count verification, timing, and artifact cleanup.
 `database-redis-v1` adds authenticated persistent GET/SET cache shapes, and
 `database-mysql-v1` adds isolated InnoDB point-select/read-only/write-only/
-read-write OLTP with direct P99 and Generator validity. Checkpoint isolation,
-physical/PITR backup, replication, cross-zone recovery, failover, and managed
-service behavior remain missing; database coverage therefore remains `Partial`.
+read-write OLTP with direct P99 and Generator validity. A separate
+`database-postgresql-checkpoint-v1` profile adds forced-checkpoint wall time and
+version-aware requested/timed, write/sync-time, and buffer deltas. Physical/PITR
+backup, replication, cross-zone recovery, failover, and managed-service behavior
+remain missing; database coverage therefore remains `Partial`.
 
 The current development head implements domain 9 through `web-http-v2`: an
 isolated Nginx service, fixed JSON/static payloads, a packaged Python dynamic

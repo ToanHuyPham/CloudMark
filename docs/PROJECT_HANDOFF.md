@@ -79,7 +79,9 @@ fixed-count transaction tail percentiles, Generator CPU validity, and verified
 Generator-log cleanup. A separate same-Target logical recovery profile measures
 pg_dump/pg_restore timing, four-table row-count equality, and artifact cleanup
 without claiming provider snapshot or cross-zone DR behavior. An independent
-MySQL/MariaDB executor initializes a private InnoDB data directory, provisions
+checkpoint-isolation profile brackets one fixed durable pgbench write workload
+with forced Target checkpoints and version-aware cumulative statistics. The
+independent MySQL/MariaDB executor initializes a private InnoDB data directory, provisions
 an exact-host authenticated account, and runs fixed Sysbench OLTP workloads
 with P99 latency and Generator validity evidence. The second paired service executor creates an
 isolated Nginx HTTP/TLS service on Agent A and runs fixed ApacheBench workloads

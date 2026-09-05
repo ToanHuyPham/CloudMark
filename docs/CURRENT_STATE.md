@@ -126,6 +126,16 @@ baseline is still the repository head.
   snapshots, PITR, cross-zone DR, RPO, or RTO. The complete development head
   passes 121 Python tests, 3 rendered-dashboard tests, dashboard lint, and the
   production build without starting provider load;
+- simulation-verified `database-postgresql-checkpoint-v1` as a separately
+  scheduled write/checkpoint profile. The Target forces a baseline checkpoint,
+  the Generator runs one fixed durable 60-second TPC-B-like C4 workload with
+  Linux CPU evidence, and the Target forces a post-load checkpoint. PostgreSQL
+  9.x-16 `pg_stat_bgwriter` and 17+ `pg_stat_checkpointer` fields normalize to
+  requested/timed, write/sync-time, and buffer deltas while retaining source
+  view and server version. Counter resets, a missing requested increment,
+  Generator saturation, or unverified cleanup fail comparison validity. The
+  complete development head passes 140 Python tests, 3 rendered-dashboard
+  tests, dashboard lint, and the production build without starting load;
 - simulation-verified `web-http-v1` paired executor with an isolated Nginx
   Target, fixed HTTP/HTTPS endpoints, Generator-side ApacheBench workloads,
   exact address allow-listing, TLS 1.2 evidence, progress/control heartbeat,
@@ -263,12 +273,13 @@ Controller run: `run_1c572100e8704843`.
   orchestration, Windows route parity, and mTLS remain unimplemented;
 - PostgreSQL database coverage is Partial: read-only, durable read/write,
   concurrency, connection churn, fixed-count transaction tail percentiles, and
-  Generator CPU validity are implemented; checkpoint isolation, replication,
-  same-Target logical backup/restore, and artifact cleanup are implemented;
+  Generator CPU validity are implemented; forced-checkpoint isolation and
+  same-Target logical backup/restore with artifact cleanup are implemented;
   MySQL/MariaDB now adds isolated InnoDB point-select, read-only, write-only,
   and read/write Sysbench profiles with P99 and Generator validity; physical/
-  PITR backup, cross-zone recovery, replication, database checkpoint isolation,
-  binary-log overhead, and managed-service behavior remain unavailable;
+  PITR backup, cross-zone recovery, replication, MySQL/MariaDB checkpoint
+  isolation, binary-log overhead, and managed-service behavior remain
+  unavailable;
 - an abrupt Agent or host termination can leave an isolated PostgreSQL task
   directory for manual operator review; the Agent refuses to overwrite or
   automatically delete unknown residual state; the same review requirement
@@ -296,9 +307,9 @@ Controller run: `run_1c572100e8704843`.
    before promoting the network domain from Partial.
 2. Add database-backed Web applications, HTTP/2 load, HTTP/3, reverse-proxy
    variants, compression, CDN, WAF, and autoscaling evidence.
-3. Extend database coverage with checkpoint isolation, physical/PITR backup,
-   replication, cross-zone recovery, binary-log/replication overhead, and
-   RPO/RTO evidence.
+3. Extend database coverage with MySQL/MariaDB checkpoint isolation,
+   physical/PITR backup, replication, cross-zone recovery, binary-log/
+   replication overhead, and RPO/RTO evidence.
 4. Complete remaining compute, memory/NUMA, GPU, security, reliability,
    observability, container, and control-plane executors.
 5. Extend campaigns across independent targets, then add timestamped price

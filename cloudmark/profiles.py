@@ -243,6 +243,21 @@ DATABASE_PROFILES: dict[str, dict[str, Any]] = {
         ],
         "recovery_drill": {"type": "logical-backup-restore", "timeout": 300},
     },
+    "postgres-peer-checkpoint": {
+        "label": "PostgreSQL Checkpoint Isolation",
+        "description": "Fixed durable write workload bracketed by forced checkpoints and version-aware checkpointer statistics.",
+        "estimated_minutes": 9,
+        "requires_agents": 2,
+        "engine": "postgresql",
+        "scale_factor": 20,
+        "port": 55432,
+        "profile_version": "1.0",
+        "methodology_version": "database-postgresql-checkpoint-v1",
+        "jobs": [
+            {"name": "tpcb-like-c4", "workload": "tpcb-like", "clients": 4, "threads": 2, "duration": 60, "warmup": 5},
+        ],
+        "checkpoint_drill": {"type": "forced-checkpoint-isolation", "timeout": 120},
+    },
     "redis-peer-quick": {
         "label": "Redis Peer Quick", "description": "Authenticated Redis GET/SET baseline with fixed value, concurrency, pipeline, persistence, and cleanup evidence.",
         "estimated_minutes": 4, "requires_agents": 2, "engine": "redis", "port": 56379,

@@ -147,8 +147,10 @@ own generators for CPU and network resources.
   validity — available in `database-postgresql-v2`;
 - PostgreSQL same-Target logical backup/restore with row-count verification —
   available in `database-postgresql-recovery-v1`;
-- PostgreSQL checkpoint isolation, physical/PITR backup, replication, failover,
-  cross-zone recovery, and RPO/RTO — planned;
+- PostgreSQL forced-checkpoint isolation with version-aware requested/timed,
+  write/sync-time, buffer, Generator-validity, and cleanup evidence — available
+  in `database-postgresql-checkpoint-v1`; physical/PITR backup, replication,
+  failover, cross-zone recovery, and RPO/RTO remain planned;
 - MySQL/MariaDB isolated InnoDB point-select/read-only/write-only/read-write,
   P99 latency, Generator validity, and cleanup — available in
   `database-mysql-v1`; checkpoint isolation, binary-log overhead, replication,

@@ -158,6 +158,15 @@ four source/restored pgbench table counts, and removes the restored database
 and archive before final cluster cleanup. It does not claim provider snapshot
 or cross-zone disaster-recovery behavior.
 
+`database-postgresql-checkpoint-v1` is another separate schedule. It forces a
+clean baseline checkpoint on the Target, runs one fixed durable TPC-B-like
+write workload from the Generator, forces a post-load checkpoint, and derives
+non-negative cumulative counter deltas. The Agent selects `pg_stat_bgwriter`
+for PostgreSQL before 17 or `pg_stat_checkpointer` for 17 and newer, while
+normalizing requested/timed counts, write/sync time, and buffers written. The
+source view and numeric server version remain evidence. Generator CPU, an
+observed requested-checkpoint increment, and cleanup are comparison gates.
+
 `database-mysql-v1` creates a separate MySQL-compatible InnoDB data directory
 on the Target. Initialization happens with networking disabled; the Agent then
 creates one fixed database and an authenticated account restricted to the exact

@@ -417,6 +417,8 @@ class CloudMarkController:
                 tool_version = "postgresql/pgbench-tail/procfs-agent"
             elif methodology_version == "database-postgresql-recovery-v1":
                 tool_version = "postgresql/pgbench/pg-dump-restore-agent"
+            elif methodology_version == "database-postgresql-checkpoint-v1":
+                tool_version = "postgresql/pgbench/checkpoint-stats-agent"
             elif methodology_version == "database-redis-v1":
                 tool_version = "redis-server/redis-benchmark-agent"
             elif methodology_version == "database-mysql-v1":

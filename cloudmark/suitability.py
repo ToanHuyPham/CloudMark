@@ -44,6 +44,7 @@ COMPARISON_METRICS: dict[str, dict[str, Any]] = {
     "database.tpcb_c4_tps": {"label": "Durable TPC-B-like throughput at C4", "direction": "higher"},
     "database.tpcb_c4_latency_ms": {"label": "Durable TPC-B-like average latency", "direction": "lower"},
     "database.tpcb_c4_failed": {"label": "Failed database transactions", "direction": "lower"},
+    "database.postgresql_forced_checkpoint_ms": {"label": "PostgreSQL forced checkpoint wall time", "direction": "lower"},
     "database.redis_set_1k_c16_p1_rps": {"label": "Redis 1 KiB SET throughput at C16/P1", "direction": "higher"},
     "database.redis_set_1k_c16_p1_p99_ms": {"label": "Redis 1 KiB SET P99 at C16/P1", "direction": "lower"},
     "database.redis_get_1k_c16_p16_rps": {"label": "Redis 1 KiB GET throughput at C16/P16", "direction": "higher"},
@@ -285,6 +286,7 @@ def _run_valid(run: dict[str, Any]) -> tuple[bool, str | None]:
     if suite == "database" and str(result.get("methodology_version", "")) in {
         "database-postgresql-v2",
         "database-postgresql-recovery-v1",
+        "database-postgresql-checkpoint-v1",
         "database-redis-v1",
         "database-mysql-v1",
     }:
@@ -503,6 +505,9 @@ def _extract_run_evidence(evidence: dict[str, dict[str, Any]], run: dict[str, An
                         _number(_nested(measurement, "metrics", "failed_transactions")), "count"
                     ),
                 }
+            checkpoint_seconds = _number(_nested(result, "checkpoint", "forced_checkpoint_duration_seconds"))
+            if checkpoint_seconds is not None and _nested(result, "checkpoint", "status") == "complete":
+                values["database.postgresql_forced_checkpoint_ms"] = (checkpoint_seconds * 1000, "ms")
         for key, (value, unit) in values.items():
             if value is not None:
                 _put(evidence, key, _evidence_item(value, unit, run=run, source="database"))

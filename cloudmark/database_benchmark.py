@@ -150,6 +150,79 @@ def parse_pgbench_row_counts(stdout: str) -> dict[str, int]:
     }
 
 
+def parse_postgres_checkpoint_stats(stdout: str, *, server_version_num: int) -> dict[str, Any]:
+    line = next((value.strip() for value in stdout.splitlines() if value.strip()), "")
+    parts = [value.strip() for value in line.split("|")]
+    if len(parts) != 5:
+        raise DatabaseBenchmarkError("PostgreSQL checkpoint statistics returned an invalid field count.")
+    try:
+        timed = int(parts[0])
+        requested = int(parts[1])
+        write_time_ms = float(parts[2])
+        sync_time_ms = float(parts[3])
+        buffers_written = int(parts[4])
+    except ValueError as exc:
+        raise DatabaseBenchmarkError("PostgreSQL checkpoint statistics returned invalid numeric evidence.") from exc
+    values = (timed, requested, write_time_ms, sync_time_ms, buffers_written)
+    if any(not math.isfinite(float(value)) or value < 0 for value in values):
+        raise DatabaseBenchmarkError("PostgreSQL checkpoint statistics returned out-of-range evidence.")
+    return {
+        "source_view": "pg_stat_checkpointer" if server_version_num >= 170_000 else "pg_stat_bgwriter",
+        "server_version_num": server_version_num,
+        "checkpoints_timed": timed,
+        "checkpoints_requested": requested,
+        "write_time_ms": write_time_ms,
+        "sync_time_ms": sync_time_ms,
+        "buffers_written": buffers_written,
+    }
+
+
+def postgres_checkpoint_result(baseline: dict[str, Any], post_load: dict[str, Any]) -> dict[str, Any]:
+    required = (
+        "checkpoints_timed",
+        "checkpoints_requested",
+        "write_time_ms",
+        "sync_time_ms",
+        "buffers_written",
+    )
+    same_contract = (
+        baseline.get("status") == "complete"
+        and post_load.get("status") == "complete"
+        and baseline.get("server_version_num") == post_load.get("server_version_num")
+        and baseline.get("source_view") == post_load.get("source_view")
+    )
+    deltas: dict[str, int | float] = {}
+    if same_contract:
+        for key in required:
+            before = baseline.get(key)
+            after = post_load.get(key)
+            if not isinstance(before, (int, float)) or not isinstance(after, (int, float)) or after < before:
+                same_contract = False
+                break
+            deltas[key] = after - before
+    duration = post_load.get("forced_checkpoint_duration_seconds")
+    duration_valid = isinstance(duration, (int, float)) and math.isfinite(float(duration)) and duration >= 0
+    requested_checkpoint_observed = deltas.get("checkpoints_requested", 0) >= 1
+    complete = same_contract and duration_valid and requested_checkpoint_observed
+    reasons: list[str] = []
+    if not same_contract:
+        reasons.append("checkpoint-counter-contract-incomplete-or-reset")
+    if not duration_valid:
+        reasons.append("forced-checkpoint-duration-unavailable")
+    if same_contract and not requested_checkpoint_observed:
+        reasons.append("forced-checkpoint-counter-not-observed")
+    return {
+        "status": "complete" if complete else "partial",
+        "type": "forced-checkpoint-isolation",
+        "baseline": baseline,
+        "post_load": post_load,
+        "deltas": deltas,
+        "forced_checkpoint_duration_seconds": duration if duration_valid else None,
+        "requested_checkpoint_observed": requested_checkpoint_observed,
+        "reason_codes": reasons,
+    }
+
+
 def _database_analysis(result: dict[str, Any]) -> dict[str, Any]:
     measurements = [item for item in (result.get("database_measurements") or []) if isinstance(item, dict)]
     timed_measurements = [
@@ -192,6 +265,8 @@ def _database_analysis(result: dict[str, Any]) -> dict[str, Any]:
     methodology = str(result.get("methodology_version", ""))
     v2_required = methodology == "database-postgresql-v2"
     recovery_required = methodology == "database-postgresql-recovery-v1"
+    checkpoint_required = methodology == "database-postgresql-checkpoint-v1"
+    generator_required = v2_required or checkpoint_required
     recovery = result.get("recovery") or {}
     if recovery.get("status") == "not-requested":
         recovery = {}
@@ -200,18 +275,38 @@ def _database_analysis(result: dict[str, Any]) -> dict[str, Any]:
         and recovery.get("verification", {}).get("row_counts_match") is True
         and recovery.get("cleanup_verified") is True
     )
+    checkpoint = result.get("checkpoint") or {}
+    if checkpoint.get("status") == "not-requested":
+        checkpoint = {}
+    checkpoint_duration = checkpoint.get("forced_checkpoint_duration_seconds")
+    checkpoint_requested_delta = (checkpoint.get("deltas") or {}).get("checkpoints_requested")
+    checkpoint_source = (checkpoint.get("post_load") or {}).get("source_view")
+    checkpoint_complete = (
+        checkpoint.get("status") == "complete"
+        and checkpoint.get("requested_checkpoint_observed") is True
+        and isinstance(checkpoint_duration, (int, float))
+        and math.isfinite(float(checkpoint_duration))
+        and checkpoint_duration >= 0
+        and isinstance(checkpoint_requested_delta, (int, float))
+        and checkpoint_requested_delta >= 1
+        and checkpoint_source in {"pg_stat_bgwriter", "pg_stat_checkpointer"}
+    )
     reason_codes: list[str] = []
-    if v2_required and generator_status != "adequate":
+    if generator_required and generator_status != "adequate":
         reason_codes.append(f"generator-headroom-{generator_status}")
     if v2_required and tail_status != "complete":
         reason_codes.append("transaction-tail-latency-evidence-incomplete")
     if recovery_required and not recovery_complete:
         reason_codes.append("logical-backup-restore-evidence-incomplete")
+    if checkpoint_required and not checkpoint_complete:
+        reason_codes.append("forced-checkpoint-evidence-incomplete")
     if not cleanup_verified:
         reason_codes.append("ephemeral-cleanup-unverified")
     comparison_eligible = cleanup_verified and (
-        (not v2_required or (generator_status == "adequate" and tail_status == "complete"))
+        (not generator_required or generator_status == "adequate")
+        and (not v2_required or tail_status == "complete")
         and (not recovery_required or recovery_complete)
+        and (not checkpoint_required or checkpoint_complete)
     )
     return {
         "generator_headroom": {
@@ -238,11 +333,21 @@ def _database_analysis(result: dict[str, Any]) -> dict[str, Any]:
             "restore_duration_seconds": recovery.get("restore_duration_seconds"),
             "backup_bytes": recovery.get("backup_bytes"),
         },
+        "checkpoint_isolation": {
+            "status": "complete" if checkpoint_complete else (
+                "partial" if checkpoint else "unavailable"
+            ),
+            "required": checkpoint_required,
+            "forced_checkpoint_duration_seconds": checkpoint_duration,
+            "deltas": checkpoint.get("deltas") or {},
+            "source_view": checkpoint_source,
+        },
         "validity": {
-            "generator_headroom_required": v2_required,
+            "generator_headroom_required": generator_required,
             "transaction_tail_latency_required": v2_required,
             "cleanup_required": True,
             "logical_recovery_required": recovery_required,
+            "checkpoint_isolation_required": checkpoint_required,
             "comparison_eligible": comparison_eligible,
             "reason_codes": reason_codes,
         },
@@ -258,7 +363,12 @@ def database_total_steps(profile_name: str) -> int:
     if profile.get("engine") == "mysql":
         from .mysql_benchmark import mysql_total_steps
         return mysql_total_steps(profile_name)
-    return len(profile["jobs"]) + 2 + (1 if profile.get("recovery_drill") else 0)
+    return (
+        len(profile["jobs"])
+        + 2
+        + (1 if profile.get("recovery_drill") else 0)
+        + (2 if profile.get("checkpoint_drill") else 0)
+    )
 
 
 def database_default_timeout(profile_name: str) -> int:
@@ -276,7 +386,8 @@ def database_default_timeout(profile_name: str) -> int:
     recovery_seconds = int((profile.get("recovery_drill") or {}).get("timeout", 0)) + (
         60 if profile.get("recovery_drill") else 0
     )
-    return 300 + job_seconds + recovery_seconds + 120
+    checkpoint_seconds = 2 * int((profile.get("checkpoint_drill") or {}).get("timeout", 0))
+    return 300 + job_seconds + recovery_seconds + checkpoint_seconds + 120
 
 
 def validate_database_run(
@@ -297,6 +408,9 @@ def validate_database_run(
     generator_capabilities = ["pgbench"]
     if profile["methodology_version"] == "database-postgresql-v2":
         generator_capabilities.extend(["pgbench_latency_log", "procfs_process_cpu"])
+    if profile.get("checkpoint_drill"):
+        target_capabilities.append("psql")
+        generator_capabilities.append("procfs_process_cpu")
     if profile.get("recovery_drill"):
         target_capabilities.extend(["pg_dump", "pg_restore", "createdb", "dropdb", "psql"])
     return validate_pair(
@@ -350,6 +464,7 @@ def run_database(
         },
         "database_measurements": [],
         "recovery": {"status": "not-requested" if not profile.get("recovery_drill") else "pending"},
+        "checkpoint": {"status": "not-requested" if not profile.get("checkpoint_drill") else "pending"},
         "cleanup": {"status": "pending"},
     }
     server_task: str | None = None
@@ -378,6 +493,38 @@ def run_database(
         result["server"] = started.get("result") or {}
         context.complete_step("database-ready", None, partial_result=result)
 
+        checkpoint_drill = profile.get("checkpoint_drill")
+        checkpoint_baseline: dict[str, Any] | None = None
+        if checkpoint_drill:
+            context.report("preparing-checkpoint-baseline", "Force baseline checkpoint and capture counters")
+            baseline_task = create_task(
+                database,
+                run_id,
+                session_id,
+                target["id"],
+                "database-checkpoint-probe",
+                {
+                    "server_task_id": server_task,
+                    "action": "baseline",
+                    "methodology_version": profile["methodology_version"],
+                    "run_completed_steps": 1,
+                    "run_total_steps": database_total_steps(profile_name),
+                },
+            )
+            checkpoint_baseline = (
+                wait_task(
+                    database,
+                    baseline_task,
+                    timeout_seconds=int(checkpoint_drill["timeout"]),
+                    context=context,
+                ).get("result")
+                or {}
+            )
+            if checkpoint_baseline.get("status") != "complete":
+                raise DatabaseBenchmarkError("PostgreSQL checkpoint baseline returned invalid evidence.")
+            result["checkpoint"] = {"status": "baseline-complete", "baseline": checkpoint_baseline}
+            context.complete_step("checkpoint-baseline-complete", None, partial_result=result)
+
         for job_index, job in enumerate(profile["jobs"]):
             context.report("measuring-database", str(job["name"]))
             client_task = create_task(
@@ -397,7 +544,7 @@ def run_database(
                     "connect_per_transaction": bool(job.get("connect_per_transaction", False)),
                     "transactions_per_client": int(job.get("transactions_per_client", 0)),
                     "methodology_version": profile["methodology_version"],
-                    "run_completed_steps": job_index + 1,
+                    "run_completed_steps": job_index + (2 if checkpoint_drill else 1),
                     "run_total_steps": database_total_steps(profile_name),
                 },
             )
@@ -414,6 +561,35 @@ def run_database(
             result["database_measurements"].append({"name": job["name"], **measurement})
             result["analysis"] = _database_analysis(result)
             context.complete_step("database-measurement-complete", None, partial_result=result)
+
+        if checkpoint_drill and checkpoint_baseline is not None:
+            context.report("measuring-checkpoint", "Force post-load checkpoint and capture counters")
+            post_task = create_task(
+                database,
+                run_id,
+                session_id,
+                target["id"],
+                "database-checkpoint-probe",
+                {
+                    "server_task_id": server_task,
+                    "action": "post-load",
+                    "methodology_version": profile["methodology_version"],
+                    "run_completed_steps": len(profile["jobs"]) + 2,
+                    "run_total_steps": database_total_steps(profile_name),
+                },
+            )
+            post_load = (
+                wait_task(
+                    database,
+                    post_task,
+                    timeout_seconds=int(checkpoint_drill["timeout"]),
+                    context=context,
+                ).get("result")
+                or {}
+            )
+            result["checkpoint"] = postgres_checkpoint_result(checkpoint_baseline, post_load)
+            result["analysis"] = _database_analysis(result)
+            context.complete_step("checkpoint-isolation-complete", None, partial_result=result)
 
         recovery_drill = profile.get("recovery_drill")
         if recovery_drill:

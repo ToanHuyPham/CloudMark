@@ -522,6 +522,16 @@ database and archive before cleaning the source cluster. Treat this as
 same-Target logical recovery evidence only—not snapshot, cross-zone DR, PITR,
 RPO, or RTO evidence.
 
+Select **PostgreSQL Checkpoint Isolation** for a separately scheduled
+fsync-sensitive write phase. The Target additionally requires `psql`, and the
+Generator requires `procfs_process_cpu`. CloudMark forces a baseline
+checkpoint, runs the fixed 60-second TPC-B-like C4 workload, forces a post-load
+checkpoint, and reports requested/timed checkpoint deltas, write/sync time,
+buffers written, Target wall-clock duration, Generator CPU, and cleanup. Keep
+both Agents otherwise idle and treat this as checkpoint behavior only—not crash
+recovery, WAL replay, PITR, provider snapshot, or power-loss testing. See
+[`POSTGRES_CHECKPOINT_METHODOLOGY.md`](POSTGRES_CHECKPOINT_METHODOLOGY.md).
+
 Select **Redis Peer Quick** or **Redis Peer Standard** for authenticated cache
 evidence. Open TCP `56379` only from the Generator to the Target. CloudMark uses
 a memory-only per-Run password, enables AOF with fsync every second, runs only

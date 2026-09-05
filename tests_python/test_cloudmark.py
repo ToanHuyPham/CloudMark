@@ -45,9 +45,11 @@ from cloudmark.database_benchmark import (
     DatabaseBenchmarkError,
     _database_analysis,
     database_total_steps,
+    parse_postgres_checkpoint_stats,
     parse_pgbench_latency_log,
     parse_pgbench_output,
     parse_pgbench_row_counts,
+    postgres_checkpoint_result,
     run_database,
     validate_database_run,
 )
@@ -487,12 +489,44 @@ class CloudMarkTests(unittest.TestCase):
                 "analysis": {"validity": {"comparison_eligible": True}},
             },
         }
+        checkpoint_run = {
+            "id": "run_checkpoint",
+            "suite": "database",
+            "profile": "postgres-peer-checkpoint",
+            "status": "completed",
+            "finished_at": completed_at,
+            "methodology_version": "database-postgresql-checkpoint-v1",
+            "request": {},
+            "result": {
+                "engine": "postgresql",
+                "methodology_version": "database-postgresql-checkpoint-v1",
+                "session": {"topology": topology},
+                "target": {"id": "agent_a"},
+                "server": {"tools": {"postgres": "postgres (PostgreSQL) 16.4"}},
+                "database_measurements": [{
+                    "name": "tpcb-like-c4",
+                    "metrics": {
+                        "transactions_per_second": 900.0,
+                        "latency_average_ms": 4.5,
+                        "failed_transactions": 0,
+                    },
+                }],
+                "checkpoint": {
+                    "status": "complete",
+                    "forced_checkpoint_duration_seconds": 1.25,
+                    "requested_checkpoint_observed": True,
+                },
+                "cleanup": {"cleanup_verified": True},
+                "analysis": {"validity": {"comparison_eligible": True}},
+            },
+        }
         report = evaluate_suitability(
             [
                 mysql_run("run_mariadb", "mariadb", "mariadbd 11.4.3", 500.0),
                 mysql_run("run_mysql", "mysql", "mysqld 8.4.2", 510.0),
                 mysql_run("run_mysql_unknown", "mysql", "", 505.0),
                 redis_run,
+                checkpoint_run,
             ],
             self._suitability_system("controller"),
             systems.get,
@@ -509,6 +543,14 @@ class CloudMarkTests(unittest.TestCase):
                 "mysql:mysql:mysqld 8.4.2",
                 "mysql:mysql:unknown-version",
             },
+        )
+        checkpoint_metric = next(
+            item for item in metrics if item["key"] == "database.postgresql_forced_checkpoint_ms"
+        )
+        self.assertEqual(checkpoint_metric["statistics"]["median"], 1250.0)
+        self.assertEqual(
+            checkpoint_metric["implementation_contract"],
+            "postgresql:postgresql:postgres (PostgreSQL) 16.4",
         )
         self.assertTrue(all(item["sample_count"] == 1 for item in mysql_tps))
         unknown = next(item for item in mysql_tps if item["implementation_contract"].endswith("unknown-version"))
@@ -2372,6 +2414,112 @@ tps = 941.176470 (without initial connection time)
         self.assertEqual(metrics["progress"][0]["failed"], 1)
         self.assertEqual(metrics["tail_latency_status"], "unavailable")
 
+    def test_postgres_checkpoint_parser_normalizes_pre17_and_17plus_counters(self) -> None:
+        legacy = parse_postgres_checkpoint_stats("10|4|1250.5|75.25|4096\n", server_version_num=160_000)
+        modern = parse_postgres_checkpoint_stats("12|7|1450.5|95.25|5120\n", server_version_num=170_000)
+        self.assertEqual(legacy["source_view"], "pg_stat_bgwriter")
+        self.assertEqual(modern["source_view"], "pg_stat_checkpointer")
+        baseline = {"status": "complete", "forced_checkpoint_duration_seconds": 0.2, **legacy}
+        post_load = {
+            "status": "complete",
+            "forced_checkpoint_duration_seconds": 1.75,
+            **parse_postgres_checkpoint_stats("10|5|1600.5|95.25|4352\n", server_version_num=160_000),
+        }
+        result = postgres_checkpoint_result(baseline, post_load)
+        self.assertEqual(result["status"], "complete")
+        self.assertEqual(result["deltas"]["checkpoints_requested"], 1)
+        self.assertEqual(result["deltas"]["write_time_ms"], 350.0)
+        self.assertEqual(result["deltas"]["sync_time_ms"], 20.0)
+        self.assertEqual(result["deltas"]["buffers_written"], 256)
+        reset = {**post_load, "checkpoints_requested": 1}
+        self.assertEqual(postgres_checkpoint_result(baseline, reset)["status"], "partial")
+
+    def test_agent_postgres_checkpoint_uses_only_versioned_fixed_queries(self) -> None:
+        worker = AgentWorker("http://127.0.0.1:8787", "agent", "token")
+        worker.active_database_servers["task_server123"] = SimpleNamespace(port=55432)
+        commands: list[list[str]] = []
+
+        def guarded(_task_id, command, **_kwargs):
+            commands.append(command)
+            sql = command[-1]
+            if sql == "SHOW server_version_num;":
+                return 0, "170000\n", ""
+            if sql == "CHECKPOINT;":
+                return 0, "CHECKPOINT\n", ""
+            return 0, "8|3|950.5|40.0|2048\n", ""
+
+        with patch("cloudmark.agent.find_postgres_binary", return_value="psql"), patch.object(
+            worker, "_guarded_service_process", side_effect=guarded
+        ), patch("cloudmark.agent.tool_version", return_value="psql (PostgreSQL) 17.0"):
+            result = worker._run_database_checkpoint(
+                "task_checkpoint123",
+                {
+                    "server_task_id": "task_server123",
+                    "action": "post-load",
+                    "methodology_version": "database-postgresql-checkpoint-v1",
+                    "run_completed_steps": 3,
+                    "run_total_steps": 5,
+                },
+            )
+        self.assertEqual(result["status"], "complete")
+        self.assertEqual(result["source_view"], "pg_stat_checkpointer")
+        self.assertTrue(any("FROM pg_stat_checkpointer" in command[-1] for command in commands))
+        self.assertEqual([command[-1] for command in commands].count("CHECKPOINT;"), 1)
+        self.assertTrue(all(command[:2] == ["psql", "-h"] for command in commands))
+        commands.clear()
+
+        def guarded_legacy(_task_id, command, **_kwargs):
+            commands.append(command)
+            sql = command[-1]
+            if sql == "SHOW server_version_num;":
+                return 0, "160004\n", ""
+            if sql == "CHECKPOINT;":
+                return 0, "CHECKPOINT\n", ""
+            return 0, "9|4|975.5|42.0|2304\n", ""
+
+        with patch("cloudmark.agent.find_postgres_binary", return_value="psql"), patch.object(
+            worker, "_guarded_service_process", side_effect=guarded_legacy
+        ), patch("cloudmark.agent.tool_version", return_value="psql (PostgreSQL) 16.4"):
+            legacy = worker._run_database_checkpoint(
+                "task_checkpoint456",
+                {
+                    "server_task_id": "task_server123",
+                    "action": "baseline",
+                    "methodology_version": "database-postgresql-checkpoint-v1",
+                    "run_completed_steps": 1,
+                    "run_total_steps": 5,
+                },
+            )
+        self.assertEqual(legacy["source_view"], "pg_stat_bgwriter")
+        self.assertTrue(any("FROM pg_stat_bgwriter" in command[-1] for command in commands))
+
+    def test_checkpoint_analysis_requires_generator_counters_and_cleanup(self) -> None:
+        result = {
+            "methodology_version": "database-postgresql-checkpoint-v1",
+            "database_measurements": [{
+                "name": "tpcb-like-c4",
+                "transactions_per_client": 0,
+                "generator_cpu": {
+                    "status": "observed",
+                    "peak_process_cpu_percent_of_one_core": 40.0,
+                    "peak_host_utilization_percent": 30.0,
+                },
+            }],
+            "checkpoint": {
+                "status": "complete",
+                "requested_checkpoint_observed": True,
+                "forced_checkpoint_duration_seconds": 1.25,
+                "deltas": {"checkpoints_requested": 1, "buffers_written": 256},
+                "post_load": {"source_view": "pg_stat_bgwriter"},
+            },
+            "cleanup": {"cleanup_verified": True},
+        }
+        analysis = _database_analysis(result)
+        self.assertTrue(analysis["validity"]["comparison_eligible"])
+        self.assertEqual(analysis["checkpoint_isolation"]["status"], "complete")
+        result["checkpoint"]["requested_checkpoint_observed"] = False
+        self.assertFalse(_database_analysis(result)["validity"]["comparison_eligible"])
+
     def test_database_v2_parses_exact_fixed_transaction_tail_percentiles(self) -> None:
         evidence = parse_pgbench_latency_log(
             "0 1 1000 0 1 1\n0 2 2000 0 1 2\n0 3 3000 0 1 3\n0 4 4000 0 1 4\n0 5 5000 0 1 5\n",
@@ -3631,6 +3779,108 @@ tps = 400.000000 (without initial connection time)
             self.assertTrue(result["analysis"]["validity"]["comparison_eligible"])
             self.assertTrue(result["cleanup"]["cleanup_verified"])
 
+    def test_database_checkpoint_orchestrator_records_forced_checkpoint_deltas(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            database = Database(Path(directory) / "test.sqlite3")
+            database.create_session("session_checkpoint", "checkpoint", "hash", "2099-01-01T00:00:00+00:00")
+            target_capabilities = {
+                "postgres": True,
+                "initdb": True,
+                "pgbench": True,
+                "pg_isready": True,
+                "psql": True,
+            }
+            database.add_agent(
+                "checkpoint_target",
+                "session_checkpoint",
+                "target",
+                "target",
+                {"inventory": {"capabilities": target_capabilities}},
+                endpoint={"address": "10.0.0.10"},
+            )
+            database.add_agent(
+                "checkpoint_generator",
+                "session_checkpoint",
+                "generator",
+                "generator",
+                {"inventory": {"capabilities": {"pgbench": True, "procfs_process_cpu": True}}},
+                endpoint={"address": "10.0.0.11"},
+            )
+            total_steps = database_total_steps("postgres-peer-checkpoint")
+            database.create_run(
+                "run_checkpoint",
+                "database",
+                "postgres-peer-checkpoint",
+                {"suite": "database"},
+                total_steps=total_steps,
+            )
+            done = threading.Event()
+
+            def complete_tasks() -> None:
+                while not done.is_set():
+                    handled = False
+                    for agent_id in ("checkpoint_target", "checkpoint_generator"):
+                        task = database.claim_agent_task(agent_id)
+                        if not task:
+                            continue
+                        handled = True
+                        if task["kind"] == "database-server-start":
+                            value = {"ready": True, "tools": {"postgres": "postgres (PostgreSQL) 16.4"}}
+                        elif task["kind"] == "database-checkpoint-probe":
+                            requested = 4 if task["payload"]["action"] == "baseline" else 5
+                            value = {
+                                "status": "complete",
+                                "action": task["payload"]["action"],
+                                "server_version_num": 160_004,
+                                "source_view": "pg_stat_bgwriter",
+                                "checkpoints_timed": 10,
+                                "checkpoints_requested": requested,
+                                "write_time_ms": 1000.0 + (250.0 if requested == 5 else 0),
+                                "sync_time_ms": 50.0 + (15.0 if requested == 5 else 0),
+                                "buffers_written": 4096 + (512 if requested == 5 else 0),
+                                "forced_checkpoint_duration_seconds": 1.5 if requested == 5 else 0.2,
+                            }
+                        elif task["kind"] == "database-client":
+                            value = {"pgbench": {
+                                "workload": "tpcb-like",
+                                "clients": 4,
+                                "threads": 2,
+                                "duration_seconds": 60,
+                                "transactions_per_client": 0,
+                                "metrics": {"transactions_per_second": 900.0, "latency_average_ms": 4.5},
+                                "generator_cpu": {
+                                    "status": "observed",
+                                    "peak_process_cpu_percent_of_one_core": 45.0,
+                                    "peak_host_utilization_percent": 35.0,
+                                },
+                            }}
+                        else:
+                            value = {"status": "completed", "cleanup_verified": True}
+                        database.finish_agent_task(task["id"], agent_id, status="completed", result=value)
+                    if not handled:
+                        time.sleep(0.005)
+
+            worker = threading.Thread(target=complete_tasks, daemon=True)
+            worker.start()
+            try:
+                result = run_database(
+                    database,
+                    "run_checkpoint",
+                    "session_checkpoint",
+                    "postgres-peer-checkpoint",
+                    context=JobContext("run_checkpoint", total_steps=total_steps, timeout_seconds=30),
+                )
+            finally:
+                done.set()
+                worker.join(timeout=2)
+            self.assertEqual(total_steps, 5)
+            self.assertEqual(result["checkpoint"]["status"], "complete")
+            self.assertEqual(result["checkpoint"]["deltas"]["checkpoints_requested"], 1)
+            self.assertEqual(result["checkpoint"]["deltas"]["buffers_written"], 512)
+            self.assertEqual(result["checkpoint"]["forced_checkpoint_duration_seconds"], 1.5)
+            self.assertTrue(result["analysis"]["validity"]["comparison_eligible"])
+            self.assertTrue(result["cleanup"]["cleanup_verified"])
+
     def test_controller_admits_only_confirmed_database_pair_runs(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             controller = CloudMarkController(Path(directory))
@@ -3665,6 +3915,48 @@ tps = 400.000000 (without initial connection time)
             self.assertEqual(stored["total_steps"], 5)
             self.assertEqual(stored["methodology_version"], "database-postgresql-v1")
             self.assertEqual(stored["tool_version"], "postgresql/pgbench-agent")
+
+    def test_controller_admits_only_capable_confirmed_checkpoint_runs(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            controller = CloudMarkController(Path(directory))
+            controller.database.create_session(
+                "session_checkpoint", "checkpoint", "hash", "2099-01-01T00:00:00+00:00"
+            )
+            controller.database.add_agent(
+                "checkpoint_target",
+                "session_checkpoint",
+                "target",
+                "target",
+                {"inventory": {"capabilities": {
+                    "postgres": True,
+                    "initdb": True,
+                    "pgbench": True,
+                    "pg_isready": True,
+                    "psql": True,
+                }}},
+                endpoint={"address": "10.0.0.10"},
+            )
+            controller.database.add_agent(
+                "checkpoint_generator",
+                "session_checkpoint",
+                "generator",
+                "generator",
+                {"inventory": {"capabilities": {"pgbench": True, "procfs_process_cpu": True}}},
+                endpoint={"address": "10.0.0.11"},
+            )
+            request = {
+                "suite": "database",
+                "profile": "postgres-peer-checkpoint",
+                "session_id": "session_checkpoint",
+            }
+            with self.assertRaisesRegex(ValueError, "confirm_database_load"):
+                controller.submit_run(request)
+            with patch.object(controller, "_execute_run"):
+                run = controller.submit_run({**request, "confirm_database_load": True})
+            stored = controller.database.get_run(run["id"])
+            self.assertEqual(stored["total_steps"], 5)
+            self.assertEqual(stored["methodology_version"], "database-postgresql-checkpoint-v1")
+            self.assertEqual(stored["tool_version"], "postgresql/pgbench/checkpoint-stats-agent")
 
     def test_controller_admits_only_capable_confirmed_mysql_pair_runs(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -4485,6 +4777,7 @@ Percentage of the requests served within a certain time (ms)
         self.assertEqual(database_total_steps("postgres-peer-quick"), 5)
         self.assertEqual(database_total_steps("postgres-peer-standard"), 10)
         self.assertEqual(database_total_steps("postgres-peer-recovery"), 4)
+        self.assertEqual(database_total_steps("postgres-peer-checkpoint"), 5)
         self.assertEqual(
             DATABASE_PROFILES["postgres-peer-quick"]["methodology_version"],
             "database-postgresql-v1",
@@ -4499,6 +4792,11 @@ Percentage of the requests served within a certain time (ms)
             "database-postgresql-recovery-v1",
         )
         self.assertEqual(DATABASE_PROFILES["postgres-peer-recovery"]["recovery_drill"]["timeout"], 300)
+        self.assertEqual(
+            DATABASE_PROFILES["postgres-peer-checkpoint"]["methodology_version"],
+            "database-postgresql-checkpoint-v1",
+        )
+        self.assertEqual(DATABASE_PROFILES["postgres-peer-checkpoint"]["checkpoint_drill"]["timeout"], 120)
         for profile in DATABASE_PROFILES.values():
             if profile["engine"] == "postgresql":
                 self.assertLessEqual(profile["scale_factor"], 100)
@@ -4829,6 +5127,7 @@ max: 1.50
                 self.assertIn("disk-sustained", dashboard["profiles"]["storage"])
                 self.assertIn("network-peer-quick", dashboard["profiles"]["network"])
                 self.assertIn("postgres-peer-quick", dashboard["profiles"]["database"])
+                self.assertIn("postgres-peer-checkpoint", dashboard["profiles"]["database"])
                 self.assertIn("mysql-peer-standard", dashboard["profiles"]["database"])
                 self.assertIn("web-peer-quick", dashboard["profiles"]["web"])
                 self.assertIn("sessions", dashboard)
