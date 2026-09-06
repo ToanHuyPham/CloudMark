@@ -162,8 +162,10 @@ own generators for CPU and network resources.
   `web-http-v1`;
 - bundled dynamic application behind Nginx, bounded Linux Generator process/
   host CPU validation, and HTTP/2 negotiation — available in `web-http-v2`;
-- HTTP/2 load, reverse-proxy variants, compression, HTTP/3, longer soak testing,
-  and calibrated saturation point — planned;
+- HTTP/2 multiplexed dynamic load with fixed connection/stream shapes, exact
+  request-log P50/P95/P99, Generator validity, and cleanup — available in
+  `web-http2-load-v1`; reverse-proxy variants, compression, HTTP/3, longer soak
+  testing, and a calibrated saturation point remain planned;
 - DDoS-style testing only as an **authorized resilience test** on operator-owned
   systems with rate and duration limits, never against third parties.
 

@@ -410,6 +410,36 @@ type WebProtocolObservation = {
   performance_claim: false;
 };
 
+type Http2Measurement = {
+  name: string;
+  scheme: "https";
+  path: string;
+  clients: number;
+  threads: number;
+  streams: number;
+  requests: number;
+  client_log_cleanup_verified: boolean;
+  metrics: {
+    protocol: "h2";
+    request_total: number;
+    request_succeeded: number;
+    request_failed: number;
+    request_errored: number;
+    success_percent: number;
+    requests_per_second: number;
+    transfer_bytes_per_second: number;
+    request_latency: {
+      status: "complete" | "partial" | "unavailable";
+      latency_percentiles_ms?: { p50: number; p95: number; p99: number; maximum: number };
+    };
+  };
+  generator_cpu?: {
+    status: "observed" | "unavailable";
+    peak_process_cpu_percent_of_one_core?: number;
+    peak_host_utilization_percent?: number;
+  };
+};
+
 type Run = {
   id: string;
   suite: string;
@@ -454,6 +484,7 @@ type Run = {
     redis_measurements?: RedisMeasurement[];
     mysql_measurements?: MySQLMeasurement[];
     web_measurements?: WebMeasurement[];
+    http2_measurements?: Http2Measurement[];
     protocol_observations?: WebProtocolObservation[];
     server?: {
       engine?: string;
@@ -624,6 +655,7 @@ type Run = {
       generator_headroom?: {
         status: "adequate" | "constrained" | "unknown";
         peak_process_cpu_percent_of_one_core?: number | null;
+        peak_process_cpu_percent_of_declared_thread_capacity?: number | null;
         peak_host_utilization_percent?: number | null;
         observed_measurements: number;
         required_measurements: number;
@@ -640,6 +672,12 @@ type Run = {
         status: "observed" | "unavailable";
         application_runtime?: string;
         measurement_count: number;
+      };
+      http2_load?: {
+        status: "complete" | "partial" | "unavailable";
+        required: boolean;
+        measurement_count: number;
+        request_log_contract: string;
       };
       transaction_tail_latency?: {
         status: "complete" | "partial" | "unavailable";
@@ -953,10 +991,14 @@ type Dashboard = {
         name: string;
         scheme: "http" | "https";
         path: string;
-        concurrency: number;
-        duration: number;
-        warmup: number;
-        keep_alive: boolean;
+        concurrency?: number;
+        duration?: number;
+        warmup?: number;
+        keep_alive?: boolean;
+        clients?: number;
+        threads?: number;
+        streams?: number;
+        requests?: number;
       }[];
     }>;
     domains: AssessmentDomain[];
@@ -1206,24 +1248,32 @@ export default function Home() {
     (run) => run.suite === "web" && ["queued", "running"].includes(run.status),
   );
   const latestWeb = dashboard?.runs.find(
-    (run) => run.suite === "web" && run.status === "completed" && run.result?.web_measurements?.length,
+    (run) => run.suite === "web" && run.profile === selectedWebProfile && run.status === "completed"
+      && (run.result?.web_measurements?.length || run.result?.http2_measurements?.length),
   );
   const webMeasurements = latestWeb?.result?.web_measurements || [];
+  const http2Measurements = latestWeb?.result?.http2_measurements || [];
   const webProfile = dashboard?.profiles.web?.[selectedWebProfile];
   const webProtocolObservations = latestWeb?.result?.protocol_observations || [];
   const webAnalysis = latestWeb?.result?.analysis;
   const selectedWebV2 = webProfile?.methodology_version === "web-http-v2";
+  const selectedWebHttp2 = webProfile?.methodology_version === "web-http2-load-v1";
+  const webRoleReady = (role: string, capabilities: Record<string, boolean>) => role === "target"
+    ? Boolean(capabilities.nginx && capabilities.openssl
+      && (!(selectedWebV2 || selectedWebHttp2) || capabilities.nginx_http2))
+    : Boolean(selectedWebHttp2
+      ? (capabilities.h2load && capabilities.h2load_request_log && capabilities.procfs_process_cpu)
+      : (capabilities.ab && (!selectedWebV2 || (capabilities.curl_http2 && capabilities.procfs_process_cpu))));
   const selectedWebReady = Boolean(selectedSession)
     && ["target", "generator"].every((role) => {
       const agent = selectedSession?.agents.find((item) => item.role === role);
       const capabilities = agent?.system.inventory?.capabilities || {};
-      return role === "target"
-        ? Boolean(capabilities.nginx && capabilities.openssl && (!selectedWebV2 || capabilities.nginx_http2))
-        : Boolean(capabilities.ab && (!selectedWebV2 || (capabilities.curl_http2 && capabilities.procfs_process_cpu)));
+      return webRoleReady(role, capabilities);
     });
   const maxWebRps = Math.max(
     1,
     ...webMeasurements.map((item) => item.metrics.requests_per_second || 0),
+    ...http2Measurements.map((item) => item.metrics.requests_per_second || 0),
   );
   const latestStorage = dashboard?.runs.find(
     (run) => run.suite === "storage" && run.status === "completed" && run.result?.jobs?.length
@@ -1676,16 +1726,28 @@ export default function Home() {
       setNotice("The target Agent needs Nginx and OpenSSL. Install the CloudMark web pack and restart the Agent.");
       return;
     }
-    if (!generator?.system.inventory?.capabilities?.ab) {
-      setNotice("The generator Agent needs ApacheBench. Install the CloudMark web pack and restart the Agent.");
-      return;
+    const methodology = dashboard?.profiles.web?.[selectedWebProfile]?.methodology_version;
+    const generatorCapabilities = generator?.system.inventory?.capabilities || {};
+    if (methodology === "web-http2-load-v1") {
+      if (!targetCapabilities.nginx_http2) {
+        setNotice("HTTP/2 load requires an Nginx build with HTTP/2 support on the Target.");
+        return;
+      }
+      if (!generatorCapabilities.h2load || !generatorCapabilities.h2load_request_log || !generatorCapabilities.procfs_process_cpu) {
+        setNotice("HTTP/2 load requires h2load request-log support and Linux CPU accounting on the Generator.");
+        return;
+      }
+    } else {
+      if (!generatorCapabilities.ab) {
+        setNotice("The generator Agent needs ApacheBench. Install the CloudMark web pack and restart the Agent.");
+        return;
+      }
     }
-    if (dashboard?.profiles.web?.[selectedWebProfile]?.methodology_version === "web-http-v2") {
+    if (methodology === "web-http-v2") {
       if (!targetCapabilities.nginx_http2) {
         setNotice("The target Agent needs an Nginx build with HTTP/2 support for Web v2.");
         return;
       }
-      const generatorCapabilities = generator.system.inventory?.capabilities || {};
       if (!generatorCapabilities.curl_http2 || !generatorCapabilities.procfs_process_cpu) {
         setNotice("Web v2 requires HTTP/2-capable curl and Linux procfs CPU accounting on the Generator.");
         return;
@@ -2153,32 +2215,31 @@ export default function Home() {
         {activeView === "web" && (
           <div className="view web-view">
             <section className="section-intro">
-              <div><span className="section-kicker">TWO-AGENT WEB, API & TLS ASSESSMENT</span><h2>Measure static and dynamic serving paths without using the Controller as a traffic endpoint.</h2><p>CloudMark starts isolated Nginx and, for Web v2, a packaged loopback application on the Target. Bounded Generator jobs retain tail latency, TLS, CPU-headroom, reverse-proxy, and protocol evidence.</p></div>
+              <div><span className="section-kicker">TWO-AGENT WEB, API &amp; TLS ASSESSMENT</span><h2>Measure static, dynamic, and multiplexed serving paths without using the Controller as a traffic endpoint.</h2><p>CloudMark starts isolated Nginx and a packaged loopback application on the Target. Bounded ApacheBench, curl, or h2load jobs retain latency, TLS, CPU-headroom, reverse-proxy, protocol, and HTTP/2 stream evidence.</p></div>
               <div className="runner-actions"><label><span>PROFILE</span><select value={selectedWebProfile} onChange={(event) => setSelectedWebProfile(event.target.value)} disabled={Boolean(activeWeb)}>{Object.entries(dashboard?.profiles.web || {}).map(([id, profile]) => <option key={id} value={id}>{profile.label} · ≈ {profile.estimated_minutes} min</option>)}</select></label><label><span>PAIR TOPOLOGY</span><select value={selectedTopologyScope} onChange={(event) => setSelectedTopologyScope(event.target.value as TopologyScope)}>{TOPOLOGY_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label><button className="button primary" onClick={createPairing} disabled={busy}>New session</button></div>
             </section>
             <section className="web-contract-grid">
               <article className="panel web-profile-card">
                 <div className="panel-head"><div><span className="section-kicker">VERSIONED WORKLOAD</span><h3>{webProfile?.label || "Web & TLS profile"}</h3></div><span className="run-id">HTTP {webProfile?.http_port || "—"} / TLS {webProfile?.https_port || "—"}</span></div>
                 <p>{webProfile?.description}</p>
-                <div className="web-job-grid">{webProfile?.jobs.map((job) => <div key={job.name}><span>{job.path === "/api/v2/dynamic" ? "DYNAMIC" : job.scheme.toUpperCase()}</span><strong>{job.name}</strong><small>C{job.concurrency} · {job.path} · {job.duration}s · {job.keep_alive ? "keep-alive" : "new connections"}</small></div>)}</div>
+                <div className="web-job-grid">{webProfile?.jobs.map((job) => <div key={job.name}><span>{selectedWebHttp2 ? "HTTP/2 DYNAMIC" : job.path === "/api/v2/dynamic" ? "DYNAMIC" : job.scheme.toUpperCase()}</span><strong>{job.name}</strong><small>{selectedWebHttp2 ? `C${job.clients} · T${job.threads} · M${job.streams} · ${job.requests?.toLocaleString()} requests` : `C${job.concurrency} · ${job.path} · ${job.duration}s · ${job.keep_alive ? "keep-alive" : "new connections"}`}</small></div>)}</div>
               </article>
               <article className="panel web-safety-card">
                 <span className="section-kicker">EXECUTION CONTRACT</span><h3>Owned, isolated, and bounded</h3>
-                <ul><li>Exact Target address; never binds to all interfaces</li><li>Only the paired Generator and Target addresses are allowed</li><li>Fixed static payloads and a bundled loopback-only dynamic application</li><li>Ephemeral self-signed certificate with fixed TLS 1.2</li><li>HTTP/2 is a protocol observation, not a throughput claim</li><li>Temporary service files, keys, and processes are removed after every terminal path</li></ul>
-                <p>This is controlled load testing, not DDoS testing. Arbitrary URLs, ports, payloads, and external targets are rejected.</p>
+                {selectedWebHttp2 ? <><ul><li>HTTPS and HTTP/2 only on the exact Target address</li><li>Fixed connection, native-thread, stream, and request-count shapes</li><li>All request latencies come from one bounded h2load log</li><li>Generator CPU headroom and zero failed/errored requests are required</li><li>Request logs, certificate, application, Nginx, and workspace are cleaned</li><li>No arbitrary URL, header, body, rate, or external target is accepted</li></ul><p>This is controlled HTTP/2 multiplexing load against an operator-owned paired Target, never public DDoS testing.</p></> : <><ul><li>Exact Target address; never binds to all interfaces</li><li>Only the paired Generator and Target addresses are allowed</li><li>Fixed static payloads and a bundled loopback-only dynamic application</li><li>Ephemeral self-signed certificate with fixed TLS 1.2</li><li>Standard records one HTTP/2 negotiation observation</li><li>Temporary service files, keys, and processes are removed after every terminal path</li></ul><p>This is controlled load testing, not DDoS testing. Arbitrary URLs, ports, payloads, and external targets are rejected.</p></>}
               </article>
             </section>
             {pairing && <section className="pairing-card"><div><span>SHORT-LIVED JOIN CREDENTIAL</span><strong>{pairing.id}</strong><small>{pairing.topology.scope} · {pairing.topology.source} · verification {pairing.topology.verification.status} · expires {new Date(pairing.expires_at).toLocaleTimeString("en-US")}</small></div><code>{pairing.join_token}</code></section>}
             {pairing && <section className="panel agent-commands"><div><span className="section-kicker">RUN ON PROVIDER VMS</span><h3>Target hosts Nginx + app fixture; Generator runs bounded clients</h3></div><code>cloudmark agent --controller https://CONTROLLER --session {pairing.id} --token {pairing.join_token} --role target --advertise-address VM_A_IP</code><code>cloudmark agent --controller https://CONTROLLER --session {pairing.id} --token {pairing.join_token} --role generator --advertise-address VM_B_IP</code><p>Install the <strong>web</strong> pack on both machines and open TCP 58080 and 58443 only between the paired machines. The application port remains on Target loopback.</p></section>}
             <section className="panel session-panel">
               <div className="panel-head"><div><span className="section-kicker">PAIRED EXECUTION</span><h3>Web assessment readiness</h3></div><label className="compact-select"><span>SESSION</span><select value={selectedSession?.id || ""} onChange={(event) => setSelectedSessionId(event.target.value)}>{dashboard?.sessions.map((session) => <option key={session.id} value={session.id}>{session.label} · {session.topology.scope} / {session.topology.verification.status} · {session.status}</option>)}</select></label></div>
-              {selectedSession ? <div className="agent-roster">{["target", "generator"].map((role) => { const agent = selectedSession.agents.find((item) => item.role === role); const capabilities = agent?.system.inventory?.capabilities || {}; const ready = role === "target" ? Boolean(capabilities.nginx && capabilities.openssl && (!selectedWebV2 || capabilities.nginx_http2)) : Boolean(capabilities.ab && (!selectedWebV2 || (capabilities.curl_http2 && capabilities.procfs_process_cpu))); return <article key={role} className={agent && ready ? "connected" : "waiting"}><span>{role.toUpperCase()}</span><strong>{agent?.name || `Waiting for ${role}`}</strong><small>{agent ? `${agent.endpoint.address || "No advertised IP"} · ${ready ? selectedWebV2 ? "Web v2 ready" : "Web v1 ready" : "web prerequisites missing"}` : "Join command has not connected"}</small></article>; })}</div> : <div className="empty-row">Create a session, then connect both provider Agents.</div>}
-              <div className="session-actions"><p><strong>{selectedSession?.status !== "ready" ? "Two Agents required" : selectedWebReady ? "Pair ready" : "Web prerequisites missing"}</strong><small>Web v2 requires Nginx HTTP/2 support on Target plus ApacheBench, HTTP/2-capable curl, and Linux CPU accounting on Generator.</small></p><button className="button primary" onClick={startWeb} disabled={busy || Boolean(activeWeb) || selectedSession?.status !== "ready" || !selectedWebReady}>Run Web/API/TLS assessment</button></div>
+              {selectedSession ? <div className="agent-roster">{["target", "generator"].map((role) => { const agent = selectedSession.agents.find((item) => item.role === role); const capabilities = agent?.system.inventory?.capabilities || {}; const ready = webRoleReady(role, capabilities); return <article key={role} className={agent && ready ? "connected" : "waiting"}><span>{role.toUpperCase()}</span><strong>{agent?.name || `Waiting for ${role}`}</strong><small>{agent ? `${agent.endpoint.address || "No advertised IP"} · ${ready ? selectedWebHttp2 ? "HTTP/2 load ready" : selectedWebV2 ? "Web v2 ready" : "Web v1 ready" : "web prerequisites missing"}` : "Join command has not connected"}</small></article>; })}</div> : <div className="empty-row">Create a session, then connect both provider Agents.</div>}
+              <div className="session-actions"><p><strong>{selectedSession?.status !== "ready" ? "Two Agents required" : selectedWebReady ? "Pair ready" : "Web prerequisites missing"}</strong><small>{selectedWebHttp2 ? "HTTP/2 load requires Nginx HTTP/2 on Target plus h2load request logging and Linux CPU accounting on Generator." : "Web v2 requires Nginx HTTP/2 support on Target plus ApacheBench, HTTP/2-capable curl, and Linux CPU accounting on Generator."}</small></p><button className="button primary" onClick={startWeb} disabled={busy || Boolean(activeWeb) || selectedSession?.status !== "ready" || !selectedWebReady}>Run Web/API/TLS assessment</button></div>
             </section>
             {activeWeb && <section className="panel run-progress" aria-live="polite"><div><span className="section-kicker">ACTIVE WEB RUN / {activeWeb.id}</span><strong>{activeWeb.current_job || activeWeb.phase || "Preparing isolated Nginx"}</strong><small>{activeWeb.completed_steps || 0} of {activeWeb.total_steps || 1} steps · {Math.round((activeWeb.progress || 0) * 100)}%</small></div><div className="progress-track"><i style={{ width: `${Math.max(2, (activeWeb.progress || 0) * 100)}%` }} /></div><button className="button danger" onClick={cancelWeb} disabled={busy || activeWeb.cancel_requested}>{activeWeb.cancel_requested ? "Cancelling" : "Cancel run"}</button></section>}
             <section className="panel web-results">
-              <div className="panel-head"><div><span className="section-kicker">LATEST COMPLETED RUN</span><h3>HTTP request throughput by workload</h3></div><span className="run-id">{latestWeb?.id || "NO RUN YET"}</span></div>
-              {webMeasurements.length ? <div className="bar-chart">{webMeasurements.map((measurement) => { const rps = measurement.metrics.requests_per_second || 0; return <div className="bar-row" key={measurement.name}><span>{measurement.name} · C{measurement.concurrency}</span><div><i style={{ width: `${Math.max(3, (rps / maxWebRps) * 100)}%` }} /></div><strong>{Math.round(rps).toLocaleString()} req/s</strong></div>; })}</div> : <div className="empty-chart compact"><div className="chart-grid" /><strong>No Web/API/TLS result yet</strong><p>Connect a prepared Target and Generator to establish the first controlled serving baseline.</p></div>}
+              <div className="panel-head"><div><span className="section-kicker">LATEST COMPLETED RUN</span><h3>{selectedWebHttp2 ? "HTTP/2 multiplexed throughput" : "HTTP request throughput by workload"}</h3></div><span className="run-id">{latestWeb?.id || "NO RUN YET"}</span></div>
+              {webMeasurements.length || http2Measurements.length ? <div className="bar-chart">{webMeasurements.map((measurement) => { const rps = measurement.metrics.requests_per_second || 0; return <div className="bar-row" key={measurement.name}><span>{measurement.name} · C{measurement.concurrency}</span><div><i style={{ width: `${Math.max(3, (rps / maxWebRps) * 100)}%` }} /></div><strong>{Math.round(rps).toLocaleString()} req/s</strong></div>; })}{http2Measurements.map((measurement) => { const rps = measurement.metrics.requests_per_second || 0; return <div className="bar-row" key={measurement.name}><span>{measurement.name} · C{measurement.clients}/M{measurement.streams}</span><div><i style={{ width: `${Math.max(3, (rps / maxWebRps) * 100)}%` }} /></div><strong>{Math.round(rps).toLocaleString()} req/s</strong></div>; })}</div> : <div className="empty-chart compact"><div className="chart-grid" /><strong>No result for this web profile yet</strong><p>Connect a prepared Target and Generator to establish the first controlled serving baseline.</p></div>}
             </section>
             {webMeasurements.length > 0 && <section className="web-evidence-grid">
               {webMeasurements.map((measurement) => <article className="panel" key={measurement.name}><span>{measurement.scheme.toUpperCase()} · C{measurement.concurrency} · {measurement.keep_alive ? "KEEP-ALIVE" : "NEW CONNECTION"}</span><strong>{measurement.metrics.latency_percentiles_ms.p95.toFixed(2)} ms p95</strong><small>{measurement.metrics.latency_percentiles_ms.p99.toFixed(2)} ms p99 · {measurement.metrics.success_percent.toFixed(3)}% success · {measurement.metrics.transfer_rate_kib_per_second?.toFixed(1) ?? "—"} KiB/s</small></article>)}
@@ -2189,7 +2250,13 @@ export default function Home() {
               <article className={`panel ${webAnalysis?.validity?.comparison_eligible ? "cleanup-evidence verified" : "cleanup-evidence unknown"}`}><span>MEASUREMENT VALIDITY</span><strong>{webAnalysis?.validity?.comparison_eligible ? "Comparable" : "Not comparable"}</strong><small>{webAnalysis?.validity?.reason_codes?.join(" · ") || "Generator, dynamic path, protocol, and cleanup evidence complete"}</small></article>
               <article className={`panel cleanup-evidence ${latestWeb?.result?.cleanup?.cleanup_verified ? "verified" : "unknown"}`}><span>EPHEMERAL CLEANUP</span><strong>{latestWeb?.result?.cleanup?.cleanup_verified ? "Verified" : "Unavailable"}</strong><small>Service directory, certificate, private key, payloads, and process state</small></article>
             </section>}
-            <section className="panel web-method-note"><span className="section-kicker">INTERPRETATION LIMITS</span><p>Web v2 rejects comparison evidence when the ApacheBench process reaches its CPU limit, and measures a bundled Python application through Nginx reverse proxy. The fixed curl request proves HTTP/2 negotiation only; HTTP/2 load, database-backed applications, HTTP/3, CDN, WAF, autoscaling, public TLS trust, and DDoS resilience still require separate evidence.</p></section>
+            {http2Measurements.length > 0 && <section className="web-evidence-grid">
+              {http2Measurements.map((measurement) => <article className="panel" key={measurement.name}><span>HTTP/2 · C{measurement.clients} / T{measurement.threads} / M{measurement.streams}</span><strong>{measurement.metrics.request_latency.latency_percentiles_ms ? `${measurement.metrics.request_latency.latency_percentiles_ms.p99.toFixed(2)} ms p99` : "Tail unavailable"}</strong><small>{measurement.metrics.request_latency.latency_percentiles_ms ? `${measurement.metrics.request_latency.latency_percentiles_ms.p50.toFixed(2)} ms p50 · ${measurement.metrics.request_latency.latency_percentiles_ms.p95.toFixed(2)} ms p95` : measurement.metrics.request_latency.status} · {measurement.metrics.success_percent.toFixed(3)}% success</small></article>)}
+              <article className="panel"><span>GENERATOR HEADROOM</span><strong>{webAnalysis?.generator_headroom?.status || "Unavailable"}</strong><small>{webAnalysis?.generator_headroom?.peak_process_cpu_percent_of_declared_thread_capacity?.toFixed(1) ?? "—"}% declared-thread capacity · {webAnalysis?.generator_headroom?.peak_host_utilization_percent?.toFixed(1) ?? "—"}% host CPU</small></article>
+              <article className={`panel ${webAnalysis?.validity?.comparison_eligible ? "cleanup-evidence verified" : "cleanup-evidence unknown"}`}><span>HTTP/2 LOAD VALIDITY</span><strong>{webAnalysis?.validity?.comparison_eligible ? "Comparable" : "Not comparable"}</strong><small>{webAnalysis?.validity?.reason_codes?.join(" · ") || "Protocol, request logs, Generator headroom, and cleanup evidence complete"}</small></article>
+              <article className={`panel cleanup-evidence ${latestWeb?.result?.cleanup?.cleanup_verified ? "verified" : "unknown"}`}><span>EPHEMERAL CLEANUP</span><strong>{latestWeb?.result?.cleanup?.cleanup_verified ? "Verified" : "Unavailable"}</strong><small>All request logs plus application, Nginx, certificate, and key workspace</small></article>
+            </section>}
+            <section className="panel web-method-note"><span className="section-kicker">INTERPRETATION LIMITS</span><p>{selectedWebHttp2 ? "HTTP/2 load uses fixed connection and multiplexed-stream shapes against the bundled dynamic application. It does not measure HTTP/3, browser rendering, CDN, WAF, autoscaling, public TLS trust, or DDoS resilience." : "Web v2 rejects comparison evidence when the ApacheBench process reaches its CPU limit, and measures a bundled Python application through Nginx reverse proxy. The fixed curl request proves HTTP/2 negotiation only; database-backed applications, HTTP/3, CDN, WAF, autoscaling, public TLS trust, and DDoS resilience still require separate evidence."}</p></section>
           </div>
         )}
 

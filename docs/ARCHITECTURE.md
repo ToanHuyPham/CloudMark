@@ -185,6 +185,14 @@ only the paired Generator. The Controller never accepts an arbitrary URL and
 is not an HTTP/TLS traffic endpoint. HTTP/2 negotiation is not presented as an
 HTTP/2 performance measurement.
 
+`web-http2-load-v1` reuses the packaged loopback application and HTTP/2-capable
+Nginx Target but dispatches only fixed h2load jobs on the Generator. Connection,
+native-thread, stream, request-count, HTTPS port, and path shapes are
+allow-listed. A bounded per-request log produces exact P50/P95/P99 evidence and
+is removed on every terminal path. HTTP/2 success/error summaries, Generator
+CPU, log cleanup, reverse-proxy evidence, and Target cleanup are comparison
+gates.
+
 ## Network direction policy
 
 The controller does not participate in provider throughput measurements.

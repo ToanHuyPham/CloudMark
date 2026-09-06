@@ -55,6 +55,9 @@ COMPARISON_METRICS: dict[str, dict[str, Any]] = {
     "web.https_api_c16_rps": {"label": "HTTPS API throughput at C16", "direction": "higher"},
     "web.https_api_c16_p95_ms": {"label": "HTTPS API P95 at C16", "direction": "lower"},
     "web.https_api_c16_success_pct": {"label": "HTTPS API success rate", "direction": "higher"},
+    "web.http2_dynamic_c8_m16_rps": {"label": "HTTP/2 dynamic throughput at C8/M16", "direction": "higher"},
+    "web.http2_dynamic_c8_m16_p99_ms": {"label": "HTTP/2 dynamic P99 at C8/M16", "direction": "lower"},
+    "web.http2_dynamic_c8_m16_success_pct": {"label": "HTTP/2 dynamic success rate at C8/M16", "direction": "higher"},
 }
 
 REQUIREMENT_LEVELS: dict[str, dict[str, str]] = {
@@ -98,7 +101,7 @@ SCENARIO_REQUIREMENTS: dict[str, dict[str, Any]] = {
             ("network.directional_floor_bps", "Peer TCP directional floor", ">=", _threshold(100_000_000, 500_000_000, 2_000_000_000), "bit/s"),
             ("network.idle_latency_ms", "Worst peer idle latency", "<=", _threshold(50, 20, 8), "ms"),
         ],
-        "limitations": ["A bundled dynamic reverse-proxy workload and HTTP/2 negotiation are measured; database-backed applications, HTTP/2 load, HTTP/3, WAF, CDN, autoscaling, and public TLS trust remain unavailable."],
+        "limitations": ["Bundled dynamic reverse-proxy, HTTP/2 negotiation, and separate fixed HTTP/2 multiplexing load are measured; database-backed applications, HTTP/3, WAF, CDN, autoscaling, and public TLS trust remain unavailable."],
         "next_actions": ["Run Compute Standard, Network Standard, and Web & TLS Peer Standard on the same Target."],
     },
     "dev-test": {
@@ -292,7 +295,10 @@ def _run_valid(run: dict[str, Any]) -> tuple[bool, str | None]:
     }:
         if _nested(result, "analysis", "validity", "comparison_eligible") is not True:
             return False, "Database Generator validity, required tail/recovery evidence, or cleanup evidence is insufficient for comparison."
-    if suite == "web" and str(result.get("methodology_version", "")) == "web-http-v2":
+    if suite == "web" and str(result.get("methodology_version", "")) in {
+        "web-http-v2",
+        "web-http2-load-v1",
+    }:
         if _nested(result, "analysis", "validity", "comparison_eligible") is not True:
             return False, "Web v2 Generator headroom, dynamic reverse-proxy, HTTP/2 negotiation, or cleanup evidence is insufficient for comparison."
     if suite == "network" and str(result.get("methodology_version", "")) in {
@@ -512,6 +518,28 @@ def _extract_run_evidence(evidence: dict[str, dict[str, Any]], run: dict[str, An
             if value is not None:
                 _put(evidence, key, _evidence_item(value, unit, run=run, source="database"))
     elif suite == "web":
+        if str(result.get("methodology_version", "")) == "web-http2-load-v1":
+            measurement = next(
+                (item for item in result.get("http2_measurements") or [] if item.get("name") == "h2-dynamic-c8-m16"),
+                None,
+            )
+            if measurement:
+                values = {
+                    "web.http2_dynamic_c8_m16_rps": (
+                        _number(_nested(measurement, "metrics", "requests_per_second")), "req/s"
+                    ),
+                    "web.http2_dynamic_c8_m16_p99_ms": (
+                        _number(_nested(measurement, "metrics", "request_latency", "latency_percentiles_ms", "p99")),
+                        "ms",
+                    ),
+                    "web.http2_dynamic_c8_m16_success_pct": (
+                        _number(_nested(measurement, "metrics", "success_percent")), "%"
+                    ),
+                }
+                for key, (value, unit) in values.items():
+                    if value is not None:
+                        _put(evidence, key, _evidence_item(value, unit, run=run, source="web"))
+            return
         measurement = next((item for item in result.get("web_measurements") or [] if item.get("name") == "https-api-c16"), None)
         if measurement:
             values = {

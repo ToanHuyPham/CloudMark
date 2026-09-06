@@ -69,9 +69,10 @@ The current development head implements domain 9 through `web-http-v2`: an
 isolated Nginx service, fixed JSON/static payloads, a packaged Python dynamic
 application behind a loopback reverse proxy, bounded ApacheBench HTTP/TLS jobs,
 Linux Generator CPU-headroom validation, HTTP/2 negotiation, P50–P99 latency,
-errors, transfer, TLS evidence, and cleanup. Database-backed applications,
-HTTP/2 load, HTTP/3, CDN, WAF, autoscaling, and resilience remain missing; web
-coverage therefore remains `Partial`.
+errors, transfer, TLS evidence, and cleanup. `web-http2-load-v1` adds fixed
+HTTP/2 multiplexing shapes, exact request-log P50/P95/P99, Generator validity,
+and cleanup. Database-backed applications, HTTP/3, CDN, WAF, autoscaling, and
+resilience remain missing; web coverage therefore remains `Partial`.
 
 ## Mapping evidence to intended use
 

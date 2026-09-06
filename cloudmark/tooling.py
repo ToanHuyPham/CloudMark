@@ -70,7 +70,7 @@ def find_redis_binary(name: str) -> str | None:
     if name not in REDIS_TOOLS:
         raise ValueError(f"Unsupported Redis tool: {name}")
     return shutil.which(name)
-WEB_TOOLS = {"ab", "curl", "nginx", "openssl"}
+WEB_TOOLS = {"ab", "curl", "h2load", "nginx", "openssl"}
 
 
 def find_postgres_binary(name: str) -> str | None:
@@ -171,6 +171,7 @@ def find_web_binary(name: str) -> str | None:
             "nginx": [Path("/usr/sbin/nginx"), Path("/usr/local/sbin/nginx")],
             "ab": [Path("/usr/bin/ab"), Path("/usr/local/apache2/bin/ab")],
             "curl": [Path("/usr/bin/curl"), Path("/usr/local/bin/curl")],
+            "h2load": [Path("/usr/bin/h2load"), Path("/usr/local/bin/h2load")],
             "openssl": [Path("/usr/bin/openssl"), Path("/usr/local/bin/openssl")],
         }
         candidates.extend(known[name])
@@ -178,7 +179,13 @@ def find_web_binary(name: str) -> str | None:
 
 
 def _web_tool_output(name: str, executable: str) -> str | None:
-    arguments = {"nginx": ["-V"], "ab": ["-V"], "curl": ["--version"], "openssl": ["version"]}
+    arguments = {
+        "nginx": ["-V"],
+        "ab": ["-V"],
+        "curl": ["--version"],
+        "h2load": ["--version"],
+        "openssl": ["version"],
+    }
     if name not in arguments:
         raise ValueError(f"Unsupported web tool: {name}")
     try:
@@ -202,8 +209,26 @@ def web_tool_version(name: str, executable: str) -> str | None:
 
 
 def web_tool_supports(name: str, executable: str, feature: str) -> bool:
-    if (name, feature) not in {("curl", "http2"), ("nginx", "http2")}:
+    if (name, feature) not in {
+        ("curl", "http2"),
+        ("h2load", "request-log"),
+        ("nginx", "http2"),
+    }:
         raise ValueError(f"Unsupported Web capability check: {name}/{feature}")
+    if name == "h2load":
+        try:
+            result = subprocess.run(
+                [executable, "--help"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                check=False,
+                shell=False,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return False
+        output = f"{result.stdout}\n{result.stderr}"
+        return "--log-file" in output and "--max-concurrent-streams" in output
     output = _web_tool_output(name, executable)
     if not output:
         return False

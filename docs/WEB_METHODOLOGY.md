@@ -1,5 +1,9 @@
 # Web, API, and TLS methodology
 
+The separately scheduled multiplexing profile is documented in
+[`HTTP2_LOAD_METHODOLOGY.md`](HTTP2_LOAD_METHODOLOGY.md). It measures HTTP/2
+load and does not change the Quick or Standard ApacheBench contracts below.
+
 CloudMark `web-http-v2` extends the controlled HTTP/TLS service with a bundled
 dynamic application behind Nginx, Linux Generator process-CPU evidence, and a
 fixed HTTP/2 negotiation observation. `web-http-v1` Quick results remain
@@ -95,7 +99,8 @@ steal time. This closes the known load-generator validity gap without treating
 Target saturation as an error.
 
 `web-http-v2` measures only its packaged Python application and an HTTP/1.1
-ApacheBench load path through Nginx. It does not measure HTTP/2 load, a database
+ApacheBench load path through Nginx. HTTP/2 load is measured only by the
+separate `web-http2-load-v1` profile. Web v2 itself does not measure a database
 dependency, HTTP/3, CDN, WAF, autoscaling, global load balancing, public
 certificate operations, or DDoS resilience. Those require separate, explicitly
 versioned evidence.

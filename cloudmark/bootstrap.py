@@ -40,9 +40,9 @@ PACKAGES = {
         "zypper": ["sysbench", "postgresql-server", "postgresql-contrib", "redis", "mariadb", "mariadb-client"],
     },
     "web": {
-        "apt": ["nginx", "apache2-utils", "curl", "openssl"],
-        "dnf": ["nginx", "httpd-tools", "curl", "openssl"],
-        "zypper": ["nginx", "apache2-utils", "curl", "openssl"],
+        "apt": ["nginx", "apache2-utils", "curl", "openssl", "nghttp2-client"],
+        "dnf": ["nginx", "httpd-tools", "curl", "openssl", "nghttp2"],
+        "zypper": ["nginx", "apache2-utils", "curl", "openssl", "nghttp2"],
     },
 }
 

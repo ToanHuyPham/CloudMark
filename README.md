@@ -32,6 +32,7 @@ timestamp, and raw result.
 | Partial | Authenticated Redis GET/SET, value-size/concurrency/pipeline curves, AOF persistence, P50/P95/P99 latency, Generator validity, and cleanup |
 | Partial | Isolated MySQL/MariaDB InnoDB with fixed Sysbench point-select/read-only/write-only/read-write profiles, P99 latency, Generator validity, and verified cleanup |
 | Partial | Guarded two-Agent Web v2 with Nginx, a packaged dynamic reverse-proxy application, Generator CPU validity, HTTP/TLS tail latency, static transfer, and HTTP/2 negotiation |
+| Partial | HTTP/2 multiplexed dynamic load with fixed h2load connection/stream shapes, exact request-log P50/P95/P99, Generator validity, and cleanup |
 | Available | Target-scoped, versioned Essential/Standard/Demanding workload gates with per-check run provenance and explicit unknown evidence |
 | Available | Exact-cohort repeated-window provider observations with median, P10/P90, best/worst, spread, topology/evidence-class contracts, and guarded comparison eligibility |
 | Available | Immutable, manually dispatched repeated network campaigns with one comparison-eligible window per UTC day |
@@ -163,6 +164,7 @@ Controller is never an iperf3 endpoint.
 - [PostgreSQL checkpoint-isolation methodology](docs/POSTGRES_CHECKPOINT_METHODOLOGY.md)
 - [MySQL/MariaDB methodology](docs/MYSQL_METHODOLOGY.md)
 - [Web, API, and TLS methodology](docs/WEB_METHODOLOGY.md)
+- [HTTP/2 load methodology](docs/HTTP2_LOAD_METHODOLOGY.md)
 - [Workload suitability methodology](docs/SUITABILITY_METHODOLOGY.md)
 - [Safety model](docs/SAFETY.md)
 - [Product roadmap and machine topology matrix](docs/ROADMAP.md)
@@ -178,6 +180,8 @@ the Database/Web v1 Quick contracts. PostgreSQL also includes the separately
 versioned `database-postgresql-recovery-v1` logical backup/restore drill and
 the separate `database-postgresql-checkpoint-v1` forced-checkpoint drill, plus
 the authenticated `database-mysql-v1` MySQL/MariaDB Sysbench OLTP contract.
+The separate `web-http2-load-v1` profile adds bounded HTTP/2 multiplexed load
+without changing the readable Web v1/v2 contracts.
 Compute and memory remain `Partial` until floating-point, crypto, compilation,
 latency, NUMA, and broader architecture coverage are implemented. Network
 remains partial until driver per-queue evidence is normalized across more NICs,
@@ -185,8 +189,8 @@ controlled DNS coverage, cross-pair repeated windows, administrative path verifi
 enrollment are implemented. Database coverage remains partial until checkpoint
 isolation, replication, PITR, cross-zone recovery, and managed-service evidence
 are available.
-Web/API/TLS remains partial until database-backed applications, HTTP/2 load,
-HTTP/3, CDN, WAF, and autoscaling evidence are available.
+Web/API/TLS remains partial until database-backed applications, HTTP/3, CDN,
+WAF, and autoscaling evidence are available.
 The current development head also implements `suitability-v1` target-scoped
 hard gates with exact evidence provenance and `provider-observations-v4`
 topology-, evidence-class-, and database-implementation-aware same-SKU

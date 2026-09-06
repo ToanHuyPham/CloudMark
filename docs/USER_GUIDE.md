@@ -174,8 +174,10 @@ In the dashboard:
   behavior are incomplete.
 - **Web & API Assessment** starts an isolated Nginx service on the Target and
   runs fixed HTTP, HTTPS, connection-churn, JSON, and static-transfer workloads
-  from the Generator. It reports request rate, failures, P50–P99 latency, TLS,
-  transfer, and cleanup evidence while rejecting arbitrary URLs and DDoS load.
+  from the Generator. A separate h2load profile adds fixed HTTP/2 multiplexing
+  shapes and all-request P50/P95/P99 latency. It reports request rate, failures,
+  TLS, transfer, Generator CPU, and cleanup while rejecting arbitrary URLs and
+  DDoS load.
 - **Workload Suitability** maps technical evidence to 12 use cases. Missing
   required metrics return `Insufficient evidence`, not zero.
 - **History** lists locally retained Runs. Dashboard polling uses compact
@@ -232,7 +234,7 @@ This command displays a plan and does not modify the system.
 | `storage` | fio, smartmontools, nvme-cli |
 | `network` | iperf3, ethtool, mtr, DNS tools |
 | `database` | sysbench, PostgreSQL/pgbench, Redis, and MariaDB server/client tools |
-| `web` | Nginx, ApacheBench, curl, and OpenSSL |
+| `web` | Nginx, ApacheBench, curl, OpenSSL, and h2load/nghttp2 client tools |
 
 ## 7. Bootstrap tools
 
@@ -598,6 +600,16 @@ reverse-proxy status, Generator headroom, HTTP/2 negotiation, tool versions,
 comparison validity, and cleanup status. HTTP/2 timing comes from one diagnostic
 request and is not an HTTP/2 throughput benchmark. See
 [`WEB_METHODOLOGY.md`](WEB_METHODOLOGY.md).
+
+Select **HTTP/2 Multiplexed Load** to run the separate
+`web-http2-load-v1` contract. Target requires HTTP/2-capable Nginx; Generator
+requires `h2load`, `h2load_request_log`, and Linux CPU accounting. CloudMark
+runs only the three displayed client/thread/max-stream/request-count shapes
+against the packaged dynamic endpoint. It calculates P50/P95/P99 from every
+bounded h2load request-log row and removes the logs after every terminal path.
+Review zero failed/errored requests, Generator headroom, exact log completeness,
+and Target cleanup before treating the Run as comparable. See
+[`HTTP2_LOAD_METHODOLOGY.md`](HTTP2_LOAD_METHODOLOGY.md).
 
 ## 13. Workload suitability
 

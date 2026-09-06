@@ -191,6 +191,7 @@ def collect_inventory(workspace: Path | None = None) -> dict[str, Any]:
     uname = platform.uname()
     nginx = find_web_binary("nginx")
     curl = find_web_binary("curl")
+    h2load = find_web_binary("h2load")
     pgbench = find_postgres_binary("pgbench")
     mysql_server = find_mysql_binary("server")
     mysql_initializer = find_mysql_binary("initializer")
@@ -250,6 +251,8 @@ def collect_inventory(workspace: Path | None = None) -> dict[str, Any]:
             "ab": find_web_binary("ab") is not None,
             "curl": curl is not None,
             "curl_http2": bool(curl and web_tool_supports("curl", curl, "http2")),
+            "h2load": h2load is not None,
+            "h2load_request_log": bool(h2load and web_tool_supports("h2load", h2load, "request-log")),
             "openssl": find_web_binary("openssl") is not None,
             "procfs_process_cpu": Path("/proc/stat").is_file() and Path("/proc/self/stat").is_file(),
             "sysbench": shutil.which("sysbench") is not None,

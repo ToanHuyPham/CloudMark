@@ -468,3 +468,22 @@ profile avoids silently lengthening Standard, makes the storage-heavy action
 operator-controlled, supports both PostgreSQL statistics schemas, and prevents
 the measurement from being mislabeled as transaction tail latency, crash
 recovery, PITR, or power-loss testing.
+
+## D-033: HTTP/2 load requires fixed multiplexing and complete request logs
+
+**Decision:** Add `web-http2-load-v1` as a separately scheduled two-Agent
+profile. The existing packaged dynamic application remains loopback-only behind
+HTTP/2-capable Nginx on the Target. The Generator accepts exactly three h2load
+client/native-thread/max-stream/request-count shapes over HTTPS to the fixed
+dynamic path. Every request is logged beneath a generated Agent workspace;
+CloudMark reads at most 8 MiB and 25,000 rows, calculates nearest-rank
+P50/P95/P99/maximum, and verifies log removal. Zero failed/errored requests,
+complete logs, Generator CPU normalized by declared native-thread capacity,
+host CPU headroom, reverse-proxy evidence, and Target cleanup are comparison
+gates.
+
+**Reason:** One curl negotiation proves protocol support but not multiplexed
+capacity, while an arbitrary h2load URL or unbounded stream/rate input would be
+unsafe. Fixed connection and stream shapes with complete request-level latency
+evidence make HTTP/2 behavior repeatable without claiming HTTP/3, CDN, WAF,
+autoscaling, public TLS trust, or DDoS resilience.

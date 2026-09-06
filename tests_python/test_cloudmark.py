@@ -95,6 +95,8 @@ from cloudmark.web_benchmark import (
     _web_analysis,
     parse_ab_output,
     parse_curl_protocol_output,
+    parse_h2load_output,
+    parse_h2load_request_log,
     run_web,
     validate_web_run,
     web_total_steps,
@@ -565,6 +567,44 @@ class CloudMarkTests(unittest.TestCase):
                 "database.redis_get_1k_c16_p16_p99_ms",
             },
         )
+
+    def test_provider_observations_extract_http2_load_metrics_without_scoring(self) -> None:
+        completed_at = datetime.now(timezone.utc).isoformat()
+        systems = {
+            "agent_web": {"last_seen_at": completed_at, "system": self._suitability_system("web-target")},
+        }
+        run = {
+            "id": "run_http2_provider",
+            "suite": "web",
+            "profile": "web-peer-http2",
+            "status": "completed",
+            "finished_at": completed_at,
+            "methodology_version": "web-http2-load-v1",
+            "request": {},
+            "result": {
+                "methodology_version": "web-http2-load-v1",
+                "session": {"topology": {"scope": "same-zone", "source": "operator-declared"}},
+                "target": {"id": "agent_web"},
+                "http2_measurements": [{
+                    "name": "h2-dynamic-c8-m16",
+                    "metrics": {
+                        "requests_per_second": 2500.0,
+                        "success_percent": 100.0,
+                        "request_latency": {"latency_percentiles_ms": {"p99": 8.0}},
+                    },
+                }],
+                "cleanup": {"cleanup_verified": True},
+                "analysis": {"validity": {"comparison_eligible": True}},
+            },
+        }
+        report = evaluate_suitability([run], self._suitability_system("controller"), systems.get)
+        metrics = report["provider_observations"]["groups"][0]["metric_cohorts"]
+        values = {item["key"]: item for item in metrics}
+        self.assertEqual(values["web.http2_dynamic_c8_m16_rps"]["statistics"]["median"], 2500.0)
+        self.assertEqual(values["web.http2_dynamic_c8_m16_p99_ms"]["statistics"]["median"], 8.0)
+        self.assertEqual(values["web.http2_dynamic_c8_m16_success_pct"]["statistics"]["median"], 100.0)
+        self.assertTrue(all(item["status"] == "observational" for item in values.values()))
+        self.assertEqual(report["provider_observations"]["rating_status"], "not-rated")
 
     def test_provider_observations_do_not_merge_profiles_or_duplicate_peer_runs(self) -> None:
         completed_at = datetime.now(timezone.utc).isoformat()
@@ -4123,6 +4163,124 @@ Percentage of the requests served within a certain time (ms)
         self.assertEqual(metrics["connection_times"]["connect"]["max_ms"], 10.0)
         self.assertEqual(metrics["tls"]["protocol"], "TLSv1.2")
 
+    def test_h2load_parser_preserves_multiplexed_summary_and_exact_tail_log(self) -> None:
+        request_log = parse_h2load_request_log(
+            "1000\t200\t1000\n2000\t200\t2000\n3000\t200\t3000\n4000\t200\t4000\n5000\t200\t5000\n",
+            expected_requests=5,
+        )
+        output = """
+finished in 50.00ms, 100.00 req/s, 1.50MB/s
+requests: 5 total, 5 started, 5 done, 5 succeeded, 0 failed, 0 errored, 0 timeout
+status codes: 5 2xx, 0 3xx, 0 4xx, 0 5xx
+traffic: 81920 bytes total, 1024 bytes headers (space savings 80.00%), 76800 bytes data
+"""
+        metrics = parse_h2load_output(output, request_log, expected_requests=5)
+        self.assertEqual(metrics["protocol"], "h2")
+        self.assertEqual(metrics["requests_per_second"], 100.0)
+        self.assertEqual(metrics["request_latency"]["latency_percentiles_ms"]["p50"], 3.0)
+        self.assertEqual(metrics["request_latency"]["latency_percentiles_ms"]["p99"], 5.0)
+        self.assertEqual(metrics["transfer_bytes_per_second"], 1.5 * 1024**2)
+        partial = parse_h2load_request_log("1000\t200\t1000\n", expected_requests=2)
+        self.assertEqual(partial["status"], "partial")
+
+    def test_agent_h2load_is_fixed_bounded_and_cleans_request_logs(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            worker = AgentWorker(
+                "http://127.0.0.1:8787",
+                "agent",
+                "token",
+                workspace=Path(directory) / "agent",
+            )
+            output = """
+finished in 2.00s, 1000.00 req/s, 1.00MB/s
+requests: 2000 total, 2000 started, 2000 done, 2000 succeeded, 0 failed, 0 errored, 0 timeout
+status codes: 2000 2xx, 0 3xx, 0 4xx, 0 5xx
+traffic: 2048000 bytes total, 128000 bytes headers (space savings 75.00%), 2048000 bytes data
+"""
+
+            def guarded(_task_id, command, **kwargs):
+                log_argument = next(item for item in command if item.startswith("--log-file="))
+                log_path = Path(log_argument.split("=", 1)[1])
+                log_path.write_text("".join(f"{index}\t200\t1000\n" for index in range(2000)), encoding="utf-8")
+                kwargs["cpu_samples"].append({
+                    "process_cpu_percent_of_one_core": 35.0,
+                    "host_utilization_percent": 25.0,
+                    "host_steal_percent": 0.0,
+                })
+                return 0, output, ""
+
+            with patch("cloudmark.agent.find_web_binary", return_value="h2load"), patch(
+                "cloudmark.agent.web_tool_supports", return_value=True
+            ), patch("cloudmark.agent.web_tool_version", return_value="h2load nghttp2/1.52.0"), patch.object(
+                worker, "_guarded_service_process", side_effect=guarded
+            ) as process:
+                result = worker._run_http2_client(
+                    "task_h2load123",
+                    {
+                        "target_address": "10.0.0.10",
+                        "scheme": "https",
+                        "port": 58443,
+                        "path": "/api/v2/dynamic",
+                        "clients": 1,
+                        "threads": 1,
+                        "streams": 1,
+                        "requests": 2000,
+                        "methodology_version": "web-http2-load-v1",
+                        "run_completed_steps": 1,
+                        "run_total_steps": 5,
+                    },
+                )
+            command = process.call_args.args[1]
+            self.assertIn("--max-concurrent-streams=1", command)
+            self.assertIn("--requests=2000", command)
+            self.assertTrue(result["h2load"]["client_log_cleanup_verified"])
+            self.assertEqual(result["h2load"]["metrics"]["request_latency"]["status"], "complete")
+            self.assertFalse((worker.workspace / "h2load-logs" / "task_h2load123").exists())
+            with self.assertRaisesRegex(WebBenchmarkError, "outside the profile"):
+                worker._run_http2_client(
+                    "task_h2loadbad",
+                    {
+                        "target_address": "10.0.0.10",
+                        "scheme": "https",
+                        "port": 58443,
+                        "path": "/api/v2/dynamic",
+                        "clients": 2,
+                        "threads": 1,
+                        "streams": 100,
+                        "requests": 2000,
+                        "methodology_version": "web-http2-load-v1",
+                        "run_completed_steps": 1,
+                        "run_total_steps": 5,
+                    },
+                )
+
+            def failing_guarded(_task_id, command, **_kwargs):
+                log_argument = next(item for item in command if item.startswith("--log-file="))
+                Path(log_argument.split("=", 1)[1]).write_text("1\t-1\t1000\n", encoding="utf-8")
+                return 1, "", "simulated h2load failure"
+
+            with patch("cloudmark.agent.find_web_binary", return_value="h2load"), patch(
+                "cloudmark.agent.web_tool_supports", return_value=True
+            ), patch.object(worker, "_guarded_service_process", side_effect=failing_guarded):
+                with self.assertRaisesRegex(WebBenchmarkError, "simulated h2load failure"):
+                    worker._run_http2_client(
+                        "task_h2loadfail",
+                        {
+                            "target_address": "10.0.0.10",
+                            "scheme": "https",
+                            "port": 58443,
+                            "path": "/api/v2/dynamic",
+                            "clients": 1,
+                            "threads": 1,
+                            "streams": 1,
+                            "requests": 2000,
+                            "methodology_version": "web-http2-load-v1",
+                            "run_completed_steps": 1,
+                            "run_total_steps": 5,
+                        },
+                    )
+            self.assertFalse((worker.workspace / "h2load-logs" / "task_h2loadfail").exists())
+
     def test_web_v2_fixture_builds_stable_valid_dynamic_json(self) -> None:
         first = build_dynamic_payload()
         second = build_dynamic_payload()
@@ -4153,11 +4311,17 @@ Percentage of the requests served within a certain time (ms)
                 stdout="",
                 stderr="nginx version: nginx/1.24\nconfigure arguments: --with-http_v2_module\n",
             ),
+            SimpleNamespace(
+                returncode=0,
+                stdout="--log-file=<PATH> --max-concurrent-streams=<N>\n",
+                stderr="",
+            ),
             SimpleNamespace(returncode=0, stdout="curl 8.0\nFeatures: IPv6 SSL\n", stderr=""),
         ]
         with patch("cloudmark.tooling.subprocess.run", side_effect=responses):
             self.assertTrue(web_tool_supports("curl", "curl", "http2"))
             self.assertTrue(web_tool_supports("nginx", "nginx", "http2"))
+            self.assertTrue(web_tool_supports("h2load", "h2load", "request-log"))
             self.assertFalse(web_tool_supports("curl", "curl", "http2"))
 
     def test_web_v2_generator_cpu_evidence_uses_process_and_host_intervals(self) -> None:
@@ -4346,6 +4510,48 @@ Percentage of the requests served within a certain time (ms)
         adequate = _web_analysis(result)
         self.assertEqual(adequate["generator_headroom"]["status"], "adequate")
         self.assertTrue(adequate["validity"]["comparison_eligible"])
+
+    def test_http2_analysis_normalizes_process_cpu_by_declared_native_threads(self) -> None:
+        measurement = {
+            "name": "h2-dynamic-c8-m16",
+            "path": "/api/v2/dynamic",
+            "threads": 2,
+            "metrics": {
+                "protocol": "h2",
+                "request_failed": 0,
+                "request_errored": 0,
+                "success_percent": 100.0,
+                "request_latency": {"status": "complete"},
+            },
+            "generator_cpu": {
+                "status": "observed",
+                "peak_process_cpu_percent_of_one_core": 160.0,
+                "peak_host_utilization_percent": 80.0,
+            },
+            "client_log_cleanup_verified": True,
+        }
+        result = {
+            "methodology_version": "web-http2-load-v1",
+            "server": {
+                "application": {
+                    "status": "observed",
+                    "runtime": "python-standard-library",
+                    "reverse_proxy": True,
+                }
+            },
+            "http2_measurements": [measurement],
+            "cleanup": {"cleanup_verified": True},
+        }
+        analysis = _web_analysis(result)
+        self.assertEqual(
+            analysis["generator_headroom"]["peak_process_cpu_percent_of_declared_thread_capacity"],
+            80.0,
+        )
+        self.assertTrue(analysis["validity"]["comparison_eligible"])
+        measurement["generator_cpu"]["peak_process_cpu_percent_of_one_core"] = 180.0
+        constrained = _web_analysis(result)
+        self.assertEqual(constrained["generator_headroom"]["status"], "constrained")
+        self.assertFalse(constrained["validity"]["comparison_eligible"])
 
     def test_agent_refuses_web_cleanup_outside_its_workspace(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -4636,6 +4842,106 @@ Percentage of the requests served within a certain time (ms)
             self.assertTrue(result["analysis"]["validity"]["comparison_eligible"])
             self.assertTrue(result["cleanup"]["cleanup_verified"])
 
+    def test_http2_load_orchestrator_requires_exact_logs_headroom_and_cleanup(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            database = Database(Path(directory) / "test.sqlite3")
+            database.create_session("session_h2", "http2", "hash", "2099-01-01T00:00:00+00:00")
+            database.add_agent(
+                "h2_target",
+                "session_h2",
+                "target",
+                "target",
+                {"inventory": {"capabilities": {"nginx": True, "openssl": True, "nginx_http2": True}}},
+                endpoint={"address": "10.0.0.10"},
+            )
+            database.add_agent(
+                "h2_generator",
+                "session_h2",
+                "generator",
+                "generator",
+                {"inventory": {"capabilities": {
+                    "h2load": True,
+                    "h2load_request_log": True,
+                    "procfs_process_cpu": True,
+                }}},
+                endpoint={"address": "10.0.0.11"},
+            )
+            total_steps = web_total_steps("web-peer-http2")
+            database.create_run(
+                "run_h2", "web", "web-peer-http2", {"suite": "web"}, total_steps=total_steps
+            )
+            done = threading.Event()
+
+            def complete_tasks() -> None:
+                while not done.is_set():
+                    handled = False
+                    for agent_id in ("h2_target", "h2_generator"):
+                        task = database.claim_agent_task(agent_id)
+                        if not task:
+                            continue
+                        handled = True
+                        if task["kind"] == "web-service-start":
+                            value = {
+                                "ready": True,
+                                "engine": "nginx",
+                                "application": {
+                                    "status": "observed",
+                                    "runtime": "python-standard-library",
+                                    "reverse_proxy": True,
+                                },
+                            }
+                        elif task["kind"] == "web-http2-client":
+                            value = {"h2load": {
+                                "scheme": "https",
+                                "path": task["payload"]["path"],
+                                "clients": task["payload"]["clients"],
+                                "threads": task["payload"]["threads"],
+                                "streams": task["payload"]["streams"],
+                                "requests": task["payload"]["requests"],
+                                "metrics": {
+                                    "protocol": "h2",
+                                    "request_failed": 0,
+                                    "request_errored": 0,
+                                    "success_percent": 100.0,
+                                    "requests_per_second": 2500.0,
+                                    "request_latency": {
+                                        "status": "complete",
+                                        "latency_percentiles_ms": {"p50": 2.0, "p95": 5.0, "p99": 8.0},
+                                    },
+                                },
+                                "generator_cpu": {
+                                    "status": "observed",
+                                    "peak_process_cpu_percent_of_one_core": 50.0,
+                                    "peak_host_utilization_percent": 40.0,
+                                },
+                                "client_log_cleanup_verified": True,
+                            }}
+                        else:
+                            value = {"status": "completed", "cleanup_verified": True}
+                        database.finish_agent_task(task["id"], agent_id, status="completed", result=value)
+                    if not handled:
+                        time.sleep(0.005)
+
+            worker = threading.Thread(target=complete_tasks, daemon=True)
+            worker.start()
+            try:
+                result = run_web(
+                    database,
+                    "run_h2",
+                    "session_h2",
+                    "web-peer-http2",
+                    context=JobContext("run_h2", total_steps=total_steps, timeout_seconds=30),
+                )
+            finally:
+                done.set()
+                worker.join(timeout=2)
+            self.assertEqual(total_steps, 5)
+            self.assertEqual(len(result["http2_measurements"]), 3)
+            self.assertTrue(result["policy"]["http2_performance_measured"])
+            self.assertEqual(result["analysis"]["http2_load"]["status"], "complete")
+            self.assertTrue(result["analysis"]["validity"]["comparison_eligible"])
+            self.assertTrue(result["cleanup"]["cleanup_verified"])
+
     def test_web_orchestrator_schedules_cleanup_after_client_failure(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             database = Database(Path(directory) / "test.sqlite3")
@@ -4723,6 +5029,40 @@ Percentage of the requests served within a certain time (ms)
             self.assertEqual(stored["total_steps"], 7)
             self.assertEqual(stored["methodology_version"], "web-http-v1")
             self.assertEqual(stored["tool_version"], "nginx/apachebench-agent")
+
+    def test_controller_admits_only_capable_confirmed_http2_load_runs(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            controller = CloudMarkController(Path(directory))
+            controller.database.create_session("session_h2", "http2", "hash", "2099-01-01T00:00:00+00:00")
+            controller.database.add_agent(
+                "h2_target",
+                "session_h2",
+                "target",
+                "target",
+                {"inventory": {"capabilities": {"nginx": True, "openssl": True, "nginx_http2": True}}},
+                endpoint={"address": "10.0.0.10"},
+            )
+            controller.database.add_agent(
+                "h2_generator",
+                "session_h2",
+                "generator",
+                "generator",
+                {"inventory": {"capabilities": {
+                    "h2load": True,
+                    "h2load_request_log": True,
+                    "procfs_process_cpu": True,
+                }}},
+                endpoint={"address": "10.0.0.11"},
+            )
+            request = {"suite": "web", "profile": "web-peer-http2", "session_id": "session_h2"}
+            with self.assertRaisesRegex(ValueError, "confirm_web_load"):
+                controller.submit_run(request)
+            with patch.object(controller, "_execute_run"):
+                run = controller.submit_run({**request, "confirm_web_load": True})
+            stored = controller.database.get_run(run["id"])
+            self.assertEqual(stored["total_steps"], 5)
+            self.assertEqual(stored["methodology_version"], "web-http2-load-v1")
+            self.assertEqual(stored["tool_version"], "nginx/python-app/h2load-agent")
 
     def test_scenario_coverage_does_not_overstate_executors(self) -> None:
         statuses = {scenario["id"]: scenario["status"] for scenario in SCENARIOS}
@@ -4825,15 +5165,21 @@ Percentage of the requests served within a certain time (ms)
         self.assertIn("apache2-utils", plan.packages)
         self.assertIn("curl", plan.packages)
         self.assertIn("openssl", plan.packages)
+        self.assertIn("nghttp2-client", plan.packages)
 
     def test_web_profiles_are_versioned_and_bounded(self) -> None:
         self.assertEqual(web_total_steps("web-peer-quick"), 7)
         self.assertEqual(web_total_steps("web-peer-standard"), 15)
+        self.assertEqual(web_total_steps("web-peer-http2"), 5)
         self.assertEqual(WEB_PROFILES["web-peer-quick"]["methodology_version"], "web-http-v1")
         self.assertEqual(WEB_PROFILES["web-peer-standard"]["methodology_version"], "web-http-v2")
         self.assertEqual(WEB_PROFILES["web-peer-standard"]["profile_version"], "2.0")
+        self.assertEqual(WEB_PROFILES["web-peer-http2"]["methodology_version"], "web-http2-load-v1")
         self.assertEqual(len(WEB_PROFILES["web-peer-standard"]["protocol_probes"]), 1)
         for profile in WEB_PROFILES.values():
+            if profile["methodology_version"] == "web-http2-load-v1":
+                self.assertTrue(all(job["requests"] <= 20_000 and job["streams"] <= 32 for job in profile["jobs"]))
+                continue
             self.assertTrue(all(job["duration"] <= 60 for job in profile["jobs"]))
             self.assertTrue(all(job["concurrency"] <= 64 for job in profile["jobs"]))
 
@@ -5130,6 +5476,7 @@ max: 1.50
                 self.assertIn("postgres-peer-checkpoint", dashboard["profiles"]["database"])
                 self.assertIn("mysql-peer-standard", dashboard["profiles"]["database"])
                 self.assertIn("web-peer-quick", dashboard["profiles"]["web"])
+                self.assertIn("web-peer-http2", dashboard["profiles"]["web"])
                 self.assertIn("sessions", dashboard)
                 self.assertEqual(dashboard["network_campaigns"], [])
                 self.assertEqual(dashboard["suitability"]["engine_version"], "suitability-v1")

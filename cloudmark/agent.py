@@ -67,11 +67,14 @@ from .tooling import (
     find_web_binary,
     mysql_tool_supports,
     tool_version,
+    web_tool_supports,
     web_tool_version,
 )
 from .mysql_benchmark import MYSQL_PORT, MySQLBenchmarkError, parse_sysbench_mysql_output
 from .redis_benchmark import REDIS_PORT, RedisBenchmarkError, parse_redis_benchmark_csv
 from .web_benchmark import (
+    H2LOAD_LOG_MAX_BYTES,
+    H2LOAD_LOG_MAX_ROWS,
     WEB_ALLOWED_CONCURRENCY,
     WEB_ALLOWED_PATHS,
     WEB_ALLOWED_PORTS,
@@ -84,6 +87,8 @@ from .web_benchmark import (
     WebBenchmarkError,
     parse_ab_output,
     parse_curl_protocol_output,
+    parse_h2load_output,
+    parse_h2load_request_log,
 )
 from .web_fixture import WEB_FIXTURE_BIND, WEB_FIXTURE_DYNAMIC_PATH
 
@@ -3187,6 +3192,30 @@ class AgentWorker:
             shutil.rmtree(resolved)
         return not resolved.exists()
 
+    def _h2load_log_root(self, task_id: str) -> Path:
+        if not task_id.startswith("task_") or not task_id.removeprefix("task_").isalnum():
+            raise WebBenchmarkError("h2load task ID is invalid.")
+        base = (self.workspace / "h2load-logs").resolve()
+        root = (base / task_id).resolve()
+        try:
+            root.relative_to(base)
+        except ValueError as exc:
+            raise WebBenchmarkError("h2load log path escaped the Agent workspace.") from exc
+        return root
+
+    def _remove_h2load_log_root(self, root: Path) -> bool:
+        base = (self.workspace / "h2load-logs").resolve()
+        resolved = root.resolve()
+        try:
+            relative = resolved.relative_to(base)
+        except ValueError as exc:
+            raise WebBenchmarkError("Agent refused cleanup outside its h2load workspace.") from exc
+        if not relative.parts:
+            raise WebBenchmarkError("Agent refused cleanup of the h2load workspace root.")
+        if resolved.exists():
+            shutil.rmtree(resolved)
+        return not resolved.exists()
+
     def _stop_web_server(self, server_task_id: str) -> dict[str, Any]:
         active = self.active_web_servers.get(server_task_id)
         if not active:
@@ -3268,7 +3297,7 @@ class AgentWorker:
         http_port = self._web_port(payload.get("http_port"))
         https_port = self._web_port(payload.get("https_port"))
         methodology_version = str(payload.get("methodology_version") or "web-http-v1")
-        if methodology_version not in {"web-http-v1", "web-http-v2"}:
+        if methodology_version not in {"web-http-v1", "web-http-v2", "web-http2-load-v1"}:
             raise WebBenchmarkError("Web service methodology is outside the installed contract.")
         if http_port != WEB_HTTP_PORT or https_port != WEB_HTTPS_PORT:
             raise WebBenchmarkError("Web service ports do not match the methodology contract.")
@@ -3365,7 +3394,7 @@ class AgentWorker:
                 )
 
             listen_host = f"[{listen_address}]" if parsed_listen.version == 6 else listen_address
-            v2_enabled = methodology_version == "web-http-v2"
+            v2_enabled = methodology_version in {"web-http-v2", "web-http2-load-v1"}
             upstream_config = (
                 "  upstream cloudmark_dynamic_app {\n"
                 f"    server {WEB_FIXTURE_BIND}:{WEB_APP_PORT};\n"
@@ -3681,6 +3710,108 @@ class AgentWorker:
             }
         }
 
+    def _run_http2_client(self, task_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+        address = str(payload.get("target_address", ""))
+        parsed_address = self._peer_address(address)
+        if str(payload.get("methodology_version", "")) != "web-http2-load-v1":
+            raise WebBenchmarkError("h2load methodology is outside the installed contract.")
+        if str(payload.get("scheme", "")) != "https":
+            raise WebBenchmarkError("h2load permits only HTTPS in this methodology.")
+        port = self._web_port(payload.get("port"))
+        path = str(payload.get("path", ""))
+        if port != WEB_HTTPS_PORT or path != WEB_FIXTURE_DYNAMIC_PATH:
+            raise WebBenchmarkError("h2load target is outside the fixed HTTPS dynamic contract.")
+        clients = int(payload.get("clients", 0))
+        threads = int(payload.get("threads", 0))
+        streams = int(payload.get("streams", 0))
+        requests = int(payload.get("requests", 0))
+        allowed_shapes = {
+            (1, 1, 1, 2_000),
+            (8, 2, 16, 10_000),
+            (32, 4, 32, 20_000),
+        }
+        if (clients, threads, streams, requests) not in allowed_shapes:
+            raise WebBenchmarkError("h2load connection, thread, stream, or request shape is outside the profile.")
+        completed_steps = int(payload.get("run_completed_steps", -1))
+        total_steps = int(payload.get("run_total_steps", 0))
+        if not 0 <= completed_steps < total_steps <= 64:
+            raise WebBenchmarkError("h2load progress metadata is invalid.")
+        h2load = self._web_tool("h2load")
+        if not web_tool_supports("h2load", h2load, "request-log"):
+            raise WebBenchmarkError("h2load lacks the required bounded per-request log support.")
+        log_root = self._h2load_log_root(task_id)
+        if log_root.exists():
+            raise WebBenchmarkError("h2load found a residual request-log directory.")
+        log_root.parent.mkdir(parents=True, exist_ok=True)
+        disk = shutil.disk_usage(log_root.parent)
+        reserve = max(512 * 1024 * 1024, int(disk.total * 0.05))
+        if disk.free < reserve + H2LOAD_LOG_MAX_BYTES:
+            raise WebBenchmarkError("Insufficient free space for bounded h2load logs and reserve.")
+        log_root.mkdir(exist_ok=False)
+        request_log_path = log_root / "requests.tsv"
+        host = f"[{address}]" if parsed_address.version == 6 else address
+        url = f"https://{host}:{port}{path}"
+        command = [
+            h2load,
+            f"--requests={requests}",
+            f"--clients={clients}",
+            f"--threads={threads}",
+            f"--max-concurrent-streams={streams}",
+            f"--log-file={request_log_path}",
+            url,
+        ]
+        cpu_samples: list[dict[str, float]] = []
+        environment = {**os.environ, "LC_ALL": "C"}
+        request_log: dict[str, Any] = {
+            "status": "unavailable",
+            "reason": "The h2load request log was not parsed.",
+        }
+        client_log_cleanup_verified = False
+        try:
+            code, stdout, stderr = self._guarded_service_process(
+                task_id,
+                command,
+                environment=environment,
+                expected_duration=90,
+                phase="measuring-http2",
+                current_job=path,
+                completed_steps=completed_steps,
+                total_steps=total_steps,
+                cpu_samples=cpu_samples,
+            )
+            if request_log_path.is_file():
+                with request_log_path.open("rb") as handle:
+                    raw = handle.read(H2LOAD_LOG_MAX_BYTES + 1)
+            else:
+                raw = b""
+            truncated = len(raw) > H2LOAD_LOG_MAX_BYTES
+            request_log = parse_h2load_request_log(
+                raw[:H2LOAD_LOG_MAX_BYTES].decode("utf-8", errors="replace"),
+                expected_requests=requests,
+                truncated=truncated,
+            )
+        finally:
+            client_log_cleanup_verified = self._remove_h2load_log_root(log_root)
+        if code != 0:
+            raise WebBenchmarkError(stderr.strip() or stdout.strip() or "h2load workload failed.")
+        metrics = parse_h2load_output(stdout, request_log, expected_requests=requests)
+        return {
+            "h2load": {
+                "scheme": "https",
+                "path": path,
+                "clients": clients,
+                "threads": threads,
+                "streams": streams,
+                "requests": requests,
+                "methodology_version": "web-http2-load-v1",
+                "metrics": metrics,
+                "generator_cpu": _generator_cpu_evidence(cpu_samples),
+                "client_log_cleanup_verified": client_log_cleanup_verified,
+                "tool": {"name": "h2load", "version": web_tool_version("h2load", h2load)},
+                "raw": {"stdout": stdout, "stderr": stderr},
+            }
+        }
+
     def _run_web_protocol_probe(self, task_id: str, payload: dict[str, Any]) -> dict[str, Any]:
         address = str(payload.get("target_address", ""))
         parsed_address = self._peer_address(address)
@@ -3909,6 +4040,8 @@ class AgentWorker:
             return self._start_web_server(str(task["id"]), payload)
         if kind == "web-client":
             return self._run_web_client(str(task["id"]), payload)
+        if kind == "web-http2-client":
+            return self._run_http2_client(str(task["id"]), payload)
         if kind == "web-protocol-probe":
             return self._run_web_protocol_probe(str(task["id"]), payload)
         if kind == "web-service-stop":

@@ -1,6 +1,6 @@
 # CloudMark current state
 
-Last updated: 2026-09-05
+Last updated: 2026-09-06
 
 ## Repository baseline
 
@@ -171,6 +171,16 @@ baseline is still the repository head.
   converted to zero and provider status remains `not-rated`; the milestone
   passes 70 Python tests, 3 rendered-dashboard tests, dashboard lint, and the
   production build without starting provider load;
+- simulation-verified `web-http2-load-v1` as a separate HTTP/2 multiplexing
+  profile against the packaged dynamic reverse-proxy path. Three fixed
+  client/native-thread/max-stream/request-count shapes run through h2load on
+  the Generator. CloudMark parses request/status/error/traffic summaries and a
+  bounded all-request TSV log into nearest-rank P50/P95/P99/maximum latency,
+  then verifies Generator log cleanup. HTTP/2 success, zero failed/errored
+  requests, exact log rows, Generator CPU headroom, reverse-proxy evidence, and
+  Target cleanup are comparison gates. The complete development head passes
+  146 Python tests, 3 rendered-dashboard tests, dashboard lint, and the
+  production build without starting load;
 - `provider-observations-v4` exact provider/SKU/region/OS/topology/evidence-class
   cohorts with strict profile/methodology/topology compatibility, UTC-day
   windows, network Run de-duplication, and database/cache engine implementation
@@ -287,8 +297,9 @@ Controller run: `run_1c572100e8704843`.
 - Web/API/TLS coverage is Partial: fixed static/JSON endpoints, a packaged
   dynamic application behind Nginx, HTTP/HTTPS concurrency, Generator CPU
   validity, connection churn, transfer rate, tail latency, and HTTP/2
-  negotiation are implemented; database-backed applications, HTTP/2 load,
-  HTTP/3, CDN, WAF, autoscaling, and DDoS resilience remain unavailable;
+  negotiation and fixed HTTP/2 multiplexed dynamic load are implemented;
+  database-backed applications, HTTP/3, CDN, WAF, autoscaling, and DDoS
+  resilience remain unavailable;
 - GPU evidence and GPU benchmarks are not complete;
 - scheduled sampling campaigns, cross-pair orchestration, cross-zone analysis,
   timestamped cost,
@@ -305,8 +316,8 @@ Controller run: `run_1c572100e8704843`.
    authoritative/cache-cold/DNSSEC resolver coverage, unattended campaign
    scheduling, and Windows route parity
    before promoting the network domain from Partial.
-2. Add database-backed Web applications, HTTP/2 load, HTTP/3, reverse-proxy
-   variants, compression, CDN, WAF, and autoscaling evidence.
+2. Add database-backed Web applications, HTTP/3, reverse-proxy variants,
+   compression, CDN, WAF, and autoscaling evidence.
 3. Extend database coverage with MySQL/MariaDB checkpoint isolation,
    physical/PITR backup, replication, cross-zone recovery, binary-log/
    replication overhead, and RPO/RTO evidence.

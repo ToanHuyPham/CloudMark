@@ -88,6 +88,12 @@ The script stops only PIDs recorded by `start-local.ps1` and validates their
 command lines before termination. It does not stop an unrelated process merely
 because that process uses a familiar executable name.
 
+If Windows has reused a recorded PID, the stop script refuses to terminate the
+mismatched process. Verify that both recorded CloudMark command lines are gone
+and that their recorded ports are not listening, then move
+`.tmp/local/processes.json` to a timestamped `processes.stale-*.json` file and
+run the launcher again. Never kill the mismatched PID to recover CloudMark.
+
 ## 8. Runtime backup
 
 Evidence-only snapshot:
@@ -209,6 +215,14 @@ Linux procfs CPU accounting on the Generator. Verify `comparison_eligible` and
 `cleanup_verified`. An HTTP/2 observation proves negotiation only and must not
 be interpreted as HTTP/2 throughput.
 
+For `HTTP/2 Multiplexed Load`, the Target requires HTTP/2-capable Nginx and the
+Generator requires `h2load`, request-log support, and Linux procfs CPU
+accounting. Keep TCP `58443` restricted to the paired Generator. Review each
+connection/stream shape, request success/error counts, P50/P95/P99 from the
+exact request log, Generator CPU, request-log cleanup, and Target cleanup.
+This profile measures HTTP/2 load but remains unrelated to HTTP/3, CDN, WAF,
+autoscaling, public TLS trust, or DDoS resilience.
+
 ## 11. Troubleshooting
 
 ### API is offline
@@ -304,6 +318,8 @@ directory, or any directory still used by a server process.
   `nginx_http2`;
 - verify the Generator reports `ab`; Standard also requires `curl_http2` and
   `procfs_process_cpu`;
+- for HTTP/2 Multiplexed Load, verify the Generator reports `h2load`,
+  `h2load_request_log`, and `procfs_process_cpu` instead of ApacheBench;
 - restart each Agent after installing the web pack so inventory refreshes;
 - verify TCP `58080` and `58443` are reachable only between the paired Agents;
 - run the Target Agent as a non-root account;

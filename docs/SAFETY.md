@@ -220,6 +220,15 @@ systems.
 - The HTTP/2 observation uses fixed HTTPS, Target address, port 58443, dynamic
   path, TLS 1.2, ten-second deadline, and curl arguments. It is one diagnostic
   request and never becomes an HTTP/2 throughput or capacity claim.
+- HTTP/2 load is a separate explicit profile. h2load accepts only the paired
+  Target, HTTPS, TCP 58443, the packaged dynamic path, and three fixed
+  client/thread/max-stream/request-count shapes. Arbitrary URLs, headers,
+  bodies, rates, and timing scripts are refused.
+- h2load per-request logs are generated only below `h2load-logs/task_*`, read
+  up to 8 MiB and 25,000 rows, and removed after success, failure, timeout,
+  cancellation, or parser error. Incomplete/truncated logs, any failed or
+  errored request, missing Generator CPU, or unverified cleanup makes the Run
+  comparison-ineligible.
 - The per-run certificate and key are ephemeral. The self-signed certificate
   measures TLS handling and does not claim public trust-chain quality.
 - Arbitrary URLs and DDoS traffic are not supported. ApacheBench jobs are

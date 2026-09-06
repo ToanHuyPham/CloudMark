@@ -62,6 +62,8 @@ test("keeps production metadata and project policy explicit", async () => {
   assert.match(page, /DYNAMIC REVERSE PROXY/);
   assert.match(page, /HTTP\/2 NEGOTIATION/);
   assert.match(page, /web-http-v2/i);
+  assert.match(page, /web-http2-load-v1/i);
+  assert.match(page, /HTTP\/2 LOAD VALIDITY/);
   assert.match(page, /TRANSACTION TAIL LATENCY/);
   assert.match(page, /database-postgresql-v2/i);
   assert.match(page, /LOGICAL BACKUP &amp; RESTORE/);
@@ -107,6 +109,7 @@ test("keeps public product copy English-only", async () => {
     "../docs/POSTGRES_CHECKPOINT_METHODOLOGY.md",
     "../docs/MYSQL_METHODOLOGY.md",
     "../docs/WEB_METHODOLOGY.md",
+    "../docs/HTTP2_LOAD_METHODOLOGY.md",
     "../docs/SUITABILITY_METHODOLOGY.md",
     "../docs/REMOTE_EXECUTION.md",
     "../docs/ROADMAP.md",

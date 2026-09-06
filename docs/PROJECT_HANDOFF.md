@@ -87,7 +87,9 @@ with P99 latency and Generator validity evidence. The second paired service exec
 isolated Nginx HTTP/TLS service on Agent A and runs fixed ApacheBench workloads
 from Agent B. Its Standard Web v2 contract adds a packaged loopback-only Python
 application behind Nginx, Generator CPU-headroom validation, and fixed HTTP/2
-negotiation evidence. Both service lifecycles use Target-owned watchdogs and
+negotiation evidence. A separate HTTP/2 load profile uses fixed h2load
+connection/stream shapes and bounded all-request latency logs against that
+dynamic path. Both service lifecycles use Target-owned watchdogs and
 verified ephemeral cleanup; the Controller never carries benchmark traffic.
 Secret-bearing future service executors use a bounded Controller-memory task
 secret channel. SQLite, runtime snapshots, read models, and Git never contain

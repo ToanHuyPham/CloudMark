@@ -373,6 +373,22 @@ WEB_PROFILES: dict[str, dict[str, Any]] = {
             {"name": "https-dynamic-http2-negotiation", "scheme": "https", "path": "/api/v2/dynamic"},
         ],
     },
+    "web-peer-http2": {
+        "label": "HTTP/2 Multiplexed Load",
+        "description": "Fixed HTTPS/HTTP2 dynamic workloads with connection and stream scaling, exact request-log P50/P95/P99, Generator CPU validity, and cleanup.",
+        "estimated_minutes": 7,
+        "requires_agents": 2,
+        "engine": "nginx-http2",
+        "http_port": 58080,
+        "https_port": 58443,
+        "profile_version": "1.0",
+        "methodology_version": "web-http2-load-v1",
+        "jobs": [
+            {"name": "h2-dynamic-c1-m1", "scheme": "https", "path": "/api/v2/dynamic", "clients": 1, "threads": 1, "streams": 1, "requests": 2_000},
+            {"name": "h2-dynamic-c8-m16", "scheme": "https", "path": "/api/v2/dynamic", "clients": 8, "threads": 2, "streams": 16, "requests": 10_000},
+            {"name": "h2-dynamic-c32-m32", "scheme": "https", "path": "/api/v2/dynamic", "clients": 32, "threads": 4, "streams": 32, "requests": 20_000},
+        ],
+    },
 }
 
 

@@ -279,7 +279,7 @@ online Generator with `ab`. Standard Web v2 additionally requires Target
 `nginx_http2` and Generator `curl_http2` plus `procfs_process_cpu` capabilities.
 `confirm_web_load` is mandatory because the run
 creates a temporary service and generates bounded HTTP/TLS load. Supported
-profiles are `web-peer-quick` and `web-peer-standard`. The result contains
+profiles are `web-peer-quick`, `web-peer-standard`, and `web-peer-http2`. The result contains
 `web_measurements`, request/error counts, throughput, P50/P90/P95/P99/maximum
 latency, transfer evidence, TLS protocol/cipher evidence, tool versions,
 Generator process/host CPU headroom, dynamic reverse-proxy evidence, one fixed
@@ -288,6 +288,15 @@ target/generator identity, and cleanup status. Only the fixed Target address,
 ports 58080/58443, and CloudMark endpoints are accepted; the dynamic
 application binds only Target loopback port 58081 and traffic never
 traverses the Controller.
+
+`web-peer-http2` uses the same endpoint and confirmation flag with methodology
+`web-http2-load-v1`. It requires `nginx_http2` on Target and `h2load`,
+`h2load_request_log`, and Linux CPU accounting on Generator. The result adds
+`http2_measurements` with fixed clients/native threads/max streams/request
+counts, request/status/error totals, throughput, transfer bytes, exact-log
+P50/P95/P99/maximum latency, Generator CPU, log cleanup, and service cleanup.
+The API cannot provide a URL, header, body, timing script, rate, or workload
+shape.
 
 ## Cancel a run
 
