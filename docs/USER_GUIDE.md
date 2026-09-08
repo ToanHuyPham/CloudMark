@@ -164,7 +164,7 @@ In the dashboard:
   guest-visible RSS/RPS/XPS/MSI IRQ affinity, and TCP-control evidence. Manual
   repeated UTC-day campaigns are available.
   Network remains `Partial` because cross-pair automation, physical-fabric
-  verification, wider vendor queue normalization, administrative public-path
+  verification, additional vendor queue normalization, administrative public-path
   classification, and mTLS enrollment are incomplete.
 - **Database Assessment** uses the same paired Agents for isolated PostgreSQL,
   MySQL/MariaDB, and Redis services. Fixed pgbench, Sysbench OLTP, and
@@ -448,10 +448,13 @@ when exposed by `tracepath`. These are fixed read-only queries against the
 route-derived interface. Counter deltas cover all traffic on that interface
 during the Run, so CloudMark reports this scope explicitly. Observed drops and
 errors remain evidence; they do not make a poor result disappear. Network v9
-also records bounded common driver per-queue counters from `ethtool -S`, showing
-active queue distribution and busiest-queue share when supported. Those names
-vary by NIC, so missing per-queue evidence remains observational rather than a
-failure. At the pre-load boundary, each Agent also records bounded resolver
+also records bounded common driver per-queue counters from `ethtool -S`. The
+versioned normalizer covers common ENA/virtio/netvsc/mlx5 forms, MANA indexed
+names, gVNIC bracketed byte/drop names, and vmxnet3 sectioned queues. It shows
+active queue distribution and busiest-queue share by packets and, when only
+those fields exist, by bytes. Driver names still vary, so missing per-queue
+evidence remains observational rather than a failure. At the pre-load boundary,
+each Agent also records bounded resolver
 configuration and, when `dig` is present, one A and one AAAA result for the
 fixed `example.com.` name. Search-domain names and answer addresses are not
 persisted. Cache state and upstream ownership remain unknown, so resolver
@@ -477,7 +480,7 @@ pair across time; provider comparison still requires independent targets.
 
 Overall network coverage remains `Partial`
 because controlled authoritative DNS and repeated cache-cold resolver testing,
-unattended campaign scheduling, physical-fabric verification, wider
+unattended campaign scheduling, physical-fabric verification, additional
 vendor per-queue NIC normalization, administrative path verification, Windows route
 parity, and mTLS Agent enrollment are not complete. Session topology declarations are already
 checked against trusted region/zone metadata when those facts are available;
@@ -603,7 +606,8 @@ request and is not an HTTP/2 throughput benchmark. See
 
 Select **HTTP/2 Multiplexed Load** to run the separate
 `web-http2-load-v1` contract. Target requires HTTP/2-capable Nginx; Generator
-requires `h2load`, `h2load_request_log`, and Linux CPU accounting. CloudMark
+runs must report `h2load`, `h2load_http2_only`, `h2load_request_log`, and Linux
+CPU accounting. CloudMark
 runs only the three displayed client/thread/max-stream/request-count shapes
 against the packaged dynamic endpoint. It calculates P50/P95/P99 from every
 bounded h2load request-log row and removes the logs after every terminal path.

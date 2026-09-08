@@ -1,6 +1,6 @@
 # CloudMark current state
 
-Last updated: 2026-09-06
+Last updated: 2026-09-08
 
 ## Repository baseline
 
@@ -99,6 +99,18 @@ baseline is still the repository head.
   configuration or alter comparison validity. The complete development head
   passes 102 Python tests, 3 rendered-dashboard tests, dashboard lint, and the
   production build without starting provider load;
+- simulation-verified observational `queue-counters-v2` normalization within
+  Network v9. The bounded parser now covers common ENA/virtio/netvsc/mlx5
+  direction/queue names, Azure MANA indexed names, Google gVNIC bracketed
+  byte/drop names, and VMware vmxnet3 sectioned packet/byte/error/drop fields.
+  Component counters are combined only for exact vmxnet3 unicast/multicast/
+  broadcast names; TSO/LRO/XDP/descriptor counters remain unclassified. Queue
+  deltas retain the normalization version and expose byte distribution when a
+  driver does not provide packet-per-queue counters. The evidence remains
+  observational and does not alter Network v9 comparison validity. The
+  complete development head passes 146 Python tests, 3 rendered-dashboard
+  tests, dashboard lint, and the production build without starting provider
+  load;
 - simulation-verified `database-postgresql-v1` paired executor with isolated
   Target clusters, Generator-side built-in pgbench workloads, durable settings,
   progress/control heartbeat, fixed safety limits, and verified cleanup; the
@@ -176,9 +188,11 @@ baseline is still the repository head.
   client/native-thread/max-stream/request-count shapes run through h2load on
   the Generator. CloudMark parses request/status/error/traffic summaries and a
   bounded all-request TSV log into nearest-rank P50/P95/P99/maximum latency,
-  then verifies Generator log cleanup. HTTP/2 success, zero failed/errored
-  requests, exact log rows, Generator CPU headroom, reverse-proxy evidence, and
-  Target cleanup are comparison gates. The complete development head passes
+  then verifies Generator log cleanup. CloudMark forces HTTP/2-only
+  application-protocol negotiation using the installed h2load generation's
+  supported option and verifies the observed protocol. Exact request summary
+  counters, log rows, Generator CPU headroom, reverse-proxy evidence, and Target
+  cleanup are comparison gates. The complete development head passes
   146 Python tests, 3 rendered-dashboard tests, dashboard lint, and the
   production build without starting load;
 - `provider-observations-v4` exact provider/SKU/region/OS/topology/evidence-class
@@ -191,6 +205,14 @@ baseline is still the repository head.
   MariaDB or different server versions cannot be silently merged. The complete
   development head passes 135 Python tests, 3 rendered-dashboard tests,
   dashboard lint, and the production build without starting provider load;
+- tested internal `linux-security-posture-v2` foundation with bounded read-only
+  Linux kernel, privilege, LSM, Secure Boot, cgroup, network-hardening, and
+  exact system-mount evidence. Core handler text, EFI identifiers, mount source
+  devices, non-target mountpoints, and raw mount options are not persisted.
+  Missing controls remain unavailable and no security score is produced. The
+  foundation passes five dedicated tests and the complete development head
+  passes 151 Python tests; Agent/API/dashboard integration remains pending, so
+  the Security domain is still Roadmap;
 - repository-level Codex guidance, durable handoff documentation, consistent
   SQLite runtime snapshots, guarded secret backup, recoverable restore, and
   safe Windows local-process launch/stop scripts;
@@ -311,7 +333,7 @@ Controller run: `run_1c572100e8704843`.
 
 ## Next priorities
 
-1. Add physical-host/fabric and administrative-path verification, wider vendor
+1. Add physical-host/fabric and administrative-path verification, additional vendor
    NIC queue-counter normalization, controlled
    authoritative/cache-cold/DNSSEC resolver coverage, unattended campaign
    scheduling, and Windows route parity

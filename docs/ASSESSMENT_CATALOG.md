@@ -74,6 +74,13 @@ HTTP/2 multiplexing shapes, exact request-log P50/P95/P99, Generator validity,
 and cleanup. Database-backed applications, HTTP/3, CDN, WAF, autoscaling, and
 resilience remain missing; web coverage therefore remains `Partial`.
 
+The tested `linux-security-posture-v2` foundation reads bounded Linux kernel,
+LSM, Secure Boot, cgroup, privilege-boundary, network-hardening, and exact
+system-mount evidence without changing the host or creating a score. It is not
+yet registered as an Agent Run or rendered by the dashboard, and it does not
+cover IAM, firewall/security groups, SSH, encryption, vulnerability status,
+tenant isolation, or compliance. Domain 12 therefore remains `Roadmap`.
+
 ## Mapping evidence to intended use
 
 Each workload combines multiple domains rather than relying on one benchmark:

@@ -521,6 +521,11 @@ def _queue_counter_delta(
         "traffic_scope": "driver-exposed-per-queue-counters-on-route-derived-interface",
         "window_started_at": before.get("observed_at"),
         "window_ended_at": after.get("observed_at"),
+        "normalization_versions": sorted({
+            value
+            for value in (before.get("normalization_version"), after.get("normalization_version"))
+            if isinstance(value, str) and value
+        }),
         "queues": [],
     }
     accepted_statuses = {"observed", "partial"}
@@ -560,6 +565,7 @@ def _queue_counter_delta(
         before.get("status") == "observed"
         and after.get("status") == "observed"
         and set(before_queues) == set(after_queues)
+        and before.get("normalization_version") == after.get("normalization_version")
     )
     reset_fields: list[str] = []
     queue_rows: list[dict[str, Any]] = []
@@ -603,7 +609,7 @@ def _queue_counter_delta(
         ]
         return sum(values) if values else None
 
-    def packet_distribution(field: str) -> dict[str, Any]:
+    def counter_distribution(field: str, unit: str) -> dict[str, Any]:
         values = [
             (item["queue"], item["counters"][field])
             for item in queue_rows
@@ -615,9 +621,9 @@ def _queue_counter_delta(
         return {
             "reported_queues": len(values),
             "active_queues": len(active),
-            "total_packets": total,
+            f"total_{unit}": total,
             "busiest_queue": peak[0] if peak else None,
-            "busiest_queue_packets": peak[1] if peak else None,
+            f"busiest_queue_{unit}": peak[1] if peak else None,
             "busiest_queue_percent": round(peak[1] / total * 100, 6) if peak and total else None,
         }
 
@@ -625,8 +631,10 @@ def _queue_counter_delta(
         "status": "complete" if complete else "partial",
         "queues": queue_rows,
         "reported_queue_count": len(queue_rows),
-        "rx_distribution": packet_distribution("rx_packets"),
-        "tx_distribution": packet_distribution("tx_packets"),
+        "rx_distribution": counter_distribution("rx_packets", "packets"),
+        "tx_distribution": counter_distribution("tx_packets", "packets"),
+        "rx_byte_distribution": counter_distribution("rx_bytes", "bytes"),
+        "tx_byte_distribution": counter_distribution("tx_bytes", "bytes"),
         "total_dropped": optional_total(("rx_dropped", "tx_dropped")),
         "total_errors": optional_total(("rx_errors", "tx_errors")),
         "reset_fields": reset_fields,

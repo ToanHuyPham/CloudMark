@@ -36,8 +36,9 @@ timestamp, and raw result.
 | Available | Target-scoped, versioned Essential/Standard/Demanding workload gates with per-check run provenance and explicit unknown evidence |
 | Available | Exact-cohort repeated-window provider observations with median, P10/P90, best/worst, spread, topology/evidence-class contracts, and guarded comparison eligibility |
 | Available | Immutable, manually dispatched repeated network campaigns with one comparison-eligible window per UTC day |
-| Roadmap | Unattended sampling schedules, physical-fabric verification, wider vendor queue normalization, public-path classification, and mTLS enrollment |
+| Roadmap | Unattended sampling schedules, physical-fabric verification, additional vendor queue normalization, public-path classification, and mTLS enrollment |
 | Roadmap | Remaining CPU, memory/NUMA, GPU, application, platform, operations, and provider executors |
+| Roadmap | Read-only Linux Security Posture v2 foundation is tested; Agent/API/dashboard integration and provider security evidence remain pending |
 | Roadmap | Cross-target campaign orchestration, cross-zone analysis, timestamped cost, operations, and final provider ratings |
 
 `Partial` and `Roadmap` capabilities never receive an artificial zero score.
@@ -167,6 +168,7 @@ Controller is never an iperf3 endpoint.
 - [HTTP/2 load methodology](docs/HTTP2_LOAD_METHODOLOGY.md)
 - [Workload suitability methodology](docs/SUITABILITY_METHODOLOGY.md)
 - [Safety model](docs/SAFETY.md)
+- [Linux security-posture foundation](docs/SECURITY_POSTURE_METHODOLOGY.md)
 - [Product roadmap and machine topology matrix](docs/ROADMAP.md)
 
 ## Release status
@@ -184,7 +186,7 @@ The separate `web-http2-load-v1` profile adds bounded HTTP/2 multiplexed load
 without changing the readable Web v1/v2 contracts.
 Compute and memory remain `Partial` until floating-point, crypto, compilation,
 latency, NUMA, and broader architecture coverage are implemented. Network
-remains partial until driver per-queue evidence is normalized across more NICs,
+remains partial until driver per-queue evidence is normalized across additional NICs,
 controlled DNS coverage, cross-pair repeated windows, administrative path verification, and mTLS
 enrollment are implemented. Database coverage remains partial until checkpoint
 isolation, replication, PITR, cross-zone recovery, and managed-service evidence

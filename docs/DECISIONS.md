@@ -475,15 +475,39 @@ recovery, PITR, or power-loss testing.
 profile. The existing packaged dynamic application remains loopback-only behind
 HTTP/2-capable Nginx on the Target. The Generator accepts exactly three h2load
 client/native-thread/max-stream/request-count shapes over HTTPS to the fixed
-dynamic path. Every request is logged beneath a generated Agent workspace;
+dynamic path. It restricts application-protocol negotiation to `h2` using the
+installed h2load generation's fixed ALPN/NPN-list option and verifies the
+observed application protocol instead of inferring it from the tool name.
+Every request is logged beneath a generated Agent workspace;
 CloudMark reads at most 8 MiB and 25,000 rows, calculates nearest-rank
-P50/P95/P99/maximum, and verifies log removal. Zero failed/errored requests,
-complete logs, Generator CPU normalized by declared native-thread capacity,
-host CPU headroom, reverse-proxy evidence, and Target cleanup are comparison
-gates.
+P50/P95/P99/maximum, and verifies log removal. Exact total/started/done/
+succeeded/status/failure/error/timeout counters, complete logs, Generator CPU
+normalized by declared native-thread capacity, host CPU headroom, reverse-proxy
+evidence, and Target cleanup are comparison gates.
 
 **Reason:** One curl negotiation proves protocol support but not multiplexed
 capacity, while an arbitrary h2load URL or unbounded stream/rate input would be
 unsafe. Fixed connection and stream shapes with complete request-level latency
 evidence make HTTP/2 behavior repeatable without claiming HTTP/3, CDN, WAF,
 autoscaling, public TLS trust, or DDoS resilience.
+
+## D-034: Driver queue normalization is versioned independently and remains observational
+
+**Decision:** Keep the Standard network acquisition contract on `network-v9`
+and label normalized `ethtool -S` snapshots as `queue-counters-v2`. The parser
+continues to cap input at 4,096 lines and queue indexes at 127. It recognizes
+common ENA/virtio/netvsc/mlx5 direction/queue forms, MANA indexed names, gVNIC
+bracketed byte/drop names, and vmxnet3 sectioned queues. For vmxnet3, only exact
+unicast/multicast/broadcast packet and byte components plus exact error/drop
+totals are combined. TSO, LRO, XDP, descriptor, and unknown vendor counters
+remain unclassified. Pre/post snapshots with different normalization versions
+produce partial deltas, and byte distribution is reported separately when
+packet counters are absent. This evidence remains outside comparison-validity
+gates.
+
+**Reason:** Common cloud and virtualization drivers expose equivalent queue
+facts under incompatible names, and some expose bytes without a safe packet
+counter. An independently versioned, source-bounded normalization contract
+widens diagnostic coverage without rewriting Network v9 throughput semantics,
+silently treating descriptors or offload segments as packets, or penalizing a
+provider for driver visibility.

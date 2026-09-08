@@ -223,7 +223,9 @@ systems.
 - HTTP/2 load is a separate explicit profile. h2load accepts only the paired
   Target, HTTPS, TCP 58443, the packaged dynamic path, and three fixed
   client/thread/max-stream/request-count shapes. Arbitrary URLs, headers,
-  bodies, rates, and timing scripts are refused.
+  bodies, rates, and timing scripts are refused. TLS application-protocol
+  negotiation is restricted to `h2`; an HTTP/1.1 fallback cannot become HTTP/2
+  evidence.
 - h2load per-request logs are generated only below `h2load-logs/task_*`, read
   up to 8 MiB and 25,000 rows, and removed after success, failure, timeout,
   cancellation, or parser error. Incomplete/truncated logs, any failed or

@@ -65,6 +65,7 @@ from .tooling import (
     find_postgres_binary,
     find_redis_binary,
     find_web_binary,
+    h2load_http2_argument,
     mysql_tool_supports,
     tool_version,
     web_tool_supports,
@@ -106,24 +107,72 @@ NETWORK_STEERING_MAX_IRQS = 256
 NETWORK_STEERING_MAX_MASK_BYTES = 4096
 NETWORK_RSS_MAX_ENTRIES = 4096
 NETWORK_RSS_MAX_LINES = 4096
+NETWORK_COUNTER_MAX = 2**64 - 1
+NETWORK_QUEUE_NORMALIZATION_VERSION = "queue-counters-v2"
 NETWORK_QUEUE_METRIC_ALIASES = {
     "bytes": "bytes",
+    "pkt": "packets",
+    "pkts": "packets",
     "packets": "packets",
     "cnt": "packets",
     "drop": "dropped",
     "drops": "dropped",
     "dropped": "dropped",
+    "dropped_pkt": "dropped",
+    "discard": "dropped",
+    "discards": "dropped",
     "error": "errors",
     "errors": "errors",
 }
+NETWORK_QUEUE_METRIC_PATTERN = "bytes|pkt|pkts|packets|cnt|drop|drops|dropped|dropped_pkt|discard|discards|error|errors"
 NETWORK_QUEUE_STAT_PATTERNS = (
-    re.compile(
-        r"^(rx|tx)_queue_(\d+)_(?:(rx|tx)_)?"
-        r"(bytes|packets|cnt|drop|drops|dropped|error|errors)$"
+    (
+        "direction-queue",
+        re.compile(
+            rf"^(?P<direction>rx|tx)_queue_(?P<queue>\d+)_"
+            rf"(?:(?P<nested_direction>rx|tx)_)?(?P<metric>{NETWORK_QUEUE_METRIC_PATTERN})$"
+        ),
     ),
-    re.compile(r"^queue_(\d+)_(rx|tx)_(bytes|packets|cnt|drop|drops|dropped|error|errors)$"),
-    re.compile(r"^(rx|tx)(\d+)_(bytes|packets|cnt|drop|drops|dropped|error|errors)$"),
+    (
+        "queue-direction",
+        re.compile(
+            rf"^queue_(?P<queue>\d+)_(?P<direction>rx|tx)_(?P<metric>{NETWORK_QUEUE_METRIC_PATTERN})$"
+        ),
+    ),
+    (
+        "compact-direction-queue",
+        re.compile(rf"^(?P<direction>rx|tx)(?P<queue>\d+)_(?P<metric>{NETWORK_QUEUE_METRIC_PATTERN})$"),
+    ),
+    (
+        "mana-direction-queue",
+        re.compile(rf"^(?P<direction>rx|tx)_(?P<queue>\d+)_(?P<metric>{NETWORK_QUEUE_METRIC_PATTERN})$"),
+    ),
+    (
+        "gve-bracketed-queue",
+        re.compile(rf"^(?P<direction>rx|tx)_(?P<metric>{NETWORK_QUEUE_METRIC_PATTERN})\[(?P<queue>\d+)\]$"),
+    ),
 )
+VMXNET3_QUEUE_MARKER = re.compile(r"^(rx|tx) queue#$")
+VMXNET3_COMPONENT_COUNTERS = {
+    "ucast pkts rx": "rx_packets",
+    "mcast pkts rx": "rx_packets",
+    "bcast pkts rx": "rx_packets",
+    "ucast bytes rx": "rx_bytes",
+    "mcast bytes rx": "rx_bytes",
+    "bcast bytes rx": "rx_bytes",
+    "ucast pkts tx": "tx_packets",
+    "mcast pkts tx": "tx_packets",
+    "bcast pkts tx": "tx_packets",
+    "ucast bytes tx": "tx_bytes",
+    "mcast bytes tx": "tx_bytes",
+    "bcast bytes tx": "tx_bytes",
+}
+VMXNET3_EXACT_COUNTERS = {
+    "pkts rx err": "rx_errors",
+    "drv dropped rx total": "rx_dropped",
+    "pkts tx err": "tx_errors",
+    "drv dropped tx total": "tx_dropped",
+}
 IPV4_PRIVATE_NETWORKS = tuple(
     ipaddress.ip_network(value) for value in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16")
 )
@@ -571,23 +620,21 @@ def _parse_ethtool_features(stdout: str) -> dict[str, dict[str, bool]]:
     return features
 
 
-def _queue_stat_identity(name: str) -> tuple[int, str] | None:
-    for index, pattern in enumerate(NETWORK_QUEUE_STAT_PATTERNS):
+def _queue_stat_identity(name: str) -> tuple[int, str, str] | None:
+    for family, pattern in NETWORK_QUEUE_STAT_PATTERNS:
         match = pattern.fullmatch(name)
         if not match:
             continue
-        if index == 0:
-            direction, queue_text, nested_direction, metric = match.groups()
-            if nested_direction and nested_direction != direction:
-                return None
-        elif index == 1:
-            queue_text, direction, metric = match.groups()
-        else:
-            direction, queue_text, metric = match.groups()
-        queue = int(queue_text)
+        values = match.groupdict()
+        direction = values["direction"]
+        nested_direction = values.get("nested_direction")
+        if nested_direction and nested_direction != direction:
+            return None
+        queue = int(values["queue"])
         if queue > NETWORK_QUEUE_MAX_INDEX:
             return None
-        return queue, f"{direction}_{NETWORK_QUEUE_METRIC_ALIASES[metric]}"
+        metric = values["metric"]
+        return queue, f"{direction}_{NETWORK_QUEUE_METRIC_ALIASES[metric]}", family
     return None
 
 
@@ -598,30 +645,87 @@ def _parse_ethtool_queue_statistics(stdout: str) -> dict[str, Any]:
     numeric_statistics = 0
     unclassified_statistics = 0
     duplicate_counters = 0
+    invalid_numeric_statistics = 0
+    invalid_normalized_fields: set[tuple[int, str]] = set()
+    normalization_families: set[str] = set()
+    vmxnet3_context: tuple[str, int] | None = None
     for line in lines[:NETWORK_QUEUE_MAX_STAT_LINES]:
         key, separator, raw_value = line.partition(":")
         if not separator:
             continue
+        normalized_key = re.sub(r"\s+", " ", key.strip().lower())
+        vmxnet3_marker = VMXNET3_QUEUE_MARKER.fullmatch(normalized_key)
         value_text = raw_value.strip()
         if not re.fullmatch(r"\d+", value_text):
+            if vmxnet3_marker:
+                vmxnet3_context = None
+            continue
+        if len(value_text) > 20:
+            invalid_numeric_statistics += 1
+            if vmxnet3_marker:
+                vmxnet3_context = None
+            continue
+        numeric_value = int(value_text)
+        if numeric_value > NETWORK_COUNTER_MAX:
+            invalid_numeric_statistics += 1
+            if vmxnet3_marker:
+                vmxnet3_context = None
             continue
         numeric_statistics += 1
-        identity = _queue_stat_identity(key.strip().lower())
-        if identity is None:
-            unclassified_statistics += 1
+        if vmxnet3_marker:
+            queue = int(value_text)
+            vmxnet3_context = (
+                (vmxnet3_marker.group(1), queue)
+                if queue <= NETWORK_QUEUE_MAX_INDEX
+                else None
+            )
+            if vmxnet3_context:
+                normalization_families.add("vmxnet3-sectioned-queue")
+            else:
+                unclassified_statistics += 1
             continue
-        queue, field = identity
+        identity = _queue_stat_identity(normalized_key)
+        if identity is None:
+            vmxnet3_field = (
+                VMXNET3_COMPONENT_COUNTERS.get(normalized_key)
+                or VMXNET3_EXACT_COUNTERS.get(normalized_key)
+            )
+            if not vmxnet3_context or not vmxnet3_field or not vmxnet3_field.startswith(vmxnet3_context[0]):
+                unclassified_statistics += 1
+                continue
+            queue = vmxnet3_context[1]
+            field = vmxnet3_field
+            family = "vmxnet3-sectioned-queue"
+            additive = normalized_key in VMXNET3_COMPONENT_COUNTERS
+        else:
+            queue, field, family = identity
+            additive = False
         counters = queues.setdefault(queue, {})
+        normalization_families.add(family)
+        if additive:
+            if (queue, field) in invalid_normalized_fields:
+                continue
+            combined_value = counters.get(field, 0) + numeric_value
+            if combined_value > NETWORK_COUNTER_MAX:
+                counters.pop(field, None)
+                invalid_normalized_fields.add((queue, field))
+                invalid_numeric_statistics += 1
+                continue
+            counters[field] = combined_value
+            continue
         if field in counters:
             duplicate_counters += 1
             continue
-        counters[field] = int(value_text)
+        counters[field] = numeric_value
     if not queues:
         return {
             "status": "unavailable",
             "source": "ethtool-nic-statistics",
+            "normalization_version": NETWORK_QUEUE_NORMALIZATION_VERSION,
+            "normalization_families": sorted(normalization_families),
             "queues": [],
             "numeric_statistics": numeric_statistics,
+            "invalid_numeric_statistics": invalid_numeric_statistics,
             "unclassified_statistics": unclassified_statistics,
             "truncated": len(lines) > NETWORK_QUEUE_MAX_STAT_LINES,
             "reason": "ethtool did not expose a recognized bounded per-queue counter name.",
@@ -630,21 +734,30 @@ def _parse_ethtool_queue_statistics(stdout: str) -> dict[str, Any]:
         {"queue": queue, "counters": dict(sorted(counters.items()))}
         for queue, counters in sorted(queues.items())
     ]
-    incomplete = duplicate_counters > 0 or len(lines) > NETWORK_QUEUE_MAX_STAT_LINES
+    incomplete = (
+        duplicate_counters > 0
+        or invalid_numeric_statistics > 0
+        or len(lines) > NETWORK_QUEUE_MAX_STAT_LINES
+    )
     result: dict[str, Any] = {
         "status": "partial" if incomplete else "observed",
         "source": "ethtool-nic-statistics",
+        "normalization_version": NETWORK_QUEUE_NORMALIZATION_VERSION,
+        "normalization_families": sorted(normalization_families),
         "queues": normalized,
         "queue_count": len(normalized),
         "parsed_counters": sum(len(item["counters"]) for item in normalized),
         "numeric_statistics": numeric_statistics,
+        "invalid_numeric_statistics": invalid_numeric_statistics,
         "unclassified_statistics": unclassified_statistics,
         "duplicate_counters": duplicate_counters,
         "maximum_queue_index": NETWORK_QUEUE_MAX_INDEX,
         "truncated": len(lines) > NETWORK_QUEUE_MAX_STAT_LINES,
     }
     if incomplete:
-        result["reason"] = "Duplicate normalized fields or output truncation made the queue snapshot partial."
+        result["reason"] = (
+            "Duplicate normalized fields, invalid counter values, or output truncation made the queue snapshot partial."
+        )
     return result
 
 
@@ -3739,6 +3852,9 @@ class AgentWorker:
         h2load = self._web_tool("h2load")
         if not web_tool_supports("h2load", h2load, "request-log"):
             raise WebBenchmarkError("h2load lacks the required bounded per-request log support.")
+        http2_argument = h2load_http2_argument(h2load)
+        if not http2_argument:
+            raise WebBenchmarkError("h2load cannot restrict TLS negotiation to HTTP/2.")
         log_root = self._h2load_log_root(task_id)
         if log_root.exists():
             raise WebBenchmarkError("h2load found a residual request-log directory.")
@@ -3757,6 +3873,7 @@ class AgentWorker:
             f"--clients={clients}",
             f"--threads={threads}",
             f"--max-concurrent-streams={streams}",
+            http2_argument,
             f"--log-file={request_log_path}",
             url,
         ]

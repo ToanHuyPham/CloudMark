@@ -89,7 +89,7 @@ from cloudmark.redis_benchmark import parse_redis_benchmark_csv, redis_analysis,
 from cloudmark.server import CloudMarkController, Handler, Server, _dashboard_run_summaries, _json_bytes
 from cloudmark.suitability import SCENARIO_REQUIREMENTS, _run_valid, evaluate_suitability
 from cloudmark.topology import assess_pairing_topology
-from cloudmark.tooling import mysql_tool_supports, postgres_tool_supports, web_tool_supports
+from cloudmark.tooling import h2load_http2_argument, mysql_tool_supports, postgres_tool_supports, web_tool_supports
 from cloudmark.web_benchmark import (
     WebBenchmarkError,
     _web_analysis,
@@ -1636,6 +1636,58 @@ device_packets: 400
         unavailable = _parse_ethtool_queue_statistics("device_packets: 100\n")
         self.assertEqual(unavailable["status"], "unavailable")
 
+        mana = _parse_ethtool_queue_statistics(
+            "rx_0_packets: 120\nrx_0_bytes: 12000\ntx_0_packets: 80\ntx_0_bytes: 8000\n"
+        )
+        self.assertEqual(mana["status"], "observed")
+        self.assertEqual(mana["queues"][0]["counters"]["rx_packets"], 120)
+        self.assertIn("mana-direction-queue", mana["normalization_families"])
+
+        gve = _parse_ethtool_queue_statistics(
+            "rx_bytes[0]: 12000\nrx_dropped_pkt[0]: 2\ntx_bytes[0]: 8000\n"
+        )
+        self.assertEqual(gve["queues"][0]["counters"]["rx_dropped"], 2)
+        self.assertEqual(gve["queues"][0]["counters"]["tx_bytes"], 8000)
+        self.assertIn("gve-bracketed-queue", gve["normalization_families"])
+
+        vmxnet3 = _parse_ethtool_queue_statistics(
+            """
+Tx Queue#: 0
+  ucast pkts tx: 60
+  mcast pkts tx: 10
+  bcast pkts tx: 5
+  ucast bytes tx: 6000
+  mcast bytes tx: 1000
+  bcast bytes tx: 500
+  pkts tx err: 1
+  drv dropped tx total: 2
+Rx Queue#: 0
+  ucast pkts rx: 90
+  mcast pkts rx: 20
+  bcast pkts rx: 10
+  ucast bytes rx: 9000
+  mcast bytes rx: 2000
+  bcast bytes rx: 1000
+  pkts rx err: 3
+  drv dropped rx total: 4
+"""
+        )
+        counters = vmxnet3["queues"][0]["counters"]
+        self.assertEqual(counters["tx_packets"], 75)
+        self.assertEqual(counters["tx_bytes"], 7500)
+        self.assertEqual(counters["rx_packets"], 120)
+        self.assertEqual(counters["rx_bytes"], 12000)
+        self.assertEqual(counters["rx_errors"], 3)
+        self.assertIn("vmxnet3-sectioned-queue", vmxnet3["normalization_families"])
+        self.assertEqual(vmxnet3["normalization_version"], "queue-counters-v2")
+
+        oversized = _parse_ethtool_queue_statistics(
+            "rx_queue_0_bytes: 1000\nrx_queue_0_packets: 18446744073709551616\n"
+        )
+        self.assertEqual(oversized["status"], "partial")
+        self.assertEqual(oversized["invalid_numeric_statistics"], 1)
+        self.assertNotIn("rx_packets", oversized["queues"][0]["counters"])
+
     def test_agent_normalizes_rss_without_persisting_hash_key(self) -> None:
         evidence = _parse_ethtool_rss_indirection(
             """
@@ -1785,6 +1837,7 @@ RSS hash function:
             return {
                 "queue_counters": {
                     "status": "observed",
+                    "normalization_version": "queue-counters-v2",
                     "observed_at": stamp,
                     "queues": [
                         {"queue": 0, "counters": {"rx_packets": q0, "rx_bytes": q0 * 100, "rx_dropped": 2}},
@@ -1802,6 +1855,8 @@ RSS hash function:
         self.assertEqual(complete["rx_distribution"]["active_queues"], 2)
         self.assertEqual(complete["rx_distribution"]["busiest_queue"], 0)
         self.assertEqual(complete["rx_distribution"]["busiest_queue_percent"], 80.0)
+        self.assertEqual(complete["rx_byte_distribution"]["busiest_queue_percent"], 80.0)
+        self.assertEqual(complete["normalization_versions"], ["queue-counters-v2"])
         self.assertEqual(complete["total_dropped"], 0)
 
         reset = _queue_counter_delta(
@@ -1810,6 +1865,14 @@ RSS hash function:
         )
         self.assertEqual(reset["status"], "partial")
         self.assertIn("queue-0:rx_packets", reset["reset_fields"])
+
+        version_mismatch_before = snapshot("2026-08-14T00:00:00+00:00", 100, 100)
+        version_mismatch_before["queue_counters"]["normalization_version"] = "queue-counters-v1"
+        version_mismatch = _queue_counter_delta(
+            version_mismatch_before,
+            snapshot("2026-08-14T00:01:00+00:00", 900, 300),
+        )
+        self.assertEqual(version_mismatch["status"], "partial")
 
     def test_agent_reports_path_evidence_unavailable_without_iproute2(self) -> None:
         worker = AgentWorker("http://127.0.0.1:8787", "agent", "token")
@@ -3211,6 +3274,30 @@ Latency (ms):
             self.assertEqual(target_v2["id"], "agent_target_v2")
             self.assertEqual(generator_v2["id"], "agent_generator_v2")
 
+            database.create_session("session_h2_missing", "h2-missing", "hash", "2099-01-01T00:00:00+00:00")
+            database.add_agent(
+                "agent_target_h2_missing",
+                "session_h2_missing",
+                "target-h2-missing",
+                "target",
+                {"inventory": {"capabilities": {"nginx": True, "openssl": True, "nginx_http2": True}}},
+                endpoint={"address": "10.0.2.10"},
+            )
+            database.add_agent(
+                "agent_generator_h2_missing",
+                "session_h2_missing",
+                "generator-h2-missing",
+                "generator",
+                {"inventory": {"capabilities": {
+                    "h2load": True,
+                    "h2load_request_log": True,
+                    "procfs_process_cpu": True,
+                }}},
+                endpoint={"address": "10.0.2.11"},
+            )
+            with self.assertRaisesRegex(ValueError, "h2load_http2_only"):
+                validate_web_run(database, "session_h2_missing", "web-peer-http2")
+
             database.create_session("session_db_recovery", "database-recovery", "hash", "2099-01-01T00:00:00+00:00")
             database.add_agent(
                 "agent_target_recovery",
@@ -4169,6 +4256,7 @@ Percentage of the requests served within a certain time (ms)
             expected_requests=5,
         )
         output = """
+Application protocol: h2
 finished in 50.00ms, 100.00 req/s, 1.50MB/s
 requests: 5 total, 5 started, 5 done, 5 succeeded, 0 failed, 0 errored, 0 timeout
 status codes: 5 2xx, 0 3xx, 0 4xx, 0 5xx
@@ -4180,8 +4268,17 @@ traffic: 81920 bytes total, 1024 bytes headers (space savings 80.00%), 76800 byt
         self.assertEqual(metrics["request_latency"]["latency_percentiles_ms"]["p50"], 3.0)
         self.assertEqual(metrics["request_latency"]["latency_percentiles_ms"]["p99"], 5.0)
         self.assertEqual(metrics["transfer_bytes_per_second"], 1.5 * 1024**2)
+        self.assertEqual(metrics["summary_status"], "complete")
         partial = parse_h2load_request_log("1000\t200\t1000\n", expected_requests=2)
         self.assertEqual(partial["status"], "partial")
+        invalid = parse_h2load_request_log("nan\t700\t1000\n", expected_requests=1)
+        self.assertEqual(invalid["status"], "unavailable")
+        self.assertEqual(invalid["invalid_rows"], 1)
+        fallback = parse_h2load_output(output.replace("Application protocol: h2", "Application protocol: http/1.1"), request_log, expected_requests=5)
+        self.assertEqual(fallback["protocol"], "http/1.1")
+        self.assertEqual(fallback["summary_status"], "partial")
+        with self.assertRaisesRegex(WebBenchmarkError, "HTTP/2 summary"):
+            parse_h2load_output(output.replace("Application protocol: h2\n", ""), request_log, expected_requests=5)
 
     def test_agent_h2load_is_fixed_bounded_and_cleans_request_logs(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -4192,6 +4289,7 @@ traffic: 81920 bytes total, 1024 bytes headers (space savings 80.00%), 76800 byt
                 workspace=Path(directory) / "agent",
             )
             output = """
+Application protocol: h2
 finished in 2.00s, 1000.00 req/s, 1.00MB/s
 requests: 2000 total, 2000 started, 2000 done, 2000 succeeded, 0 failed, 0 errored, 0 timeout
 status codes: 2000 2xx, 0 3xx, 0 4xx, 0 5xx
@@ -4211,6 +4309,8 @@ traffic: 2048000 bytes total, 128000 bytes headers (space savings 75.00%), 20480
 
             with patch("cloudmark.agent.find_web_binary", return_value="h2load"), patch(
                 "cloudmark.agent.web_tool_supports", return_value=True
+            ), patch(
+                "cloudmark.agent.h2load_http2_argument", return_value="--alpn-list=h2"
             ), patch("cloudmark.agent.web_tool_version", return_value="h2load nghttp2/1.52.0"), patch.object(
                 worker, "_guarded_service_process", side_effect=guarded
             ) as process:
@@ -4233,6 +4333,7 @@ traffic: 2048000 bytes total, 128000 bytes headers (space savings 75.00%), 20480
             command = process.call_args.args[1]
             self.assertIn("--max-concurrent-streams=1", command)
             self.assertIn("--requests=2000", command)
+            self.assertIn("--alpn-list=h2", command)
             self.assertTrue(result["h2load"]["client_log_cleanup_verified"])
             self.assertEqual(result["h2load"]["metrics"]["request_latency"]["status"], "complete")
             self.assertFalse((worker.workspace / "h2load-logs" / "task_h2load123").exists())
@@ -4261,6 +4362,8 @@ traffic: 2048000 bytes total, 128000 bytes headers (space savings 75.00%), 20480
 
             with patch("cloudmark.agent.find_web_binary", return_value="h2load"), patch(
                 "cloudmark.agent.web_tool_supports", return_value=True
+            ), patch(
+                "cloudmark.agent.h2load_http2_argument", return_value="--npn-list=h2"
             ), patch.object(worker, "_guarded_service_process", side_effect=failing_guarded):
                 with self.assertRaisesRegex(WebBenchmarkError, "simulated h2load failure"):
                     worker._run_http2_client(
@@ -4316,12 +4419,24 @@ traffic: 2048000 bytes total, 128000 bytes headers (space savings 75.00%), 20480
                 stdout="--log-file=<PATH> --max-concurrent-streams=<N>\n",
                 stderr="",
             ),
+            SimpleNamespace(
+                returncode=0,
+                stdout="--log-file=<PATH> --max-concurrent-streams=<N> --alpn-list=<LIST>\n",
+                stderr="",
+            ),
+            SimpleNamespace(
+                returncode=0,
+                stdout="--log-file=<PATH> --max-concurrent-streams=<N> --npn-list=<LIST>\n",
+                stderr="",
+            ),
             SimpleNamespace(returncode=0, stdout="curl 8.0\nFeatures: IPv6 SSL\n", stderr=""),
         ]
         with patch("cloudmark.tooling.subprocess.run", side_effect=responses):
             self.assertTrue(web_tool_supports("curl", "curl", "http2"))
             self.assertTrue(web_tool_supports("nginx", "nginx", "http2"))
             self.assertTrue(web_tool_supports("h2load", "h2load", "request-log"))
+            self.assertEqual(h2load_http2_argument("h2load"), "--alpn-list=h2")
+            self.assertEqual(h2load_http2_argument("h2load"), "--npn-list=h2")
             self.assertFalse(web_tool_supports("curl", "curl", "http2"))
 
     def test_web_v2_generator_cpu_evidence_uses_process_and_host_intervals(self) -> None:
@@ -4512,24 +4627,52 @@ traffic: 2048000 bytes total, 128000 bytes headers (space savings 75.00%), 20480
         self.assertTrue(adequate["validity"]["comparison_eligible"])
 
     def test_http2_analysis_normalizes_process_cpu_by_declared_native_threads(self) -> None:
-        measurement = {
-            "name": "h2-dynamic-c8-m16",
-            "path": "/api/v2/dynamic",
-            "threads": 2,
-            "metrics": {
-                "protocol": "h2",
-                "request_failed": 0,
-                "request_errored": 0,
-                "success_percent": 100.0,
-                "request_latency": {"status": "complete"},
-            },
-            "generator_cpu": {
-                "status": "observed",
-                "peak_process_cpu_percent_of_one_core": 160.0,
-                "peak_host_utilization_percent": 80.0,
-            },
-            "client_log_cleanup_verified": True,
-        }
+        measurements = []
+        for job in WEB_PROFILES["web-peer-http2"]["jobs"]:
+            requests = job["requests"]
+            measurements.append({
+                **job,
+                "scheme": "https",
+                "metrics": {
+                    "protocol": "h2",
+                    "summary_status": "complete",
+                    "request_total": requests,
+                    "request_started": requests,
+                    "request_done": requests,
+                    "request_succeeded": requests,
+                    "request_failed": 0,
+                    "request_errored": 0,
+                    "request_timeout": 0,
+                    "success_percent": 100.0,
+                    "status_codes": {"2xx": requests, "3xx": 0, "4xx": 0, "5xx": 0},
+                    "time_taken_seconds": 2.0,
+                    "requests_per_second": 1000.0,
+                    "transfer_bytes_per_second": 1024.0 * requests,
+                    "traffic": {
+                        "total_bytes": 1100 * requests,
+                        "header_bytes": 76 * requests,
+                        "data_bytes": 1024 * requests,
+                    },
+                    "request_latency": {
+                        "status": "complete",
+                        "expected_requests": requests,
+                        "parsed_rows": requests,
+                        "successful_latency_samples": requests,
+                        "failed_status_rows": 0,
+                        "invalid_rows": 0,
+                        "truncated": False,
+                        "latency_percentiles_ms": {"p50": 2.0, "p95": 5.0, "p99": 8.0, "maximum": 12.0},
+                    },
+                },
+                "generator_cpu": {
+                    "status": "observed",
+                    "peak_process_cpu_percent_of_one_core": (
+                        160.0 if job["name"] == "h2-dynamic-c8-m16" else 20.0
+                    ),
+                    "peak_host_utilization_percent": 80.0,
+                },
+                "client_log_cleanup_verified": True,
+            })
         result = {
             "methodology_version": "web-http2-load-v1",
             "server": {
@@ -4539,7 +4682,7 @@ traffic: 2048000 bytes total, 128000 bytes headers (space savings 75.00%), 20480
                     "reverse_proxy": True,
                 }
             },
-            "http2_measurements": [measurement],
+            "http2_measurements": measurements,
             "cleanup": {"cleanup_verified": True},
         }
         analysis = _web_analysis(result)
@@ -4548,10 +4691,25 @@ traffic: 2048000 bytes total, 128000 bytes headers (space savings 75.00%), 20480
             80.0,
         )
         self.assertTrue(analysis["validity"]["comparison_eligible"])
-        measurement["generator_cpu"]["peak_process_cpu_percent_of_one_core"] = 180.0
+        measurements[1]["generator_cpu"]["peak_process_cpu_percent_of_one_core"] = 180.0
         constrained = _web_analysis(result)
         self.assertEqual(constrained["generator_headroom"]["status"], "constrained")
         self.assertFalse(constrained["validity"]["comparison_eligible"])
+        measurements[1]["generator_cpu"]["peak_process_cpu_percent_of_one_core"] = 160.0
+        measurements[1]["metrics"]["request_done"] -= 1
+        incomplete = _web_analysis(result)
+        self.assertEqual(incomplete["http2_load"]["status"], "partial")
+        self.assertFalse(incomplete["validity"]["comparison_eligible"])
+        measurements[1]["metrics"]["request_done"] += 1
+        measurements[1]["metrics"]["status_codes"]["2xx"] = "10000"
+        malformed = _web_analysis(result)
+        self.assertEqual(malformed["http2_load"]["status"], "partial")
+        self.assertFalse(malformed["validity"]["comparison_eligible"])
+        measurements[1]["metrics"]["status_codes"]["2xx"] = measurements[1]["requests"]
+        measurements[1]["threads"] = "two"
+        malformed_threads = _web_analysis(result)
+        self.assertEqual(malformed_threads["generator_headroom"]["status"], "unknown")
+        self.assertFalse(malformed_threads["validity"]["comparison_eligible"])
 
     def test_agent_refuses_web_cleanup_outside_its_workspace(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -4861,6 +5019,7 @@ traffic: 2048000 bytes total, 128000 bytes headers (space savings 75.00%), 20480
                 "generator",
                 {"inventory": {"capabilities": {
                     "h2load": True,
+                    "h2load_http2_only": True,
                     "h2load_request_log": True,
                     "procfs_process_cpu": True,
                 }}},
@@ -4900,13 +5059,43 @@ traffic: 2048000 bytes total, 128000 bytes headers (space savings 75.00%), 20480
                                 "requests": task["payload"]["requests"],
                                 "metrics": {
                                     "protocol": "h2",
+                                    "summary_status": "complete",
+                                    "request_total": task["payload"]["requests"],
+                                    "request_started": task["payload"]["requests"],
+                                    "request_done": task["payload"]["requests"],
+                                    "request_succeeded": task["payload"]["requests"],
                                     "request_failed": 0,
                                     "request_errored": 0,
+                                    "request_timeout": 0,
                                     "success_percent": 100.0,
+                                    "status_codes": {
+                                        "2xx": task["payload"]["requests"],
+                                        "3xx": 0,
+                                        "4xx": 0,
+                                        "5xx": 0,
+                                    },
+                                    "time_taken_seconds": 4.0,
                                     "requests_per_second": 2500.0,
+                                    "transfer_bytes_per_second": 2_560_000.0,
+                                    "traffic": {
+                                        "total_bytes": 2_750_000,
+                                        "header_bytes": 190_000,
+                                        "data_bytes": 2_560_000,
+                                    },
                                     "request_latency": {
                                         "status": "complete",
-                                        "latency_percentiles_ms": {"p50": 2.0, "p95": 5.0, "p99": 8.0},
+                                        "expected_requests": task["payload"]["requests"],
+                                        "parsed_rows": task["payload"]["requests"],
+                                        "successful_latency_samples": task["payload"]["requests"],
+                                        "failed_status_rows": 0,
+                                        "invalid_rows": 0,
+                                        "truncated": False,
+                                        "latency_percentiles_ms": {
+                                            "p50": 2.0,
+                                            "p95": 5.0,
+                                            "p99": 8.0,
+                                            "maximum": 12.0,
+                                        },
                                     },
                                 },
                                 "generator_cpu": {
@@ -5049,6 +5238,7 @@ traffic: 2048000 bytes total, 128000 bytes headers (space savings 75.00%), 20480
                 "generator",
                 {"inventory": {"capabilities": {
                     "h2load": True,
+                    "h2load_http2_only": True,
                     "h2load_request_log": True,
                     "procfs_process_cpu": True,
                 }}},

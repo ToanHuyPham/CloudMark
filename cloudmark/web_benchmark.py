@@ -137,6 +137,8 @@ def parse_h2load_request_log(
     expected_requests: int,
     truncated: bool = False,
 ) -> dict[str, Any]:
+    if not 1 <= expected_requests <= H2LOAD_LOG_MAX_ROWS:
+        raise WebBenchmarkError("h2load expected request count is outside the bounded log contract.")
     latencies_ms: list[float] = []
     failed_statuses = 0
     invalid_rows = 0
@@ -147,13 +149,20 @@ def parse_h2load_request_log(
             invalid_rows += 1
             continue
         try:
-            float(fields[0])
+            start_time_us = float(fields[0])
             status = int(fields[1])
             duration_us = float(fields[2])
         except ValueError:
             invalid_rows += 1
             continue
-        if not math.isfinite(duration_us) or duration_us < 0 or duration_us > 3_600_000_000:
+        if (
+            not math.isfinite(start_time_us)
+            or start_time_us < 0
+            or (status != -1 and not 100 <= status <= 599)
+            or not math.isfinite(duration_us)
+            or duration_us < 0
+            or duration_us > 3_600_000_000
+        ):
             invalid_rows += 1
             continue
         if 200 <= status < 400:
@@ -202,6 +211,7 @@ def parse_h2load_output(
     *,
     expected_requests: int,
 ) -> dict[str, Any]:
+    application_protocol = re.search(r"^Application protocol:\s*(\S+)\s*$", stdout, re.IGNORECASE | re.MULTILINE)
     finished = re.search(
         r"finished in\s+([\d.]+)(us|ms|s|min|h),\s*([\d.]+)\s*req/s,\s*([\d.]+)(B|KB|MB|GB)/s",
         stdout,
@@ -223,7 +233,7 @@ def parse_h2load_output(
         stdout,
         re.IGNORECASE,
     )
-    if not finished or not requests or not statuses or not traffic:
+    if not application_protocol or not finished or not requests or not statuses or not traffic:
         raise WebBenchmarkError("h2load output did not contain the required HTTP/2 summary.")
     duration_value = float(finished.group(1))
     duration_seconds = duration_value * {"us": 0.000001, "ms": 0.001, "s": 1, "min": 60, "h": 3600}[
@@ -236,8 +246,28 @@ def parse_h2load_output(
     timeout = int(requests.group(7) or 0)
     if total != expected_requests:
         raise WebBenchmarkError("h2load request total did not match the fixed profile contract.")
+    protocol = application_protocol.group(1).strip().lower()
+    status_codes = {
+        "2xx": int(statuses.group(1)),
+        "3xx": int(statuses.group(2)),
+        "4xx": int(statuses.group(3)),
+        "5xx": int(statuses.group(4)),
+    }
+    summary_complete = (
+        protocol == "h2"
+        and started == expected_requests
+        and done == expected_requests
+        and succeeded == expected_requests
+        and failed == 0
+        and errored == 0
+        and timeout == 0
+        and status_codes["2xx"] + status_codes["3xx"] == expected_requests
+        and status_codes["4xx"] == 0
+        and status_codes["5xx"] == 0
+    )
     return {
-        "protocol": "h2",
+        "protocol": protocol,
+        "summary_status": "complete" if summary_complete else "partial",
         "request_total": total,
         "request_started": started,
         "request_done": done,
@@ -246,12 +276,7 @@ def parse_h2load_output(
         "request_errored": errored,
         "request_timeout": timeout,
         "success_percent": round(succeeded / total * 100, 6) if total else 0.0,
-        "status_codes": {
-            "2xx": int(statuses.group(1)),
-            "3xx": int(statuses.group(2)),
-            "4xx": int(statuses.group(3)),
-            "5xx": int(statuses.group(4)),
-        },
+        "status_codes": status_codes,
         "time_taken_seconds": round(duration_seconds, 6),
         "requests_per_second": float(finished.group(3)),
         "transfer_bytes_per_second": round(transfer_bps, 3),
@@ -292,6 +317,73 @@ def parse_curl_protocol_output(stdout: str) -> dict[str, Any]:
     }
 
 
+def _finite_number(value: Any, *, positive: bool = False) -> bool:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return False
+    number = float(value)
+    return math.isfinite(number) and (number > 0 if positive else number >= 0)
+
+
+def _nonnegative_integer(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
+def _http2_measurement_matches_contract(item: dict[str, Any], expected: dict[str, Any]) -> bool:
+    metrics = item.get("metrics")
+    if not isinstance(metrics, dict):
+        return False
+    request_log = metrics.get("request_latency")
+    status_codes = metrics.get("status_codes")
+    traffic = metrics.get("traffic")
+    if not isinstance(request_log, dict) or not isinstance(status_codes, dict) or not isinstance(traffic, dict):
+        return False
+    percentiles = request_log.get("latency_percentiles_ms")
+    if not isinstance(percentiles, dict):
+        return False
+    percentile_values = [percentiles.get(name) for name in ("p50", "p95", "p99", "maximum")]
+    if not all(_finite_number(value) for value in percentile_values):
+        return False
+    if not all(_nonnegative_integer(status_codes.get(name)) for name in ("2xx", "3xx", "4xx", "5xx")):
+        return False
+    p50, p95, p99, maximum = (float(value) for value in percentile_values)
+    requests = expected["requests"]
+    return (
+        item.get("scheme") == "https"
+        and item.get("path") == expected["path"]
+        and item.get("clients") == expected["clients"]
+        and item.get("threads") == expected["threads"]
+        and item.get("streams") == expected["streams"]
+        and item.get("requests") == requests
+        and metrics.get("protocol") == "h2"
+        and metrics.get("summary_status") == "complete"
+        and metrics.get("request_total") == requests
+        and metrics.get("request_started") == requests
+        and metrics.get("request_done") == requests
+        and metrics.get("request_succeeded") == requests
+        and metrics.get("request_failed") == 0
+        and metrics.get("request_errored") == 0
+        and metrics.get("request_timeout") == 0
+        and status_codes.get("2xx", 0) + status_codes.get("3xx", 0) == requests
+        and status_codes.get("4xx") == 0
+        and status_codes.get("5xx") == 0
+        and _finite_number(metrics.get("time_taken_seconds"), positive=True)
+        and _finite_number(metrics.get("requests_per_second"), positive=True)
+        and _finite_number(metrics.get("transfer_bytes_per_second"), positive=True)
+        and all(_nonnegative_integer(traffic.get(name)) for name in ("total_bytes", "header_bytes", "data_bytes"))
+        and traffic["total_bytes"] > 0
+        and traffic["data_bytes"] > 0
+        and request_log.get("status") == "complete"
+        and request_log.get("expected_requests") == requests
+        and request_log.get("parsed_rows") == requests
+        and request_log.get("successful_latency_samples") == requests
+        and request_log.get("failed_status_rows") == 0
+        and request_log.get("invalid_rows") == 0
+        and request_log.get("truncated") is False
+        and p50 <= p95 <= p99 <= maximum
+        and item.get("client_log_cleanup_verified") is True
+    )
+
+
 def _web_analysis(result: dict[str, Any]) -> dict[str, Any]:
     methodology = str(result.get("methodology_version", ""))
     http2_required = methodology == "web-http2-load-v1"
@@ -306,22 +398,30 @@ def _web_analysis(result: dict[str, Any]) -> dict[str, Any]:
     process_peaks = [
         float(item["peak_process_cpu_percent_of_one_core"])
         for item in observed_cpu
-        if isinstance(item.get("peak_process_cpu_percent_of_one_core"), (int, float))
+        if _finite_number(item.get("peak_process_cpu_percent_of_one_core"))
     ]
     host_peaks = [
         float(item["peak_host_utilization_percent"])
         for item in observed_cpu
-        if isinstance(item.get("peak_host_utilization_percent"), (int, float))
+        if _finite_number(item.get("peak_host_utilization_percent"))
     ]
+    declared_threads = [item.get("threads") for item in measurements]
+    valid_thread_contract = all(
+        isinstance(value, int) and not isinstance(value, bool) and 1 <= value <= 64
+        for value in declared_threads
+    )
     process_capacity_peaks = [
-        peak / max(1, int(measurement.get("threads", 1)))
-        for measurement, peak in zip(measurements, process_peaks)
-    ] if http2_required and len(process_peaks) == len(measurements) else process_peaks
+        peak / threads
+        for threads, peak in zip(declared_threads, process_peaks)
+    ] if http2_required and valid_thread_contract and len(process_peaks) == len(measurements) else (
+        process_peaks if not http2_required else []
+    )
     if (
         not measurements
         or len(observed_cpu) != len(measurements)
         or len(process_peaks) != len(measurements)
         or (http2_required and len(host_peaks) != len(measurements))
+        or (http2_required and len(process_capacity_peaks) != len(measurements))
     ):
         generator_status = "unknown"
         generator_reasons = ["generator-cpu-evidence-incomplete"]
@@ -388,17 +488,27 @@ def _web_analysis(result: dict[str, Any]) -> dict[str, Any]:
         application.get("status") == "observed"
         and application.get("reverse_proxy") is True
         and bool(dynamic_measurements)
-        and all(float((item.get("metrics") or {}).get("success_percent", 0)) > 0 for item in dynamic_measurements)
+        and all(
+            isinstance(item.get("metrics"), dict)
+            and _finite_number(item["metrics"].get("success_percent"), positive=True)
+            for item in dynamic_measurements
+        )
     )
     cleanup_verified = (result.get("cleanup") or {}).get("cleanup_verified") is True
     v2_required = methodology == "web-http-v2"
-    http2_load_complete = bool(http2_measurements) and all(
-        (item.get("metrics") or {}).get("protocol") == "h2"
-        and int((item.get("metrics") or {}).get("request_failed", -1)) == 0
-        and int((item.get("metrics") or {}).get("request_errored", -1)) == 0
-        and ((item.get("metrics") or {}).get("request_latency") or {}).get("status") == "complete"
-        and item.get("client_log_cleanup_verified") is True
-        for item in http2_measurements
+    expected_http2_jobs = {
+        str(job["name"]): job for job in WEB_PROFILES["web-peer-http2"]["jobs"]
+    }
+    observed_http2_jobs = {
+        str(item.get("name", "")): item for item in http2_measurements
+    }
+    http2_load_complete = (
+        len(http2_measurements) == len(expected_http2_jobs)
+        and set(observed_http2_jobs) == set(expected_http2_jobs)
+        and all(
+            _http2_measurement_matches_contract(observed_http2_jobs[name], expected)
+            for name, expected in expected_http2_jobs.items()
+        )
     )
     reason_codes: list[str] = []
     if v2_required and generator_status != "adequate":
@@ -474,6 +584,8 @@ def _web_analysis(result: dict[str, Any]) -> dict[str, Any]:
         },
         "scored": False,
     }
+
+
 def web_total_steps(profile_name: str) -> int:
     profile = WEB_PROFILES[profile_name]
     return len(profile["jobs"]) + len(profile.get("protocol_probes") or []) + 2
@@ -501,7 +613,7 @@ def validate_web_run(
     generator_capabilities = ["ab"]
     if profile["methodology_version"] == "web-http2-load-v1":
         target_capabilities.append("nginx_http2")
-        generator_capabilities = ["h2load", "h2load_request_log", "procfs_process_cpu"]
+        generator_capabilities = ["h2load", "h2load_http2_only", "h2load_request_log", "procfs_process_cpu"]
     elif profile["methodology_version"] == "web-http-v2":
         target_capabilities.append("nginx_http2")
         generator_capabilities.extend(["curl_http2", "procfs_process_cpu"])

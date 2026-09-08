@@ -110,12 +110,19 @@ Network v9 also executes fixed read-only `ethtool -S` against that same
 route-derived interface at both boundaries. Because driver statistic names are
 not standardized, CloudMark recognizes only a bounded set of common queue
 counter shapes, limits queue indexes to 0-127, and examines at most 4,096 lines
-per snapshot. It reports active RX/TX queues, the busiest queue share, and
-driver-exposed queue drop/error deltas. Unknown vendor counters remain
-unclassified, queue-set or counter resets remain partial, and absent queue
-support remains unavailable. Per-queue evidence is observational and is not a
-comparison gate; making vendor-specific availability a hard requirement would
-systematically exclude otherwise valid NICs and clouds.
+per snapshot. The observational `queue-counters-v2` normalizer recognizes the
+common direction/queue forms used by ENA, virtio, Hyper-V netvsc, and mlx5;
+MANA's `rx_0_*`/`tx_0_*` form; gVNIC's bracketed byte/drop fields; and
+vmxnet3's sectioned queue counters. For vmxnet3, only unicast/multicast/
+broadcast packet and byte components plus exact error/drop totals are combined;
+TSO, LRO, XDP, descriptor, and other vendor fields are not relabelled as packet
+traffic. It reports active RX/TX packet queues, packet and byte busiest-queue
+shares when exposed, and driver queue drop/error deltas. Unknown vendor
+counters remain unclassified, queue-set, normalization-version, or counter
+resets remain partial, and absent queue support remains unavailable. Per-queue
+evidence is observational and is not a comparison gate; making vendor-specific
+availability a hard requirement would systematically exclude otherwise valid
+NICs and clouds.
 
 At the pre-load boundary, Network v9 reads at most 64 KiB of Linux
 `/etc/resolv.conf`, persists configured nameserver address/family/class,

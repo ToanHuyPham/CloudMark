@@ -66,7 +66,8 @@ explicitly selected authenticated Agent. Provider network benchmark traffic
 must not traverse the operator system. The standard `network-v9` profile adds
 pre/post route and interface-counter snapshots, route/interface/MTU, read-only
 NIC driver/offload, TCP congestion-control, and bounded numeric path-trace
-evidence; bounded common driver per-queue counter deltas; queue-distribution,
+evidence; bounded versioned common driver per-queue packet/byte counter deltas;
+queue-distribution,
 guest-visible RSS/RPS/XPS/MSI IRQ affinity, and fixed system-resolver diagnostic
 observations; and route-stability and
 Generator-headroom validity gates. It retains bounded idle latency,
@@ -120,6 +121,11 @@ each window requires explicit operator confirmation. Its completion is
 time-separated evidence for that pair, not a provider rating or a substitute
 for independent targets. A standard profile or methodology upgrade preserves
 an unfinished older contract as `superseded` and requires a new campaign.
+
+The internal `linux-security-posture-v2` module is a tested read-only Linux
+evidence foundation only. It is not yet an Agent task, API Run, dashboard view,
+provider comparison input, or security rating. Keep that boundary explicit
+until the integration and provider evidence contracts are reviewed.
 
 ## Repository map
 

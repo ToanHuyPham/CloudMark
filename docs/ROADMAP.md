@@ -106,11 +106,13 @@ Required topology: Controller + Agent A + Agent B.
 - immutable fixed-pair campaigns, manual per-window confirmation, and one
   comparison-eligible Run per UTC day — available in `network-campaign-v1`;
 - unattended campaign schedules and cross-pair orchestration — planned;
-- bounded read-only driver per-queue counter evidence — observational in `network-v9`;
+- bounded read-only driver per-queue counter evidence with versioned common
+  ENA/virtio/netvsc/mlx5, MANA, gVNIC, and vmxnet3 normalization —
+  observational in `network-v9`;
 - bounded Linux system-resolver configuration plus fixed A/AAAA diagnostic — observational in `network-v9`;
 - bounded guest-visible RSS/RPS/XPS and MSI IRQ-affinity evidence — observational in `network-v9`;
 - controlled authoritative DNS, cache-cold repetition, DNSSEC, TCP fallback, and Windows resolver parity — planned;
-- wider vendor NIC counter-name normalization and physical-host steering verification — planned;
+- additional vendor NIC counter-name normalization and physical-host steering verification — planned;
 - operator-declared same-host, same-zone, cross-zone, cross-region, and
   public-Internet labels — available;
 - trusted-metadata placement checks and globally routable address
@@ -170,6 +172,10 @@ own generators for CPU and network resources.
   systems with rate and duration limits, never against third parties.
 
 ## M5 — Containers, Kubernetes, HA, and operations
+
+- bounded read-only Linux kernel, LSM, Secure Boot, cgroup, privilege,
+  network-hardening, and mount evidence — internal foundation available in
+  `linux-security-posture-v2`; Agent/API/dashboard integration remains planned;
 
 - container cold start, image pull/unpack, and overlay filesystem;
 - Kubernetes scheduling, pod density, service latency, and autoscaling response;
@@ -231,7 +237,7 @@ matching control-plane drills.
 
 1. Complete M1 and the time-series schema because storage is the most mature executor.
 2. Complete M2 with mTLS, cross-pair repeated windows, physical-fabric
-   verification, wider vendor queue normalization, and richer public-path
+   verification, additional vendor queue normalization, and richer public-path
    classification.
 3. Complete M3 beyond the available integer CPU and memory-bandwidth subsets.
 4. Build M4 on the stable runner.

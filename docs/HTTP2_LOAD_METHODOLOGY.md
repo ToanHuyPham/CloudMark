@@ -20,7 +20,10 @@ The Agent independently rejects every other scheme, address, port, path,
 client count, thread count, stream count, request count, header, body, or URI.
 Request-count workloads are used instead of an unbounded duration mode. Each
 job has a 90-second child-process budget plus the standard Controller-contact
-watchdog.
+watchdog. CloudMark restricts the TLS application-protocol list to `h2` using
+the installed h2load generation's `--alpn-list=h2` or legacy
+`--npn-list=h2` option and also requires the observed application protocol in
+the summary to be `h2`.
 
 ## Evidence
 
@@ -40,8 +43,8 @@ success, failure, timeout, cancellation, or parser error.
 A Run is comparison-eligible only when:
 
 - Nginx exposes the packaged dynamic reverse proxy with HTTP/2 support;
-- every h2load job reports HTTP/2, zero failed requests, and zero network-level
-  errors;
+- every h2load job reports HTTP/2 and the exact expected total, started, done,
+  succeeded, status-class, failure, error, and timeout counts;
 - every per-request log exactly matches its fixed request count;
 - every Generator process/host CPU observation exists; peak h2load process CPU
   normalized by the job's declared native-thread count remains below 90% of

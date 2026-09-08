@@ -188,10 +188,12 @@ HTTP/2 performance measurement.
 `web-http2-load-v1` reuses the packaged loopback application and HTTP/2-capable
 Nginx Target but dispatches only fixed h2load jobs on the Generator. Connection,
 native-thread, stream, request-count, HTTPS port, and path shapes are
-allow-listed. A bounded per-request log produces exact P50/P95/P99 evidence and
-is removed on every terminal path. HTTP/2 success/error summaries, Generator
-CPU, log cleanup, reverse-proxy evidence, and Target cleanup are comparison
-gates.
+allow-listed. The Agent restricts TLS application-protocol negotiation to `h2`
+with the installed h2load generation's supported fixed option and verifies the
+observed protocol. A bounded per-request log produces exact P50/P95/P99
+evidence and is removed on every terminal path. Exact HTTP/2 request summaries,
+Generator CPU, log cleanup, reverse-proxy evidence, and Target cleanup are
+comparison gates.
 
 ## Network direction policy
 
@@ -210,7 +212,8 @@ the operator's home machine.
 `network-peer-quick` preserves the `network-v1` directional TCP baseline.
 `network-peer-standard` uses `network-v9`: fixed pre/post route, bounded numeric
 path-trace, structured aggregate interface counters, bounded driver per-queue
-counter snapshots, route/interface/MTU probes, read-only NIC
+counter snapshots with an independently versioned observational normalizer,
+route/interface/MTU probes, read-only NIC
 driver/offload and TCP congestion-control capture, fixed system-resolver
 configuration and A/AAAA diagnostics, bounded guest-visible RSS/RPS/XPS/MSI
 IRQ-affinity evidence, bounded idle ICMP,

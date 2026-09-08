@@ -208,6 +208,34 @@ def web_tool_version(name: str, executable: str) -> str | None:
     return output.splitlines()[0] if output else None
 
 
+def _h2load_help_output(executable: str) -> str | None:
+    try:
+        result = subprocess.run(
+            [executable, "--help"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+            shell=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    output = f"{result.stdout}\n{result.stderr}"
+    return output if result.returncode == 0 and output.strip() else None
+
+
+def h2load_http2_argument(executable: str) -> str | None:
+    """Return the installed h2load option that restricts TLS ALPN to HTTP/2."""
+    output = _h2load_help_output(executable)
+    if not output:
+        return None
+    if "--alpn-list" in output:
+        return "--alpn-list=h2"
+    if "--npn-list" in output:
+        return "--npn-list=h2"
+    return None
+
+
 def web_tool_supports(name: str, executable: str, feature: str) -> bool:
     if (name, feature) not in {
         ("curl", "http2"),
@@ -216,18 +244,9 @@ def web_tool_supports(name: str, executable: str, feature: str) -> bool:
     }:
         raise ValueError(f"Unsupported Web capability check: {name}/{feature}")
     if name == "h2load":
-        try:
-            result = subprocess.run(
-                [executable, "--help"],
-                capture_output=True,
-                text=True,
-                timeout=5,
-                check=False,
-                shell=False,
-            )
-        except (OSError, subprocess.TimeoutExpired):
+        output = _h2load_help_output(executable)
+        if not output:
             return False
-        output = f"{result.stdout}\n{result.stderr}"
         return "--log-file" in output and "--max-concurrent-streams" in output
     output = _web_tool_output(name, executable)
     if not output:

@@ -58,11 +58,13 @@ test("keeps production metadata and project policy explicit", async () => {
   assert.match(page, /provider-observations-v4/);
   assert.match(page, /SYSTEM RESOLVER/);
   assert.match(page, /QUEUE STEERING/);
+  assert.match(page, /rx_byte_distribution/);
   assert.match(page, /network-v9/i);
   assert.match(page, /DYNAMIC REVERSE PROXY/);
   assert.match(page, /HTTP\/2 NEGOTIATION/);
   assert.match(page, /web-http-v2/i);
   assert.match(page, /web-http2-load-v1/i);
+  assert.match(page, /h2load_http2_only/);
   assert.match(page, /HTTP\/2 LOAD VALIDITY/);
   assert.match(page, /TRANSACTION TAIL LATENCY/);
   assert.match(page, /database-postgresql-v2/i);
@@ -111,6 +113,7 @@ test("keeps public product copy English-only", async () => {
     "../docs/WEB_METHODOLOGY.md",
     "../docs/HTTP2_LOAD_METHODOLOGY.md",
     "../docs/SUITABILITY_METHODOLOGY.md",
+    "../docs/SECURITY_POSTURE_METHODOLOGY.md",
     "../docs/REMOTE_EXECUTION.md",
     "../docs/ROADMAP.md",
     "../docs/USER_GUIDE.md",

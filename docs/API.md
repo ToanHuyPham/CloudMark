@@ -155,8 +155,8 @@ driver-exposed per-queue counters, one fixed A/AAAA system-resolver diagnostic,
 and bounded guest RSS/RPS/XPS/MSI IRQ-affinity observations per Agent; idle latency;
 directional TCP scaling; UDP rate sweeps derived from each direction's TCP
 baseline; and one simultaneous bidirectional TCP measurement. Its result
-includes aggregate byte/packet/error/drop deltas, observational queue traffic
-distribution when the NIC driver exposes recognized counters, guest-visible
+includes aggregate byte/packet/error/drop deltas, versioned observational queue
+packet/byte distributions when the NIC driver exposes recognized counters, guest-visible
 steering/IRQ placement when Linux exposes it, resolver
 configuration and bounded query outcomes when available, and comparison eligibility based on
 stable pre/post routes, destination-reaching bounded traces, a complete
@@ -291,7 +291,8 @@ traverses the Controller.
 
 `web-peer-http2` uses the same endpoint and confirmation flag with methodology
 `web-http2-load-v1`. It requires `nginx_http2` on Target and `h2load`,
-`h2load_request_log`, and Linux CPU accounting on Generator. The result adds
+`h2load_http2_only`, `h2load_request_log`, and Linux CPU accounting on
+Generator. The result adds
 `http2_measurements` with fixed clients/native threads/max streams/request
 counts, request/status/error totals, throughput, transfer bytes, exact-log
 P50/P95/P99/maximum latency, Generator CPU, log cleanup, and service cleanup.

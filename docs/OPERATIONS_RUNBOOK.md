@@ -159,6 +159,10 @@ not prove provider ownership or public-Internet transit.
 Review driver queue distribution separately. An `unavailable` per-queue result
 usually means that the virtual NIC does not expose a recognized `ethtool -S`
 counter shape; it does not turn throughput into a failed or zero result.
+`queue-counters-v2` recognizes bounded common ENA/virtio/netvsc/mlx5 forms,
+MANA indexed names, gVNIC bracketed byte/drop names, and vmxnet3 sectioned
+queues. Packet distribution may remain unavailable when a driver exposes only
+per-queue bytes; review the separate byte distribution in that case.
 Review queue steering and IRQ evidence separately. Zero configured RPS/XPS
 queues can be a valid guest configuration, while `unavailable` RSS or MSI IRQ
 evidence commonly means that the virtual NIC hides the control. Neither state
@@ -319,7 +323,8 @@ directory, or any directory still used by a server process.
 - verify the Generator reports `ab`; Standard also requires `curl_http2` and
   `procfs_process_cpu`;
 - for HTTP/2 Multiplexed Load, verify the Generator reports `h2load`,
-  `h2load_request_log`, and `procfs_process_cpu` instead of ApacheBench;
+  `h2load_http2_only`, `h2load_request_log`, and `procfs_process_cpu` instead
+  of ApacheBench;
 - restart each Agent after installing the web pack so inventory refreshes;
 - verify TCP `58080` and `58443` are reachable only between the paired Agents;
 - run the Target Agent as a non-root account;

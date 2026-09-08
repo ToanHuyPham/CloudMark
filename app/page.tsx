@@ -589,6 +589,7 @@ type Run = {
         receiver?: NetworkEndpoint;
         interface?: string;
         status: "complete" | "partial" | "unavailable";
+        normalization_versions?: string[];
         reported_queue_count?: number;
         rx_distribution?: {
           reported_queues: number;
@@ -601,6 +602,20 @@ type Run = {
           reported_queues: number;
           active_queues: number;
           total_packets: number;
+          busiest_queue?: number | null;
+          busiest_queue_percent?: number | null;
+        };
+        rx_byte_distribution?: {
+          reported_queues: number;
+          active_queues: number;
+          total_bytes: number;
+          busiest_queue?: number | null;
+          busiest_queue_percent?: number | null;
+        };
+        tx_byte_distribution?: {
+          reported_queues: number;
+          active_queues: number;
+          total_bytes: number;
           busiest_queue?: number | null;
           busiest_queue_percent?: number | null;
         };
@@ -1262,7 +1277,7 @@ export default function Home() {
     ? Boolean(capabilities.nginx && capabilities.openssl
       && (!(selectedWebV2 || selectedWebHttp2) || capabilities.nginx_http2))
     : Boolean(selectedWebHttp2
-      ? (capabilities.h2load && capabilities.h2load_request_log && capabilities.procfs_process_cpu)
+      ? (capabilities.h2load && capabilities.h2load_http2_only && capabilities.h2load_request_log && capabilities.procfs_process_cpu)
       : (capabilities.ab && (!selectedWebV2 || (capabilities.curl_http2 && capabilities.procfs_process_cpu))));
   const selectedWebReady = Boolean(selectedSession)
     && ["target", "generator"].every((role) => {
@@ -1733,8 +1748,8 @@ export default function Home() {
         setNotice("HTTP/2 load requires an Nginx build with HTTP/2 support on the Target.");
         return;
       }
-      if (!generatorCapabilities.h2load || !generatorCapabilities.h2load_request_log || !generatorCapabilities.procfs_process_cpu) {
-        setNotice("HTTP/2 load requires h2load request-log support and Linux CPU accounting on the Generator.");
+      if (!generatorCapabilities.h2load || !generatorCapabilities.h2load_http2_only || !generatorCapabilities.h2load_request_log || !generatorCapabilities.procfs_process_cpu) {
+        setNotice("HTTP/2 load requires h2load with HTTP/2-only negotiation, request-log support, and Linux CPU accounting on the Generator.");
         return;
       }
     } else {
@@ -2120,7 +2135,7 @@ export default function Home() {
                 </article>}
                 {networkQueueDeltas.length > 0 && <article className="panel network-evidence-card">
                   <div className="panel-head"><div><span className="section-kicker">DRIVER QUEUE WINDOW</span><h3>Per-queue traffic distribution</h3></div><span className="run-id">{networkValidity?.queue_counter_evidence_status?.toUpperCase() || "UNKNOWN"}</span></div>
-                  <div className="evidence-rows">{networkQueueDeltas.map((item) => <div key={item.direction}><span>{item.sender?.name || item.direction} · {item.interface || "Interface unavailable"}</span><strong>{item.status !== "unavailable" ? `${item.rx_distribution?.active_queues || 0} RX · ${item.tx_distribution?.active_queues || 0} TX active queues` : "Per-queue counters unavailable"}</strong><small>{item.status !== "unavailable" ? `Busiest RX queue ${item.rx_distribution?.busiest_queue ?? "—"}: ${item.rx_distribution?.busiest_queue_percent?.toFixed(1) ?? "—"}% · ${item.total_dropped ?? "—"} driver drops · ${item.total_errors ?? "—"} errors` : item.reason}</small></div>)}</div>
+                  <div className="evidence-rows">{networkQueueDeltas.map((item) => { const rxPackets = item.rx_distribution?.active_queues || 0; const txPackets = item.tx_distribution?.active_queues || 0; const rxBytes = item.rx_byte_distribution?.active_queues || 0; const txBytes = item.tx_byte_distribution?.active_queues || 0; const busiestQueue = rxPackets ? item.rx_distribution?.busiest_queue : item.rx_byte_distribution?.busiest_queue; const busiestShare = rxPackets ? item.rx_distribution?.busiest_queue_percent : item.rx_byte_distribution?.busiest_queue_percent; return <div key={item.direction}><span>{item.sender?.name || item.direction} · {item.interface || "Interface unavailable"}</span><strong>{item.status !== "unavailable" ? `${rxPackets || rxBytes} RX · ${txPackets || txBytes} TX active queues · ${rxPackets || txPackets ? "packet" : "byte"} evidence` : "Per-queue counters unavailable"}</strong><small>{item.status !== "unavailable" ? `Busiest RX queue ${busiestQueue ?? "—"}: ${busiestShare?.toFixed(1) ?? "—"}% · ${item.total_dropped ?? "—"} driver drops · ${item.total_errors ?? "—"} errors · ${item.normalization_versions?.join("/") || "legacy normalizer"}` : item.reason}</small></div>; })}</div>
                   <p className="method-note">Network v9 recognizes only bounded common ethtool queue-counter names. Vendor-specific counters remain unclassified evidence, and missing per-queue support never becomes a zero or invalidates throughput.</p>
                 </article>}
                 {networkSteeringObservations.length > 0 && <article className="panel network-evidence-card">
@@ -2234,7 +2249,7 @@ export default function Home() {
             <section className="panel session-panel">
               <div className="panel-head"><div><span className="section-kicker">PAIRED EXECUTION</span><h3>Web assessment readiness</h3></div><label className="compact-select"><span>SESSION</span><select value={selectedSession?.id || ""} onChange={(event) => setSelectedSessionId(event.target.value)}>{dashboard?.sessions.map((session) => <option key={session.id} value={session.id}>{session.label} · {session.topology.scope} / {session.topology.verification.status} · {session.status}</option>)}</select></label></div>
               {selectedSession ? <div className="agent-roster">{["target", "generator"].map((role) => { const agent = selectedSession.agents.find((item) => item.role === role); const capabilities = agent?.system.inventory?.capabilities || {}; const ready = webRoleReady(role, capabilities); return <article key={role} className={agent && ready ? "connected" : "waiting"}><span>{role.toUpperCase()}</span><strong>{agent?.name || `Waiting for ${role}`}</strong><small>{agent ? `${agent.endpoint.address || "No advertised IP"} · ${ready ? selectedWebHttp2 ? "HTTP/2 load ready" : selectedWebV2 ? "Web v2 ready" : "Web v1 ready" : "web prerequisites missing"}` : "Join command has not connected"}</small></article>; })}</div> : <div className="empty-row">Create a session, then connect both provider Agents.</div>}
-              <div className="session-actions"><p><strong>{selectedSession?.status !== "ready" ? "Two Agents required" : selectedWebReady ? "Pair ready" : "Web prerequisites missing"}</strong><small>{selectedWebHttp2 ? "HTTP/2 load requires Nginx HTTP/2 on Target plus h2load request logging and Linux CPU accounting on Generator." : "Web v2 requires Nginx HTTP/2 support on Target plus ApacheBench, HTTP/2-capable curl, and Linux CPU accounting on Generator."}</small></p><button className="button primary" onClick={startWeb} disabled={busy || Boolean(activeWeb) || selectedSession?.status !== "ready" || !selectedWebReady}>Run Web/API/TLS assessment</button></div>
+              <div className="session-actions"><p><strong>{selectedSession?.status !== "ready" ? "Two Agents required" : selectedWebReady ? "Pair ready" : "Web prerequisites missing"}</strong><small>{selectedWebHttp2 ? "HTTP/2 load requires Nginx HTTP/2 on Target plus h2load HTTP/2-only negotiation, request logging, and Linux CPU accounting on Generator." : "Web v2 requires Nginx HTTP/2 support on Target plus ApacheBench, HTTP/2-capable curl, and Linux CPU accounting on Generator."}</small></p><button className="button primary" onClick={startWeb} disabled={busy || Boolean(activeWeb) || selectedSession?.status !== "ready" || !selectedWebReady}>Run Web/API/TLS assessment</button></div>
             </section>
             {activeWeb && <section className="panel run-progress" aria-live="polite"><div><span className="section-kicker">ACTIVE WEB RUN / {activeWeb.id}</span><strong>{activeWeb.current_job || activeWeb.phase || "Preparing isolated Nginx"}</strong><small>{activeWeb.completed_steps || 0} of {activeWeb.total_steps || 1} steps · {Math.round((activeWeb.progress || 0) * 100)}%</small></div><div className="progress-track"><i style={{ width: `${Math.max(2, (activeWeb.progress || 0) * 100)}%` }} /></div><button className="button danger" onClick={cancelWeb} disabled={busy || activeWeb.cancel_requested}>{activeWeb.cancel_requested ? "Cancelling" : "Cancel run"}</button></section>}
             <section className="panel web-results">
