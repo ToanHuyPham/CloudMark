@@ -100,7 +100,8 @@ systems.
 ## Remote execution
 
 - Remote tasks are authenticated per Agent and restricted to compute, memory,
-  storage, guarded network, guarded PostgreSQL, guarded Redis, guarded
+  storage, read-only Linux security posture, guarded network, guarded
+  PostgreSQL, guarded Redis, guarded
   MySQL/MariaDB, and guarded Web/API/TLS kinds; arbitrary shell commands are
   refused.
 - The Agent validates suite, installed profile, protocol version, explicit load
@@ -247,6 +248,23 @@ systems.
 - Preview is the default. Installation requires `bootstrap --yes` and
   administrator/root privileges.
 - Installed package names and commands are visible in the preview.
+
+## Linux Security Posture
+
+- The suite accepts only `linux-security-posture` on a Linux Controller or an
+  authenticated Linux Agent reporting `security_posture_linux`.
+- Remote tasks require the exact `read_only=true` and `load_confirmed=false`
+  contract. They cannot carry a path, command, policy value, or write action.
+- Each kernel/security control read is capped at 4,096 bytes. Mount information
+  is capped at 1 MiB and 4,096 rows, and EFI Secure Boot discovery is capped at
+  eight matching variables.
+- Symbolic-link control files, malformed values, oversized values, and missing
+  controls become unavailable evidence. They are not zero or a failed score.
+- Core-handler text, EFI variable identifiers, mount source devices,
+  non-target mountpoints, and raw mount options are never persisted.
+- The collector executes no subprocess, performs no network request, modifies
+  no kernel/sysctl/mount state, and produces no security score or provider
+  security claim.
 
 ## Suitability and provider claims
 

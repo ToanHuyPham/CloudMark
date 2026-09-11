@@ -1,13 +1,24 @@
 from __future__ import annotations
 
 import tempfile
+import time
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
+from cloudmark.agent import AgentWorker
+from cloudmark.database import Database
+from cloudmark.remote import REMOTE_METHODOLOGY_VERSION, validate_remote_agent
+from cloudmark.runner import JobContext
+from cloudmark.server import CloudMarkController
+from cloudmark.suitability import _run_valid
 from cloudmark.security_posture import (
     SECURITY_CONTROL_MAX_BYTES,
     SECURITY_POSTURE_VERSION,
+    SecurityPostureError,
     collect_linux_security_posture,
+    run_security_posture,
+    security_posture_preflight,
 )
 
 
@@ -120,6 +131,153 @@ class SecurityPostureTests(unittest.TestCase):
         self.assertEqual(result["evidence_status"], "unavailable")
         self.assertEqual(result["observed_controls"], 0)
         self.assertTrue(all(item["status"] == "unavailable" for item in result["controls"].values()))
+
+    def test_security_run_envelope_is_read_only_versioned_and_unscored(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._write(root, "proc/sys/kernel/randomize_va_space", "2\n")
+            context = JobContext("security", total_steps=1, timeout_seconds=30)
+            result = run_security_posture(
+                "linux-security-posture",
+                context=context,
+                root=root,
+                platform_name="Linux",
+            )
+        self.assertEqual(result["suite"], "security")
+        self.assertEqual(result["profile_version"], "2.0")
+        self.assertEqual(result["methodology_version"], SECURITY_POSTURE_VERSION)
+        self.assertTrue(result["policy"]["read_only"])
+        self.assertFalse(result["analysis"]["scored"])
+        self.assertEqual(context.completed_steps, 1)
+        with self.assertRaises(SecurityPostureError):
+            security_posture_preflight("linux-security-posture", platform_name="Windows")
+
+    def test_agent_accepts_only_the_exact_remote_security_contract(self) -> None:
+        worker = AgentWorker("http://127.0.0.1:8787", "agent", "token")
+        task = {"id": "task_security123", "run_id": "run_security", "kind": "benchmark-security"}
+        payload = {
+            "suite": "security",
+            "profile": "linux-security-posture",
+            "timeout_seconds": 120,
+            "load_confirmed": False,
+            "read_only": True,
+            "protocol_version": REMOTE_METHODOLOGY_VERSION,
+        }
+        benchmark = {
+            "suite": "security",
+            "profile": "linux-security-posture",
+            "profile_version": "2.0",
+            "methodology_version": SECURITY_POSTURE_VERSION,
+            "tool": {"name": "cloudmark-security-posture", "version": SECURITY_POSTURE_VERSION},
+        }
+        with patch.object(worker, "_benchmark_evidence", return_value={"inventory": {}}), patch(
+            "cloudmark.agent.run_security_posture", return_value=benchmark
+        ):
+            result = worker._run_benchmark(task, payload)
+        self.assertEqual(result["benchmark"], benchmark)
+        self.assertEqual(result["protocol_version"], REMOTE_METHODOLOGY_VERSION)
+        with self.assertRaisesRegex(ValueError, "read-only"):
+            worker._run_benchmark(task, {**payload, "read_only": False})
+
+    def test_controller_dispatches_and_attributes_remote_security_posture(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            controller = CloudMarkController(Path(directory))
+            controller.database.create_session(
+                "session_security", "security", "hash", "2099-01-01T00:00:00+00:00"
+            )
+            system = {
+                "inventory": {
+                    "hostname": "security-target",
+                    "os": {"system": "Linux", "distribution": "Test Linux"},
+                    "capabilities": {"security_posture_linux": True},
+                },
+                "provider": {"provider": "Test Provider", "source": "test"},
+            }
+            controller.database.add_agent(
+                "security_agent",
+                "session_security",
+                "security-target",
+                "target",
+                system,
+                endpoint={"address": "10.0.0.10"},
+            )
+            agent = validate_remote_agent(
+                controller.database,
+                "security_agent",
+                "security",
+                "linux-security-posture",
+            )
+            self.assertEqual(agent["id"], "security_agent")
+            submitted = controller.submit_run({
+                "suite": "security",
+                "profile": "linux-security-posture",
+                "agent_id": "security_agent",
+            })
+            task = None
+            deadline = time.time() + 3
+            while time.time() < deadline and task is None:
+                task = controller.database.claim_agent_task("security_agent")
+                if task is None:
+                    time.sleep(0.01)
+            self.assertIsNotNone(task)
+            assert task is not None
+            self.assertEqual(task["kind"], "benchmark-security")
+            self.assertTrue(task["payload"]["read_only"])
+            self.assertFalse(task["payload"]["load_confirmed"])
+            controller.finish_agent_task(
+                "security_agent",
+                task["id"],
+                {
+                    "status": "completed",
+                    "result": {
+                        "benchmark": {
+                            "suite": "security",
+                            "profile": "linux-security-posture",
+                            "profile_version": "2.0",
+                            "methodology_version": SECURITY_POSTURE_VERSION,
+                            "security_posture": {
+                                "evidence_status": "partial",
+                                "observed_controls": 20,
+                                "total_controls": 31,
+                            },
+                            "analysis": {"scored": False},
+                            "tool": {
+                                "name": "cloudmark-security-posture",
+                                "version": SECURITY_POSTURE_VERSION,
+                            },
+                        },
+                        "evidence": system,
+                        "protocol_version": REMOTE_METHODOLOGY_VERSION,
+                        "agent_version": "0.5.0",
+                    },
+                },
+            )
+            deadline = time.time() + 3
+            run = controller.database.get_run(submitted["id"])
+            while time.time() < deadline and run["status"] not in {"completed", "failed", "cancelled"}:
+                time.sleep(0.01)
+                run = controller.database.get_run(submitted["id"])
+            self.assertEqual(run["status"], "completed")
+            self.assertEqual(run["request"]["execution"], "remote-agent")
+            self.assertEqual(run["result"]["execution"]["agent"]["id"], "security_agent")
+            self.assertEqual(run["result"]["methodology_version"], SECURITY_POSTURE_VERSION)
+
+    def test_suitability_accepts_only_the_installed_security_methodology(self) -> None:
+        run = {
+            "suite": "security",
+            "profile": "linux-security-posture",
+            "status": "completed",
+            "methodology_version": SECURITY_POSTURE_VERSION,
+            "result": {
+                "methodology_version": SECURITY_POSTURE_VERSION,
+                "security_posture": {"evidence_status": "partial"},
+            },
+        }
+        self.assertEqual(_run_valid(run), (True, None))
+        run["result"]["methodology_version"] = "linux-security-posture-unknown"
+        valid, reason = _run_valid(run)
+        self.assertFalse(valid)
+        self.assertIn("methodology", str(reason).lower())
 
 
 if __name__ == "__main__":

@@ -80,6 +80,7 @@ from cloudmark.profiles import (
     MEMORY_PROFILES,
     NETWORK_PROFILES,
     SCENARIOS,
+    SECURITY_PROFILES,
     STORAGE_PROFILES,
     WEB_PROFILES,
 )
@@ -5270,7 +5271,10 @@ traffic: 2048000 bytes total, 128000 bytes headers (space savings 75.00%), 20480
         self.assertEqual(domains["network"], "partial")
         self.assertEqual(domains["database"], "partial")
         self.assertEqual(domains["web"], "partial")
+        self.assertEqual(domains["security"], "partial")
         self.assertEqual(domains["reliability"], "roadmap")
+        self.assertEqual(SECURITY_PROFILES["linux-security-posture"]["methodology_version"], "linux-security-posture-v2")
+        self.assertTrue(SECURITY_PROFILES["linux-security-posture"]["read_only"])
 
     def test_bootstrap_includes_base_pack(self) -> None:
         plan = create_plan(["storage"])
@@ -5667,6 +5671,11 @@ max: 1.50
                 self.assertIn("mysql-peer-standard", dashboard["profiles"]["database"])
                 self.assertIn("web-peer-quick", dashboard["profiles"]["web"])
                 self.assertIn("web-peer-http2", dashboard["profiles"]["web"])
+                self.assertIn("linux-security-posture", dashboard["profiles"]["security"])
+                self.assertEqual(
+                    dashboard["profiles"]["security"]["linux-security-posture"]["methodology_version"],
+                    "linux-security-posture-v2",
+                )
                 self.assertIn("sessions", dashboard)
                 self.assertEqual(dashboard["network_campaigns"], [])
                 self.assertEqual(dashboard["suitability"]["engine_version"], "suitability-v1")

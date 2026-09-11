@@ -38,7 +38,7 @@ timestamp, and raw result.
 | Available | Immutable, manually dispatched repeated network campaigns with one comparison-eligible window per UTC day |
 | Roadmap | Unattended sampling schedules, physical-fabric verification, additional vendor queue normalization, public-path classification, and mTLS enrollment |
 | Roadmap | Remaining CPU, memory/NUMA, GPU, application, platform, operations, and provider executors |
-| Roadmap | Read-only Linux Security Posture v2 foundation is tested; Agent/API/dashboard integration and provider security evidence remain pending |
+| Partial | Read-only Linux Security Posture v2 runs locally or on an authenticated Agent with redacted kernel, LSM, Secure Boot, cgroup, network-hardening, and mount evidence; provider security evidence remains pending |
 | Roadmap | Cross-target campaign orchestration, cross-zone analysis, timestamped cost, operations, and final provider ratings |
 
 `Partial` and `Roadmap` capabilities never receive an artificial zero score.
@@ -120,6 +120,7 @@ python -m cloudmark run storage --profile disk-quick --yes
 python -m cloudmark run storage --profile disk-database --yes
 python -m cloudmark run storage --profile disk-throughput --yes
 python -m cloudmark run storage --profile disk-sustained --yes
+python -m cloudmark run security --profile linux-security-posture
 ```
 
 CPU and memory profiles deliberately saturate the selected cores. Run them on
@@ -129,12 +130,15 @@ C/OpenMP kernel with GCC and preserve a 512 MiB available-memory reserve. These
 executors currently target Linux; results from different CPU architectures are
 not treated as directly comparable.
 
-Version `0.5.0` can dispatch single-system compute, memory, and storage suites
+Version `0.5.0` can dispatch single-system compute, memory, storage, and
+read-only Linux security suites
 to an explicitly selected Agent. The Agent executes only installed CloudMark
 profiles, sends progress and partial evidence to the Controller, polls operator
 cancellation while a child process is active, and stops load after a bounded
 control-path outage. Omitting an Agent target still executes on the Controller
 host.
+Security Posture does not require `--yes`, does not start a load process, and
+produces guest evidence rather than a security score.
 
 Storage runs use a temporary file, preserve a free-space reserve, never target
 a raw device, and remove the test file after completion, failure, timeout, or
@@ -168,7 +172,7 @@ Controller is never an iperf3 endpoint.
 - [HTTP/2 load methodology](docs/HTTP2_LOAD_METHODOLOGY.md)
 - [Workload suitability methodology](docs/SUITABILITY_METHODOLOGY.md)
 - [Safety model](docs/SAFETY.md)
-- [Linux security-posture foundation](docs/SECURITY_POSTURE_METHODOLOGY.md)
+- [Linux security-posture methodology](docs/SECURITY_POSTURE_METHODOLOGY.md)
 - [Product roadmap and machine topology matrix](docs/ROADMAP.md)
 
 ## Release status

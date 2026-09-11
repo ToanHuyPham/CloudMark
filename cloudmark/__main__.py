@@ -14,6 +14,7 @@ from .inventory import collect_inventory
 from .profiles import COMPUTE_PROFILES, MEMORY_PROFILES, STORAGE_PROFILES
 from .provider import detect_provider
 from .runner import JobContext
+from .security_posture import run_security_posture, security_posture_preflight
 from .server import serve
 
 
@@ -41,7 +42,7 @@ def parser() -> argparse.ArgumentParser:
     bootstrap.add_argument("--yes", action="store_true", help="Execute the plan; otherwise preview only")
 
     run = sub.add_parser("run", help="Run a benchmark suite")
-    run.add_argument("suite", choices=["compute", "memory", "storage"])
+    run.add_argument("suite", choices=["compute", "memory", "storage", "security"])
     run.add_argument("--profile")
     run.add_argument("--workspace", type=Path, default=Path(".cloudmark/benchmark-workspace"))
     run.add_argument("--timeout-seconds", type=int, help="Stop the run after this many seconds")
@@ -82,15 +83,21 @@ def main() -> None:
         if args.command == "bootstrap" and args.yes:
             _print({"results": execute_plan(plan)})
     elif args.command == "run":
-        default_profiles = {"compute": "compute-quick", "memory": "memory-quick", "storage": "disk-quick"}
+        default_profiles = {
+            "compute": "compute-quick",
+            "memory": "memory-quick",
+            "storage": "disk-quick",
+            "security": "linux-security-posture",
+        }
         profile = args.profile or default_profiles[args.suite]
-        preflight = (
-            storage_preflight(profile, args.workspace)
-            if args.suite == "storage"
-            else system_preflight(args.suite, profile, args.workspace)
-        )
+        if args.suite == "storage":
+            preflight = storage_preflight(profile, args.workspace)
+        elif args.suite == "security":
+            preflight = security_posture_preflight(profile)
+        else:
+            preflight = system_preflight(args.suite, profile, args.workspace)
         _print({"preflight": preflight})
-        if not args.yes:
+        if args.suite != "security" and not args.yes:
             action = "temporary-file writes" if args.suite == "storage" else "intentional benchmark load"
             raise SystemExit(f"Add --yes to confirm {action}.")
         timeout_seconds = args.timeout_seconds or preflight["default_timeout_seconds"]
@@ -107,6 +114,8 @@ def main() -> None:
             total_steps=(
                 len(STORAGE_PROFILES[profile]["jobs"]) + 2
                 if args.suite == "storage"
+                else 1
+                if args.suite == "security"
                 else len((COMPUTE_PROFILES if args.suite == "compute" else MEMORY_PROFILES)[profile]["jobs"])
             ),
             timeout_seconds=timeout_seconds,
@@ -114,6 +123,8 @@ def main() -> None:
         )
         if args.suite == "storage":
             _print(run_storage(profile, args.workspace, "cli", context=context))
+        elif args.suite == "security":
+            _print(run_security_posture(profile, context=context))
         else:
             _print(run_system_benchmark(args.suite, profile, args.workspace, "cli", context=context))
     elif args.command == "join":

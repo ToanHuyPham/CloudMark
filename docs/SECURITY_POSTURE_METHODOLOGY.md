@@ -1,8 +1,9 @@
-# Linux security-posture evidence foundation
+# Linux security-posture methodology
 
-`linux-security-posture-v2` is a read-only evidence collector foundation for a
-future CloudMark Security executor. It is intentionally not registered as an
-Available benchmark profile yet and produces no security score.
+`linux-security-posture-v2` is a read-only single-target executor for a Linux
+Controller host or authenticated Linux Agent. The `linux-security-posture`
+profile is available through the CLI, Controller API, and local dashboard. It
+produces versioned guest evidence and no security score.
 
 ## Fixed evidence scope
 
@@ -59,8 +60,14 @@ retention, incident response, or vulnerability-management maturity. Secure
 Boot or lockdown may be hidden by a hypervisor even when the provider secures
 the physical host.
 
-The collector becomes a production executor only after Controller/Agent
-integration, explicit evidence versioning in Runs, dashboard presentation,
-platform-specific capability reporting, and provider-comparison rules are
-implemented and verified. Until then it remains a tested internal foundation,
-not completed Security-domain coverage.
+Completed Runs retain target attribution, profile and methodology versions,
+the Agent protocol version when remote, evidence status, coverage, and every
+fixed control source. Collection does not require load confirmation. The Agent
+accepts it only when the task explicitly declares the read-only contract and
+reports the Linux security-posture capability.
+
+The Security domain remains `Partial`: this executor observes guest hardening
+only and does not provide provider-comparison metrics or unlock a security
+score. Provider-level conclusions require separately versioned IAM, network
+exposure, encryption, vulnerability, tenant-isolation, logging, incident-
+response, and compliance evidence.

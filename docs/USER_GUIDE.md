@@ -178,6 +178,9 @@ In the dashboard:
   shapes and all-request P50/P95/P99 latency. It reports request rate, failures,
   TLS, transfer, Generator CPU, and cleanup while rejecting arbitrary URLs and
   DDoS load.
+- **Security Posture** collects bounded read-only Linux guest controls on the
+  Controller or selected Agent. It preserves unavailable evidence and produces
+  no security or provider score.
 - **Workload Suitability** maps technical evidence to 12 use cases. Missing
   required metrics return `Insufficient evidence`, not zero.
 - **History** lists locally retained Runs. Dashboard polling uses compact
@@ -615,7 +618,27 @@ Review zero failed/errored requests, Generator headroom, exact log completeness,
 and Target cleanup before treating the Run as comparable. See
 [`HTTP2_LOAD_METHODOLOGY.md`](HTTP2_LOAD_METHODOLOGY.md).
 
-## 13. Workload suitability
+## 13. Collect Linux Security Posture
+
+Open **Security Posture**, select a Linux Controller or online Linux Agent, and
+select **Collect security posture**. No load confirmation is required. The
+selected remote Agent must report `security_posture_linux` after it is updated
+and restarted.
+
+For local Linux collection:
+
+```bash
+python -m cloudmark run security --profile linux-security-posture
+```
+
+The Run records observed and unavailable kernel, privilege, LSM, Secure Boot,
+cgroup, selected network-hardening, and exact system-mount controls. It never
+changes sysctl or mount state, runs a system command, or emits a security score.
+Windows Controller hosts can display remote Linux evidence but cannot run this
+profile locally. See
+[`SECURITY_POSTURE_METHODOLOGY.md`](SECURITY_POSTURE_METHODOLOGY.md).
+
+## 14. Workload suitability
 
 Open **Workload Suitability**, then select the exact observed Target and one
 requirement level:
@@ -640,7 +663,7 @@ the same-SKU target count, measurement-window count, observed suites, and the
 missing security, reliability, control-plane, and cost gates. See
 [`SUITABILITY_METHODOLOGY.md`](SUITABILITY_METHODOLOGY.md).
 
-## 14. Provider comparison
+## 15. Provider comparison
 
 Open **Provider Comparison** and select an exact metric contract. A contract is
 one metric, profile, methodology, and unit. The dashboard then shows each
@@ -657,7 +680,7 @@ repeat it on three different UTC dates. Do not create nested VMs on one target
 to inflate the target count. Network evidence must come from paired provider
 Agents, and CloudMark counts one paired Run once.
 
-## 15. API quick reference
+## 16. API quick reference
 
 Health:
 
@@ -692,7 +715,7 @@ curl -X POST http://127.0.0.1:8787/api/v1/runs \
   -d '{"suite":"inventory","profile":"default"}'
 ```
 
-## 15. Local data
+## 17. Local data
 
 ```text
 .cloudmark/
@@ -705,7 +728,7 @@ curl -X POST http://127.0.0.1:8787/api/v1/runs \
 
 The complete directory is excluded by `.gitignore`.
 
-## 16. Recommended provider-assessment procedure
+## 18. Recommended provider-assessment procedure
 
 1. Create two clean VMs with the same SKU, OS, and disk type.
 2. Use anti-affinity when possible so the VMs do not share a physical host.
@@ -717,7 +740,7 @@ The complete directory is excluded by `.gitignore`.
 8. Create fresh instances and repeat in different time windows.
 9. Never generalize one VM or one run to the complete provider.
 
-## 17. Troubleshooting
+## 19. Troubleshooting
 
 ### Dashboard reports API offline
 
@@ -775,7 +798,7 @@ credentials and requires HTTPS for remote control connections by default.
   management address hidden behind NAT;
 - do not expose the iperf3 port range to the public Internet.
 
-## 18. Validate the project
+## 20. Validate the project
 
 Python tests:
 

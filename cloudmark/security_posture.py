@@ -5,12 +5,20 @@ import platform
 from pathlib import Path
 from typing import Any, Callable
 
+from .runner import JobContext
+
 
 SECURITY_POSTURE_VERSION = "linux-security-posture-v2"
 SECURITY_CONTROL_MAX_BYTES = 4096
 MOUNTINFO_MAX_BYTES = 1024 * 1024
 MOUNTINFO_MAX_ROWS = 4096
 MOUNT_TARGETS = ("/tmp", "/var/tmp", "/dev/shm", "/home", "/boot", "/boot/efi")
+SECURITY_PROFILE_NAME = "linux-security-posture"
+SECURITY_PROFILE_VERSION = "2.0"
+
+
+class SecurityPostureError(RuntimeError):
+    pass
 
 
 def _integer_parser(
@@ -379,3 +387,61 @@ def collect_linux_security_posture(
             "maximum_mountinfo_rows": MOUNTINFO_MAX_ROWS,
         },
     }
+
+
+def security_posture_preflight(
+    profile_name: str,
+    *,
+    platform_name: str | None = None,
+) -> dict[str, Any]:
+    if profile_name != SECURITY_PROFILE_NAME:
+        raise SecurityPostureError(f"Unknown security profile: {profile_name}")
+    system = platform_name or platform.system()
+    if system != "Linux":
+        raise SecurityPostureError("Linux Security Posture currently requires a Linux execution target.")
+    return {
+        "suite": "security",
+        "profile": SECURITY_PROFILE_NAME,
+        "profile_version": SECURITY_PROFILE_VERSION,
+        "methodology_version": SECURITY_POSTURE_VERSION,
+        "read_only": True,
+        "default_timeout_seconds": 120,
+        "total_steps": 1,
+        "tool_version": SECURITY_POSTURE_VERSION,
+    }
+
+
+def run_security_posture(
+    profile_name: str,
+    *,
+    context: JobContext,
+    root: Path = Path("/"),
+    platform_name: str | None = None,
+) -> dict[str, Any]:
+    preflight = security_posture_preflight(profile_name, platform_name=platform_name)
+    context.report("collecting-security-posture", "fixed-read-only-linux-controls")
+    evidence = collect_linux_security_posture(root, platform_name=platform_name)
+    result = {
+        "suite": "security",
+        "profile": SECURITY_PROFILE_NAME,
+        "profile_version": SECURITY_PROFILE_VERSION,
+        "methodology_version": SECURITY_POSTURE_VERSION,
+        "policy": {
+            "read_only": True,
+            "security_score": False,
+            "missing_evidence_is_zero": False,
+            "guest_evidence_is_provider_control_plane_evidence": False,
+        },
+        "security_posture": evidence,
+        "analysis": {
+            "evidence_status": evidence["evidence_status"],
+            "observed_controls": evidence["observed_controls"],
+            "total_controls": evidence["total_controls"],
+            "coverage_percent": round(evidence["observed_controls"] / evidence["total_controls"] * 100, 2),
+            "scored": False,
+            "claim": "guest-visible-read-only-security-observation",
+        },
+        "tool": {"name": "cloudmark-security-posture", "version": preflight["tool_version"]},
+    }
+    context.complete_step("security-posture-complete", None, partial_result=result)
+    return result

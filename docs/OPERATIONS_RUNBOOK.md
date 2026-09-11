@@ -227,6 +227,12 @@ exact request log, Generator CPU, request-log cleanup, and Target cleanup.
 This profile measures HTTP/2 load but remains unrelated to HTTP/3, CDN, WAF,
 autoscaling, public TLS trust, or DDoS resilience.
 
+For Linux Security Posture, select a Linux Controller host or online Linux
+Agent and run `linux-security-posture`. No load confirmation is required. Review
+the observed/unavailable control count, every fixed source, and the redaction
+policy. Do not interpret guest controls as provider IAM, firewall, encryption,
+tenant-isolation, vulnerability, audit, or compliance evidence.
+
 ## 11. Troubleshooting
 
 ### API is offline
@@ -315,6 +321,16 @@ After an abrupt Agent or host failure, stop the Agent and verify that no
 then remove only the named `task_*` directory below the configured
 `mysql-services` workspace. Never remove the workspace root, a system database
 directory, or any directory still used by a server process.
+
+### Linux Security Posture is unavailable
+
+- select a Linux Controller or an online Linux Agent;
+- restart the Agent after updating CloudMark so inventory reports
+  `security_posture_linux`;
+- verify procfs/sysfs are mounted and readable inside the guest or container;
+- review individual unavailable reason codes instead of treating them as
+  failed controls;
+- do not change a kernel setting merely to make the dashboard appear complete.
 
 ### A Web/API/TLS peer run cannot start
 

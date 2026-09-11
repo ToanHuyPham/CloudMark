@@ -10,6 +10,7 @@ from .profiles import (
     MEMORY_PROFILES,
     NETWORK_PROFILES,
     SCENARIOS,
+    SECURITY_PROFILES,
     STORAGE_PROFILES,
     WEB_PROFILES,
 )
@@ -196,6 +197,7 @@ EXPECTED_METHODOLOGIES = {
     "network": {str(profile["methodology_version"]) for profile in NETWORK_PROFILES.values()},
     "database": {str(profile["methodology_version"]) for profile in DATABASE_PROFILES.values()},
     "web": {str(profile["methodology_version"]) for profile in WEB_PROFILES.values()},
+    "security": {str(profile["methodology_version"]) for profile in SECURITY_PROFILES.values()},
 }
 # Completed network-v2 through network-v8 evidence remains readable after the
 # standard profile moves to network-v9. Version 9 adds bounded guest-visible

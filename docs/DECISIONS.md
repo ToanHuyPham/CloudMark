@@ -511,3 +511,18 @@ counter. An independently versioned, source-bounded normalization contract
 widens diagnostic coverage without rewriting Network v9 throughput semantics,
 silently treating descriptors or offload segments as packets, or penalizing a
 provider for driver visibility.
+
+## D-035: Linux security posture is a read-only single-target Run
+
+**Decision:** Register `linux-security-posture-v2` as a versioned suite for a
+Linux Controller host or explicitly selected authenticated Linux Agent. Remote
+tasks require `read_only=true`, `load_confirmed=false`, the matching profile and
+protocol versions, and the Agent's Linux capability. Runs retain fixed control
+sources, redaction policy, target attribution, evidence status, and coverage.
+They produce no security score and do not enter provider comparison metrics.
+
+**Reason:** Guest hardening evidence is operationally useful and safe to gather
+without generating load, but it cannot establish provider IAM, firewall,
+physical-host isolation, encryption, vulnerability, audit, or compliance
+quality. A normal versioned Run makes the evidence traceable while keeping the
+claim strictly narrower than a provider security assessment.

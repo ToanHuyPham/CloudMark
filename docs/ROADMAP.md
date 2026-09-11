@@ -174,8 +174,10 @@ own generators for CPU and network resources.
 ## M5 — Containers, Kubernetes, HA, and operations
 
 - bounded read-only Linux kernel, LSM, Secure Boot, cgroup, privilege,
-  network-hardening, and mount evidence — internal foundation available in
-  `linux-security-posture-v2`; Agent/API/dashboard integration remains planned;
+  network-hardening, and mount evidence with local/Agent execution, Run
+  provenance, and dashboard presentation — available in
+  `linux-security-posture-v2`; Windows and provider-control integration remain
+  planned;
 
 - container cold start, image pull/unpack, and overlay filesystem;
 - Kubernetes scheduling, pod density, service latency, and autoscaling response;

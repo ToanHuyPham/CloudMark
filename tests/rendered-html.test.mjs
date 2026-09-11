@@ -25,6 +25,7 @@ test("server-renders the CloudMark dashboard shell", async () => {
   assert.match(html, /Storage Assessment/);
   assert.match(html, /Database Assessment/);
   assert.match(html, /Web &amp; API Assessment/);
+  assert.match(html, /Security Posture/);
   assert.match(html, /Cloud → controller test disabled/);
   assert.doesNotMatch(html, /codex-preview|Your site is taking shape|react-loading-skeleton|qualification lab/i);
 });
@@ -66,6 +67,9 @@ test("keeps production metadata and project policy explicit", async () => {
   assert.match(page, /web-http2-load-v1/i);
   assert.match(page, /h2load_http2_only/);
   assert.match(page, /HTTP\/2 LOAD VALIDITY/);
+  assert.match(page, /READ-ONLY GUEST SECURITY EVIDENCE/);
+  assert.match(page, /Collect security posture/);
+  assert.match(page, /linux-security-posture-v2/);
   assert.match(page, /TRANSACTION TAIL LATENCY/);
   assert.match(page, /database-postgresql-v2/i);
   assert.match(page, /LOGICAL BACKUP &amp; RESTORE/);

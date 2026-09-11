@@ -440,6 +440,35 @@ type Http2Measurement = {
   };
 };
 
+type SecurityControl = {
+  status: "observed" | "unavailable";
+  source: string;
+  reason?: string;
+  classification?: string;
+  enabled?: boolean;
+  mode?: string;
+  value?: number;
+  version?: number;
+  active_modules?: string[];
+  module_count?: number;
+  observed_mounts?: number;
+  target_mounts?: number;
+};
+
+type SecurityPosture = {
+  methodology_version: string;
+  platform: string;
+  evidence_status: "complete" | "partial" | "unavailable";
+  observed_controls: number;
+  total_controls: number;
+  controls: Record<string, SecurityControl>;
+  policy: {
+    read_only: true;
+    missing_evidence_is_zero: false;
+    security_score: false;
+  };
+};
+
 type Run = {
   id: string;
   suite: string;
@@ -485,6 +514,7 @@ type Run = {
     mysql_measurements?: MySQLMeasurement[];
     web_measurements?: WebMeasurement[];
     http2_measurements?: Http2Measurement[];
+    security_posture?: SecurityPosture;
     protocol_observations?: WebProtocolObservation[];
     server?: {
       engine?: string;
@@ -1016,6 +1046,16 @@ type Dashboard = {
         requests?: number;
       }[];
     }>;
+    security?: Record<string, {
+      label: string;
+      description: string;
+      estimated_minutes: number;
+      requires_agents: number;
+      read_only: boolean;
+      profile_version: string;
+      methodology_version: string;
+      controls: number;
+    }>;
     domains: AssessmentDomain[];
     scenarios: Scenario[];
   };
@@ -1094,6 +1134,18 @@ function formatRequirementValue(value: number, unit: string) {
   return `${value.toLocaleString()} ${unit}`;
 }
 
+function securityControlValue(control: SecurityControl) {
+  if (control.status !== "observed") return "Unavailable";
+  if (control.classification) return control.classification.replaceAll("-", " ");
+  if (typeof control.enabled === "boolean") return control.enabled ? "Enabled" : "Disabled";
+  if (control.mode) return control.mode;
+  if (control.active_modules?.length) return control.active_modules.join(", ");
+  if (typeof control.observed_mounts === "number") return `${control.observed_mounts}/${control.target_mounts || 0} exact mounts`;
+  if (typeof control.version === "number") return `Version ${control.version}`;
+  if (typeof control.value === "number") return control.value.toLocaleString();
+  return "Observed";
+}
+
 export default function Home() {
   const [dashboard, setDashboard] = useState<Dashboard | null>(null);
   const [apiState, setApiState] = useState<"loading" | "online" | "offline">("loading");
@@ -1110,6 +1162,7 @@ export default function Home() {
   const [selectedNetworkProfile, setSelectedNetworkProfile] = useState("network-peer-quick");
   const [selectedDatabaseProfile, setSelectedDatabaseProfile] = useState("postgres-peer-quick");
   const [selectedWebProfile, setSelectedWebProfile] = useState("web-peer-quick");
+  const [selectedSecurityProfile, setSelectedSecurityProfile] = useState("linux-security-posture");
   const [selectedSuitabilityTarget, setSelectedSuitabilityTarget] = useState("controller");
   const [selectedRequirementLevel, setSelectedRequirementLevel] = useState("essential");
   const [selectedSuitabilityScenario, setSelectedSuitabilityScenario] = useState("web-app");
@@ -1162,9 +1215,21 @@ export default function Home() {
       && (run.request?.agent_id || "local") === selectedExecutionTarget,
   );
   const activeLocal = dashboard?.runs.find(
-    (run) => ["compute", "memory", "storage"].includes(run.suite) && ["queued", "running"].includes(run.status)
+    (run) => ["compute", "memory", "storage", "security"].includes(run.suite) && ["queued", "running"].includes(run.status)
       && (run.request?.agent_id || "local") === selectedExecutionTarget,
   );
+  const activeSecurity = dashboard?.runs.find(
+    (run) => run.suite === "security" && ["queued", "running"].includes(run.status)
+      && (run.request?.agent_id || "local") === selectedExecutionTarget,
+  );
+  const latestSecurity = dashboard?.runs.find(
+    (run) => run.suite === "security" && run.status === "completed" && run.result?.security_posture
+      && (run.request?.agent_id || "local") === selectedExecutionTarget,
+  );
+  const securityProfile = dashboard?.profiles.security?.[selectedSecurityProfile];
+  const securityPosture = latestSecurity?.result?.security_posture;
+  const securityReady = executionInventory?.os?.system === "Linux"
+    && (selectedExecutionTarget === "local" || Boolean(executionInventory.capabilities?.security_posture_linux));
   const latestCompute = dashboard?.runs.find(
     (run) => run.suite === "compute" && run.status === "completed" && run.result?.compute_jobs?.length
       && (run.request?.agent_id || "local") === selectedExecutionTarget,
@@ -1526,6 +1591,59 @@ export default function Home() {
     }
   }
 
+  async function startSecurity() {
+    if (!requireToken()) return;
+    if (!executionTargetOnline) {
+      setNotice("The selected Agent is offline. Start its persistent worker before collecting security evidence.");
+      return;
+    }
+    if (!securityReady) {
+      setNotice("Linux Security Posture requires a Linux Controller or Agent with the read-only security capability.");
+      return;
+    }
+    setBusy(true);
+    setNotice(null);
+    try {
+      const response = await fetch(`${API}/runs`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-CloudMark-Token": token },
+        body: JSON.stringify({
+          suite: "security",
+          profile: selectedSecurityProfile,
+          ...(selectedExecutionAgent ? { agent_id: selectedExecutionAgent.id } : {}),
+        }),
+      });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || "Unable to collect Linux security posture");
+      setNotice(`Created ${payload.id} on ${executionTargetLabel}. Collection is read-only and produces no security score.`);
+      await loadDashboard();
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Security posture collection failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function cancelSecurity() {
+    if (!activeSecurity || !requireToken()) return;
+    setBusy(true);
+    try {
+      const response = await fetch(`${API}/runs/${activeSecurity.id}/cancel`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-CloudMark-Token": token },
+        body: "{}",
+      });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || "Unable to cancel security collection");
+      setNotice(`Cancellation requested for ${activeSecurity.id}.`);
+      await loadDashboard();
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Unable to cancel security collection");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function startNetwork() {
     if (!requireToken()) return;
     if (!selectedSession || selectedSession.status !== "ready") {
@@ -1827,9 +1945,10 @@ export default function Home() {
     ["network", "Distributed Testing", "05"],
     ["database", "Database Assessment", "06"],
     ["web", "Web & API Assessment", "07"],
-    ["scenarios", "Workload Suitability", "08"],
-    ["providers", "Provider Comparison", "09"],
-    ["history", "History", "10"],
+    ["security", "Security Posture", "08"],
+    ["scenarios", "Workload Suitability", "09"],
+    ["providers", "Provider Comparison", "10"],
+    ["history", "History", "11"],
   ];
 
   const executionTargetPanel = (
@@ -1851,6 +1970,7 @@ export default function Home() {
         <span className={executionInventory?.capabilities?.sysbench ? "ready" : "missing"}>CPU</span>
         <span className={memoryReady ? "ready" : "missing"}>MEMORY</span>
         <span className={executionInventory?.capabilities?.fio ? "ready" : "missing"}>STORAGE</span>
+        <span className={securityReady ? "ready" : "missing"}>SECURITY</span>
       </div>
     </section>
   );
@@ -2272,6 +2392,30 @@ export default function Home() {
               <article className={`panel cleanup-evidence ${latestWeb?.result?.cleanup?.cleanup_verified ? "verified" : "unknown"}`}><span>EPHEMERAL CLEANUP</span><strong>{latestWeb?.result?.cleanup?.cleanup_verified ? "Verified" : "Unavailable"}</strong><small>All request logs plus application, Nginx, certificate, and key workspace</small></article>
             </section>}
             <section className="panel web-method-note"><span className="section-kicker">INTERPRETATION LIMITS</span><p>{selectedWebHttp2 ? "HTTP/2 load uses fixed connection and multiplexed-stream shapes against the bundled dynamic application. It does not measure HTTP/3, browser rendering, CDN, WAF, autoscaling, public TLS trust, or DDoS resilience." : "Web v2 rejects comparison evidence when the ApacheBench process reaches its CPU limit, and measures a bundled Python application through Nginx reverse proxy. The fixed curl request proves HTTP/2 negotiation only; database-backed applications, HTTP/3, CDN, WAF, autoscaling, public TLS trust, and DDoS resilience still require separate evidence."}</p></section>
+          </div>
+        )}
+
+        {activeView === "security" && (
+          <div className="view security-view">
+            <section className="section-intro">
+              <div><span className="section-kicker">READ-ONLY GUEST SECURITY EVIDENCE</span><h2>Observe Linux hardening controls without changing the assessed machine.</h2><p>CloudMark reads a fixed bounded set of kernel, privilege, LSM, Secure Boot, cgroup, network-hardening, and exact system-mount controls. Missing evidence stays unavailable, and this suite never creates a security score.</p></div>
+              <div className="runner-actions"><label><span>PROFILE</span><select value={selectedSecurityProfile} onChange={(event) => setSelectedSecurityProfile(event.target.value)} disabled={Boolean(activeSecurity)}>{Object.entries(dashboard?.profiles.security || {}).map(([id, profile]) => <option key={id} value={id}>{profile.label} · read-only</option>)}</select></label><button className="button primary" onClick={startSecurity} disabled={busy || Boolean(activeLocal) || !executionTargetOnline || !securityReady}>Collect security posture</button></div>
+            </section>
+            {executionTargetPanel}
+            <section className="provider-summary-grid">
+              <article className="panel"><span>EVIDENCE STATUS</span><strong>{securityPosture?.evidence_status || "No Run"}</strong><small>Guest-visible observation only</small></article>
+              <article className="panel"><span>OBSERVED CONTROLS</span><strong>{securityPosture ? `${securityPosture.observed_controls}/${securityPosture.total_controls}` : "—"}</strong><small>Unavailable controls are not zero</small></article>
+              <article className="panel"><span>EXECUTION POLICY</span><strong>Read only</strong><small>No subprocess, network request, or host write</small></article>
+              <article className="panel caution"><span>SECURITY SCORE</span><strong>Disabled</strong><small>IAM, firewall, encryption, isolation, and compliance remain separate</small></article>
+            </section>
+            <section className="panel database-profile-card">
+              <div className="panel-head"><div><span className="section-kicker">VERSIONED COLLECTION CONTRACT</span><h3>{securityProfile?.label || "Linux Security Posture"}</h3></div><span className="run-id">{securityProfile?.methodology_version || "linux-security-posture-v2"}</span></div>
+              <p>{securityProfile?.description}</p>
+              <div className="session-actions"><p><strong>{securityReady ? `${executionTargetLabel} is eligible` : "Linux target required"}</strong><small>{securityReady ? "The collector uses fixed local kernel interfaces and stores redacted evidence." : "Select an online Linux Agent, or run the Controller on Linux."}</small></p><button className="button primary" onClick={startSecurity} disabled={busy || Boolean(activeLocal) || !executionTargetOnline || !securityReady}>Collect read-only evidence</button></div>
+            </section>
+            {activeSecurity && <section className="panel run-progress" aria-live="polite"><div><span className="section-kicker">ACTIVE SECURITY RUN / {activeSecurity.id}</span><strong>{activeSecurity.current_job || activeSecurity.phase || "Collecting fixed controls"}</strong><small>{activeSecurity.completed_steps || 0} of {activeSecurity.total_steps || 1} steps · {Math.round((activeSecurity.progress || 0) * 100)}%</small></div><div className="progress-track"><i style={{ width: `${Math.max(2, (activeSecurity.progress || 0) * 100)}%` }} /></div><button className="button danger" onClick={cancelSecurity} disabled={busy || activeSecurity.cancel_requested}>{activeSecurity.cancel_requested ? "Cancelling" : "Cancel collection"}</button></section>}
+            {securityPosture ? <section className="domain-grid" aria-label="Linux security posture controls">{Object.entries(securityPosture.controls).map(([name, control], index) => { const state = control.status === "observed" ? "available" : "roadmap"; return <article className={`domain-card ${state}`} key={name}><div><span>{String(index + 1).padStart(2, "0")}</span><i className={state} /></div><h3>{name.replaceAll("_", " ")}</h3><p>{securityControlValue(control)}<br /><small>{control.status === "observed" ? control.source : control.reason || "Evidence unavailable"}</small></p><footer><span>{control.status === "observed" ? "Observed" : "Unavailable"}</span><strong>CONTROL</strong></footer></article>; })}</section> : <section className="panel provider-empty-state"><strong>No Linux security posture Run exists for this target.</strong><p>Select an online Linux Agent and collect the fixed read-only profile. Controller-host collection remains unavailable when the Controller runs on Windows.</p></section>}
+            <section className="panel web-method-note"><span className="section-kicker">INTERPRETATION BOUNDARY</span><p>Guest kernel controls cannot prove provider IAM, security groups, tenant isolation, physical-host hardening, encryption at rest, vulnerability status, audit retention, incident response, or compliance. This evidence is intentionally observational and unscored.</p></section>
           </div>
         )}
 

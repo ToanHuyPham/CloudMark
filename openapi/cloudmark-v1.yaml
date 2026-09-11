@@ -25,11 +25,11 @@ components:
       type: object
       required: [suite]
       properties:
-        suite: { type: string, enum: [inventory, compute, memory, storage, network, database, web] }
+        suite: { type: string, enum: [inventory, compute, memory, storage, security, network, database, web] }
         profile: { type: string }
         agent_id:
           type: string
-          description: Optional authenticated Agent target for compute, memory, or storage. Omit to execute on the Controller host.
+          description: Optional authenticated Agent target for compute, memory, storage, or Linux security posture. Omit to execute on the Controller host.
         confirm_load:
           type: boolean
           default: false

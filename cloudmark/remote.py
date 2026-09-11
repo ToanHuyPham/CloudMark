@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from .database import Database
-from .profiles import COMPUTE_PROFILES, MEMORY_PROFILES, STORAGE_PROFILES
+from .profiles import COMPUTE_PROFILES, MEMORY_PROFILES, SECURITY_PROFILES, STORAGE_PROFILES
 from .runner import JobContext, RunCancelled, RunStopped
 
 
@@ -28,6 +28,8 @@ def _profiles(suite: str) -> dict[str, dict[str, Any]]:
         return MEMORY_PROFILES
     if suite == "storage":
         return STORAGE_PROFILES
+    if suite == "security":
+        return SECURITY_PROFILES
     raise ValueError(f"Remote execution does not support suite: {suite}")
 
 
@@ -36,7 +38,12 @@ def remote_default_timeout(suite: str, profile_name: str) -> int:
     if profile_name not in profiles:
         raise ValueError(f"Unknown {suite} profile: {profile_name}")
     profile = profiles[profile_name]
-    runtime = sum(int(job.get("runtime", 0)) + int(job.get("warmup", 0)) + int(job.get("ramp_time", 0)) for job in profile["jobs"])
+    runtime = sum(
+        int(job.get("runtime", 0)) + int(job.get("warmup", 0)) + int(job.get("ramp_time", 0))
+        for job in profile.get("jobs", [])
+    )
+    if suite == "security":
+        return 120
     storage_overhead = 300 if suite == "storage" else 180
     return max(180, runtime + storage_overhead)
 
@@ -45,6 +52,8 @@ def remote_total_steps(suite: str, profile_name: str) -> int:
     profiles = _profiles(suite)
     if profile_name not in profiles:
         raise ValueError(f"Unknown {suite} profile: {profile_name}")
+    if suite == "security":
+        return 1
     return len(profiles[profile_name]["jobs"]) + (2 if suite == "storage" else 0)
 
 
@@ -73,11 +82,17 @@ def validate_remote_agent(
         raise ValueError(f"Agent {agent.get('name', agent_id)} is offline. Start its persistent worker first.")
     inventory = agent.get("system", {}).get("inventory", {})
     capabilities = inventory.get("capabilities", {})
-    required = {"compute": "sysbench", "memory": "gcc", "storage": "fio"}[suite]
+    required = {
+        "compute": "sysbench",
+        "memory": "gcc",
+        "storage": "fio",
+        "security": "security_posture_linux",
+    }[suite]
     if not capabilities.get(required):
         raise ValueError(f"Agent {agent.get('name', agent_id)} does not report the {required} capability.")
-    if suite == "memory" and inventory.get("os", {}).get("system") != "Linux":
-        raise ValueError("The native memory executor currently requires a Linux Agent with GCC and OpenMP.")
+    if suite in {"memory", "security"} and inventory.get("os", {}).get("system") != "Linux":
+        requirement = "native memory executor with GCC and OpenMP" if suite == "memory" else "Security Posture executor"
+        raise ValueError(f"The {requirement} currently requires a Linux Agent.")
     if database.has_active_agent_task(agent_id):
         raise ValueError(f"Agent {agent.get('name', agent_id)} already has an active task.")
     return agent
@@ -153,7 +168,8 @@ def run_remote_benchmark(
             "suite": suite,
             "profile": profile_name,
             "timeout_seconds": timeout_seconds,
-            "load_confirmed": True,
+            "load_confirmed": suite != "security",
+            "read_only": suite == "security",
             "protocol_version": REMOTE_METHODOLOGY_VERSION,
         },
     )

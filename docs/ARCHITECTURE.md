@@ -138,6 +138,17 @@ single-system saturation are mutually exclusive within the same Agent session.
 Different Agents may be assessed independently without introducing a global
 Controller lock.
 
+## Read-only security posture
+
+`linux-security-posture-v2` is a single-target suite that runs on a Linux
+Controller host or an explicitly selected authenticated Linux Agent. It uses
+the same remote task envelope and attribution contract as other single-target
+suites, but its task must declare `read_only=true` and `load_confirmed=false`.
+The collector reads fixed bounded procfs/sysfs/securityfs/EFI paths and exact
+system mount entries, persists redacted normalized evidence, and executes no
+subprocess or network request. It produces coverage and evidence status but no
+security score or provider claim.
+
 ## Client/server workload services
 
 Database and web executors use the same paired topology as provider

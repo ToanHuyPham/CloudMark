@@ -28,7 +28,7 @@ evidence returns `Insufficient evidence`, never an artificial zero.
 | 9 | Web, API & TLS | Static/JSON, TLS handshake, keep-alive, HTTP/2/3, concurrency ramp, P50–P99, error rate, saturation, soak, and reverse proxy | target + generator + Controller | Partial |
 | 10 | Database & Cache | PostgreSQL/MySQL OLTP, read-only/read-write, connection scaling, checkpoint/fsync, Redis GET/SET/pipeline/persistence, and replication lag | server + client; 3+ for replication | Partial |
 | 11 | Containers & Kubernetes | Runtime discovery, pull/unpack, cold start, overlay I/O, pod density, service latency, CNI, scheduling, and autoscaling response | 1 for containers; 2–3+ for Kubernetes | Partial |
-| 12 | Security & Isolation | Port/exposure inventory, firewall/security-group evidence, TLS posture, IAM/RBAC, hardening, tenant-isolation signals, and auditability | 1–2 systems; control-plane adapter when required | Roadmap |
+| 12 | Security & Isolation | Port/exposure inventory, firewall/security-group evidence, TLS posture, IAM/RBAC, hardening, tenant-isolation signals, and auditability | 1–2 systems; control-plane adapter when required | Partial |
 | 13 | Reliability, HA & DR | Replication, controlled failover, load-balancer health, node replacement, snapshot/restore, backup integrity, and RPO/RTO drills | 3 agents + Controller; 4 recommended | Roadmap |
 | 14 | Observability & Operations | Metrics/logs/traces, clock sync, alert path, agent overhead, log-delivery loss, retention, and export evidence | 1 system; 2+ for the delivery path | Roadmap |
 | 15 | Provisioning & Control Plane | Create/delete/resize, attach/detach, snapshot, API latency/errors/rate limits, quotas, and idempotency | Controller + least-privilege adapter | Roadmap |
@@ -74,12 +74,13 @@ HTTP/2 multiplexing shapes, exact request-log P50/P95/P99, Generator validity,
 and cleanup. Database-backed applications, HTTP/3, CDN, WAF, autoscaling, and
 resilience remain missing; web coverage therefore remains `Partial`.
 
-The tested `linux-security-posture-v2` foundation reads bounded Linux kernel,
+The `linux-security-posture-v2` executor reads bounded Linux kernel,
 LSM, Secure Boot, cgroup, privilege-boundary, network-hardening, and exact
-system-mount evidence without changing the host or creating a score. It is not
-yet registered as an Agent Run or rendered by the dashboard, and it does not
-cover IAM, firewall/security groups, SSH, encryption, vulnerability status,
-tenant isolation, or compliance. Domain 12 therefore remains `Roadmap`.
+system-mount evidence without changing the host or creating a score. It runs
+on a Linux Controller or authenticated Agent and retains Run provenance in the
+API/dashboard. It does not cover IAM, firewall/security groups, SSH,
+encryption, vulnerability status, tenant isolation, or compliance. Domain 12
+therefore remains `Partial`.
 
 ## Mapping evidence to intended use
 

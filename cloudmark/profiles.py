@@ -392,6 +392,20 @@ WEB_PROFILES: dict[str, dict[str, Any]] = {
 }
 
 
+SECURITY_PROFILES: dict[str, dict[str, Any]] = {
+    "linux-security-posture": {
+        "label": "Linux Security Posture",
+        "description": "Bounded read-only guest evidence for kernel, privilege, LSM, Secure Boot, cgroup, network-hardening, and system-mount controls.",
+        "estimated_minutes": 1,
+        "requires_agents": 1,
+        "read_only": True,
+        "profile_version": "2.0",
+        "methodology_version": "linux-security-posture-v2",
+        "controls": 31,
+    },
+}
+
+
 ASSESSMENT_DOMAINS: list[dict[str, Any]] = [
     {"id": "system-inventory", "label": "System & Hardware Inventory", "status": "available", "summary": "OS, kernel, CPU, RAM, disks, NICs and runtime capabilities"},
     {"id": "provider-identity", "label": "Provider & Instance Identity", "status": "available", "summary": "Trusted metadata, declared manifests, region, zone and confidence"},
@@ -404,7 +418,7 @@ ASSESSMENT_DOMAINS: list[dict[str, Any]] = [
     {"id": "web", "label": "Web, API & TLS", "status": "partial", "summary": "Guarded two-Agent static and reverse-proxied dynamic HTTP/TLS workloads, Generator headroom, tail latency, transfer, HTTP/2 negotiation, and fixed multiplexed HTTP/2 load evidence available"},
     {"id": "database", "label": "Database & Cache", "status": "partial", "summary": "Guarded PostgreSQL, Redis, and MySQL/MariaDB paired workloads, Generator validity, logical recovery, forced-checkpoint, and cleanup evidence available; replication and cross-zone recovery pending"},
     {"id": "containers", "label": "Containers & Kubernetes", "status": "partial", "summary": "Runtime discovery available; image, pod, network and scaling tests pending"},
-    {"id": "security", "label": "Security & Isolation", "status": "roadmap", "summary": "Tested read-only Linux hardening foundation exists; Agent/API/dashboard integration plus IAM, firewall, exposure, and tenant-isolation evidence remain pending"},
+    {"id": "security", "label": "Security & Isolation", "status": "partial", "summary": "Read-only Linux guest hardening evidence is available; IAM, firewall/exposure, encryption, vulnerability, compliance, and tenant-isolation evidence remain pending"},
     {"id": "reliability", "label": "Reliability, HA & DR", "status": "roadmap", "summary": "Failover, replication, snapshot, restore, RPO and RTO drills"},
     {"id": "observability", "label": "Observability & Operations", "status": "roadmap", "summary": "Metrics, logs, traces, clock sync, alerting and operational overhead"},
     {"id": "control-plane", "label": "Provisioning & Control Plane", "status": "roadmap", "summary": "Create, resize, attach, snapshot and API reliability measurements"},
@@ -437,6 +451,7 @@ def all_profiles() -> dict[str, Any]:
         "network": NETWORK_PROFILES,
         "database": DATABASE_PROFILES,
         "web": WEB_PROFILES,
+        "security": SECURITY_PROFILES,
         "domains": ASSESSMENT_DOMAINS,
         "scenarios": SCENARIOS,
     }

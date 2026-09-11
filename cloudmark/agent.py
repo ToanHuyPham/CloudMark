@@ -56,10 +56,11 @@ from .network import (
     parse_iperf_json,
     parse_ping_output,
 )
-from .profiles import COMPUTE_PROFILES, MEMORY_PROFILES, STORAGE_PROFILES
+from .profiles import COMPUTE_PROFILES, MEMORY_PROFILES, SECURITY_PROFILES, STORAGE_PROFILES
 from .provider import detect_provider
 from .remote import REMOTE_METHODOLOGY_VERSION
 from .runner import CancellationToken, JobContext, RunCancelled, RunTimedOut
+from .security_posture import SecurityPostureError, run_security_posture
 from .tooling import (
     find_mysql_binary,
     find_postgres_binary,
@@ -4008,14 +4009,24 @@ class AgentWorker:
         kind = str(task.get("kind", ""))
         suite = kind.removeprefix("benchmark-")
         expected_kind = f"benchmark-{suite}"
-        if kind != expected_kind or suite not in {"compute", "memory", "storage"}:
+        if kind != expected_kind or suite not in {"compute", "memory", "storage", "security"}:
             raise ValueError("Agent refused an unsupported benchmark task kind.")
         if payload.get("protocol_version") != REMOTE_METHODOLOGY_VERSION:
             raise ValueError("Agent refused an incompatible remote benchmark protocol version.")
-        if payload.get("suite") != suite or payload.get("load_confirmed") is not True:
-            raise ValueError("Agent refused a benchmark task without an exact suite and load confirmation.")
+        if payload.get("suite") != suite:
+            raise ValueError("Agent refused a benchmark task without an exact suite.")
+        if suite == "security":
+            if payload.get("read_only") is not True or payload.get("load_confirmed") is not False:
+                raise ValueError("Agent refused a Security task without the read-only execution contract.")
+        elif payload.get("load_confirmed") is not True:
+            raise ValueError("Agent refused a benchmark task without load confirmation.")
         profile_name = str(payload.get("profile", ""))
-        profiles = {"compute": COMPUTE_PROFILES, "memory": MEMORY_PROFILES, "storage": STORAGE_PROFILES}[suite]
+        profiles = {
+            "compute": COMPUTE_PROFILES,
+            "memory": MEMORY_PROFILES,
+            "storage": STORAGE_PROFILES,
+            "security": SECURITY_PROFILES,
+        }[suite]
         if profile_name not in profiles:
             raise ValueError(f"Agent refused unknown {suite} profile: {profile_name}")
         try:
@@ -4025,7 +4036,9 @@ class AgentWorker:
         if not 30 <= timeout_seconds <= 43_200:
             raise ValueError("Agent benchmark timeout is outside the 30–43200 second safety range.")
 
-        total_steps = len(profiles[profile_name]["jobs"]) + (2 if suite == "storage" else 0)
+        total_steps = 1 if suite == "security" else (
+            len(profiles[profile_name]["jobs"]) + (2 if suite == "storage" else 0)
+        )
         token = CancellationToken()
         latest: dict[str, Any] = {
             "progress": 0.0,
@@ -4079,7 +4092,9 @@ class AgentWorker:
         )
         try:
             evidence = self._benchmark_evidence()
-            if suite == "storage":
+            if suite == "security":
+                benchmark = run_security_posture(profile_name, context=context)
+            elif suite == "storage":
                 benchmark = run_storage(profile_name, self.workspace, str(task.get("run_id") or task_id), context=context)
             else:
                 benchmark = run_system_benchmark(
@@ -4163,7 +4178,7 @@ class AgentWorker:
             return self._run_web_protocol_probe(str(task["id"]), payload)
         if kind == "web-service-stop":
             return self._stop_web_task(payload)
-        if kind in {"benchmark-compute", "benchmark-memory", "benchmark-storage"}:
+        if kind in {"benchmark-compute", "benchmark-memory", "benchmark-storage", "benchmark-security"}:
             return self._run_benchmark(task, payload)
         raise NetworkError(f"Agent refused unsupported task kind: {kind}")
 
@@ -4219,6 +4234,7 @@ class AgentWorker:
             MySQLBenchmarkError,
             NetworkError,
             RedisBenchmarkError,
+            SecurityPostureError,
             WebBenchmarkError,
             OSError,
             ValueError,

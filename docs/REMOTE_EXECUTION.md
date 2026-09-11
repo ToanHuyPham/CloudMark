@@ -80,14 +80,15 @@ tool during inventory enrollment.
 
 ## Control and safety contract
 
-- Remote kinds are fixed to `benchmark-compute`, `benchmark-memory`, and
-  `benchmark-storage`; arbitrary commands and shell fragments are refused.
+- Remote kinds are fixed to `benchmark-compute`, `benchmark-memory`,
+  `benchmark-storage`, and read-only `benchmark-security`; arbitrary commands
+  and shell fragments are refused.
 - Suite, profile, protocol version, confirmation, and timeout are checked again
   by the Agent before execution.
 - Profile job arguments come only from the installed CloudMark profile catalog.
-- A target can run only one compute, memory, or storage saturation task at a
-  time. A network assessment cannot overlap with a remote suite in the same
-  session.
+- A target can run only one compute, memory, storage, or read-only security
+  single-target task at a time. A network assessment cannot overlap with a
+  remote suite in the same session.
 - The Agent publishes a task heartbeat every second while child work is active.
 - If Controller contact is unavailable for more than 20 seconds, the Agent
   cancels the benchmark rather than continuing uncontrolled load.
@@ -121,6 +122,13 @@ Agent's authenticated claim response; ordinary task reads and progress updates
 never include it. Terminal completion, failure, cancellation, and abort erase
 the in-memory value. Controller restart makes it unavailable and existing
 interrupted-task recovery prevents silent reuse under a new credential.
+
+Linux Security Posture uses the single-target remote envelope with task kind
+`benchmark-security`. The Agent must report `security_posture_linux`; the task
+must carry `read_only=true`, `load_confirmed=false`, the installed profile, and
+`remote-agent-v1`. It executes no load process and returns the same versioned
+guest evidence available from local Linux collection with Agent/provider
+attribution.
 
 Version `0.5.0` does not remotely install packages or execute provider
 control-plane mutations. Bootstrap remains an explicit operator action requiring

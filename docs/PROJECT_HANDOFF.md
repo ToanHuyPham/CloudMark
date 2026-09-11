@@ -122,10 +122,12 @@ time-separated evidence for that pair, not a provider rating or a substitute
 for independent targets. A standard profile or methodology upgrade preserves
 an unfinished older contract as `superseded` and requires a new campaign.
 
-The internal `linux-security-posture-v2` module is a tested read-only Linux
-evidence foundation only. It is not yet an Agent task, API Run, dashboard view,
-provider comparison input, or security rating. Keep that boundary explicit
-until the integration and provider evidence contracts are reviewed.
+`linux-security-posture-v2` is a read-only single-target suite for a Linux
+Controller or authenticated Agent. It records bounded/redacted guest controls,
+Run provenance, and remote attribution in the API/dashboard without a score.
+It is not provider comparison input or a security rating; provider IAM,
+firewall, encryption, isolation, audit, vulnerability, and compliance evidence
+still require separate contracts.
 
 ## Repository map
 

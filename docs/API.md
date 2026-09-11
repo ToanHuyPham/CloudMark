@@ -130,6 +130,23 @@ reserve cannot be maintained.
 Supported storage profiles are `disk-quick`, `disk-standard`, `disk-database`,
 `disk-throughput`, and `disk-sustained`.
 
+## Create a Linux Security Posture run
+
+```json
+{
+  "suite": "security",
+  "profile": "linux-security-posture",
+  "agent_id": "agent_optional"
+}
+```
+
+Omit `agent_id` to collect on a Linux Controller host, or select an online
+authenticated Linux Agent reporting `security_posture_linux`. The suite is
+read-only and does not require a load-confirmation flag. Results retain
+`linux-security-posture-v2`, execution-target attribution, evidence status,
+coverage, fixed control sources, redaction policy, and normalized guest
+controls. No security score or provider-security claim is returned.
+
 ## Create a peer network run
 
 ```json

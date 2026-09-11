@@ -257,6 +257,7 @@ def collect_inventory(workspace: Path | None = None) -> dict[str, Any]:
             "h2load_request_log": bool(h2load and web_tool_supports("h2load", h2load, "request-log")),
             "openssl": find_web_binary("openssl") is not None,
             "procfs_process_cpu": Path("/proc/stat").is_file() and Path("/proc/self/stat").is_file(),
+            "security_posture_linux": uname.system == "Linux" and Path("/proc/sys/kernel").is_dir(),
             "sysbench": shutil.which("sysbench") is not None,
             "gcc": shutil.which("gcc") is not None,
             "docker": shutil.which("docker") is not None,

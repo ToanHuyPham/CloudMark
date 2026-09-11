@@ -1,6 +1,6 @@
 # CloudMark current state
 
-Last updated: 2026-09-08
+Last updated: 2026-09-11
 
 ## Repository baseline
 
@@ -205,14 +205,18 @@ baseline is still the repository head.
   MariaDB or different server versions cannot be silently merged. The complete
   development head passes 135 Python tests, 3 rendered-dashboard tests,
   dashboard lint, and the production build without starting provider load;
-- tested internal `linux-security-posture-v2` foundation with bounded read-only
+- implemented and simulation-verified `linux-security-posture-v2` single-target
+  executor for a Linux Controller host or authenticated Linux Agent, with
+  profile/methodology/tool versions, remote Agent attribution, task heartbeat/
+  cancellation, dashboard target selection, and bounded read-only
   Linux kernel, privilege, LSM, Secure Boot, cgroup, network-hardening, and
   exact system-mount evidence. Core handler text, EFI identifiers, mount source
   devices, non-target mountpoints, and raw mount options are not persisted.
   Missing controls remain unavailable and no security score is produced. The
-  foundation passes five dedicated tests and the complete development head
-  passes 151 Python tests; Agent/API/dashboard integration remains pending, so
-  the Security domain is still Roadmap;
+  executor passes nine dedicated tests and the complete development head
+  passes 155 Python tests, 3 rendered-dashboard tests, dashboard lint, and the
+  production build. Provider security controls remain unavailable, so the
+  Security domain is Partial;
 - repository-level Codex guidance, durable handoff documentation, consistent
   SQLite runtime snapshots, guarded secret backup, recoverable restore, and
   safe Windows local-process launch/stop scripts;
@@ -322,6 +326,12 @@ Controller run: `run_1c572100e8704843`.
   negotiation and fixed HTTP/2 multiplexed dynamic load are implemented;
   database-backed applications, HTTP/3, CDN, WAF, autoscaling, and DDoS
   resilience remain unavailable;
+- Security coverage is Partial: Linux guest kernel, privilege, LSM, Secure
+  Boot, cgroup, selected network-hardening, and exact system-mount controls are
+  collected read-only with redaction and Run provenance; Windows parity,
+  firewall/security groups, SSH, encryption, vulnerability status, IAM/RBAC,
+  tenant isolation, audit delivery, incident response, and compliance remain
+  unavailable, and no provider security rating is produced;
 - GPU evidence and GPU benchmarks are not complete;
 - scheduled sampling campaigns, cross-pair orchestration, cross-zone analysis,
   timestamped cost,
@@ -343,7 +353,7 @@ Controller run: `run_1c572100e8704843`.
 3. Extend database coverage with MySQL/MariaDB checkpoint isolation,
    physical/PITR backup, replication, cross-zone recovery, binary-log/
    replication overhead, and RPO/RTO evidence.
-4. Complete remaining compute, memory/NUMA, GPU, security, reliability,
+4. Complete remaining compute, memory/NUMA, GPU, provider security, reliability,
    observability, container, and control-plane executors.
 5. Extend campaigns across independent targets, then add timestamped price
    inputs and cohort export before any final provider-rating methodology.

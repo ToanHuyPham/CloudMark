@@ -47,6 +47,7 @@ from .profiles import (
     DATABASE_PROFILES,
     MEMORY_PROFILES,
     NETWORK_PROFILES,
+    SECURITY_PROFILES,
     STORAGE_PROFILES,
     WEB_PROFILES,
     all_profiles,
@@ -54,6 +55,7 @@ from .profiles import (
 from .provider import detect_provider
 from .remote import RemoteError, remote_default_timeout, remote_total_steps, run_remote_benchmark, validate_remote_agent
 from .runner import RUNNER_VERSION, CancellationToken, JobContext, RunCancelled, RunTimedOut
+from .security_posture import SecurityPostureError, run_security_posture, security_posture_preflight
 from .suitability import evaluate_suitability
 from .topology import PAIRING_TOPOLOGY_SCOPES, assess_pairing_topology, enrich_pairing_session
 from .web_benchmark import (
@@ -84,7 +86,7 @@ def _without_raw_evidence(value: Any) -> Any:
 def _dashboard_run_summaries(runs: list[dict[str, Any]]) -> list[dict[str, Any]]:
     summaries = deepcopy(runs)
     completed_scopes: set[tuple[str, str]] = set()
-    target_scoped_suites = {"compute", "memory", "storage"}
+    target_scoped_suites = {"compute", "memory", "storage", "security"}
     for run in summaries:
         suite = str(run.get("suite", ""))
         request = run.get("request") or {}
@@ -289,19 +291,19 @@ class CloudMarkController:
         suite = str(request.get("suite", ""))
         profile = str(request.get("profile", ""))
         agent_id = str(request.get("agent_id", "")).strip()
-        if suite not in {"inventory", "compute", "memory", "storage", "network", "database", "web"}:
-            raise ValueError("Supported suites are inventory, compute, memory, storage, network, database, and web.")
-        if agent_id and suite not in {"compute", "memory", "storage"}:
-            raise ValueError("agent_id is supported only for compute, memory, and storage runs.")
+        if suite not in {"inventory", "compute", "memory", "storage", "security", "network", "database", "web"}:
+            raise ValueError("Supported suites are inventory, compute, memory, storage, security, network, database, and web.")
+        if agent_id and suite not in {"compute", "memory", "storage", "security"}:
+            raise ValueError("agent_id is supported only for compute, memory, storage, and security runs.")
         remote_agent: dict[str, Any] | None = None
-        if suite in {"compute", "memory", "storage"}:
+        if suite in {"compute", "memory", "storage", "security"}:
             if agent_id:
                 remote_agent = validate_remote_agent(self.database, agent_id, suite, profile)
             active_local = next(
                 (
                     run
                     for run in self.database.list_runs(200)
-                    if run["suite"] in {"compute", "memory", "storage"}
+                    if run["suite"] in {"compute", "memory", "storage", "security"}
                     and run["status"] in {"queued", "running"}
                     and str(run.get("request", {}).get("agent_id", "")).strip() == agent_id
                 ),
@@ -310,7 +312,7 @@ class CloudMarkController:
             if active_local:
                 raise ValueError(
                     f"Benchmark {active_local['id']} is already {active_local['status']} on the selected target. "
-                    "Wait for it to finish or cancel it before starting another saturation load there."
+                    "Wait for it to finish or cancel it before starting another single-target assessment there."
                 )
             if remote_agent:
                 conflicting_distributed = next(
@@ -343,6 +345,12 @@ class CloudMarkController:
             methodology_version = str(profiles[profile]["methodology_version"])
             tool_version = f"{'sysbench' if suite == 'compute' else 'cloudmark-memory-bench'}-agent" if remote_agent else str(preflight["tool_version"])
             default_timeout = remote_default_timeout(suite, profile) if remote_agent else int(preflight["default_timeout_seconds"])
+        elif suite == "security":
+            preflight = None if remote_agent else security_posture_preflight(profile)
+            total_steps = remote_total_steps(suite, profile) if remote_agent else 1
+            methodology_version = str(SECURITY_PROFILES[profile]["methodology_version"])
+            tool_version = "cloudmark-security-posture-agent" if remote_agent else str(preflight["tool_version"])
+            default_timeout = remote_default_timeout(suite, profile) if remote_agent else int(preflight["default_timeout_seconds"])
         elif suite == "network":
             if not request.get("confirm_network_load"):
                 raise ValueError("Network test requires confirm_network_load=true because it generates sustained peer traffic.")
@@ -355,7 +363,7 @@ class CloudMarkController:
                 (
                     run
                     for run in self.database.list_runs(200)
-                    if run["suite"] in {"compute", "memory", "storage", "database", "web"}
+                    if run["suite"] in {"compute", "memory", "storage", "security", "database", "web"}
                     and run["status"] in {"queued", "running"}
                     and (
                         str(run.get("request", {}).get("session_id", "")) == session_id
@@ -574,6 +582,22 @@ class CloudMarkController:
                         run_id,
                         context=context,
                     )
+            elif request["suite"] == "security":
+                if request.get("execution") == "remote-agent":
+                    agent = self.database.get_agent(str(request["agent_id"]))
+                    if not agent:
+                        raise RemoteError("Selected Agent disappeared before execution.")
+                    result = run_remote_benchmark(
+                        self.database,
+                        run_id,
+                        agent,
+                        "security",
+                        str(request["profile"]),
+                        int(request["timeout_seconds"]),
+                        context=context,
+                    )
+                else:
+                    result = run_security_posture(str(request["profile"]), context=context)
             elif request["suite"] == "network":
                 result = run_network(
                     self.database,
@@ -643,7 +667,7 @@ class CloudMarkController:
                 error=str(exc),
                 phase="failed",
             )
-        except (BenchmarkError, ComputeError, OSError, ValueError, json.JSONDecodeError) as exc:
+        except (BenchmarkError, ComputeError, SecurityPostureError, OSError, ValueError, json.JSONDecodeError) as exc:
             finish_run(status="failed", error=str(exc), phase="failed")
         except Exception as exc:  # defensive runner boundary
             finish_run(
@@ -996,7 +1020,14 @@ class Handler(BaseHTTPRequestHandler):
             self._send_failure(403, exc)
         except LookupError as exc:
             self._send_failure(404, exc)
-        except (ValueError, BenchmarkError, ComputeError, NetworkError, json.JSONDecodeError) as exc:
+        except (
+            ValueError,
+            BenchmarkError,
+            ComputeError,
+            NetworkError,
+            SecurityPostureError,
+            json.JSONDecodeError,
+        ) as exc:
             self._send_failure(400, exc)
         except Exception as exc:  # defensive API boundary
             self._send_failure(500, exc)
