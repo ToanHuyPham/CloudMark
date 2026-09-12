@@ -103,13 +103,16 @@ own documents or controlled drills; VM performance cannot substitute for them.
 
 ### Repeated-window descriptive observations
 
-`provider-observations-v4` implements the non-rating portion of that
+`provider-observations-v5` implements the non-rating portion of that
 aggregation. It creates an exact cohort from provider, product/SKU, region, and
 operating system, then separates every metric again by profile, methodology,
 unit, paired topology, and topology evidence class. Database and cache evidence
-is separated again by engine implementation and exact server version. Cross-SKU,
+is separated again by engine implementation and exact server version. Storage
+evidence is separated by filesystem, bounded mount semantics, guest-visible
+block policy, and executor version. Cross-SKU,
 cross-region, cross-OS, cross-methodology, cross-topology,
-cross-evidence-class, and cross-database-implementation merging is forbidden. A
+cross-evidence-class, cross-database-implementation, and cross-storage-contract
+merging is forbidden. A
 paired network Run is one observation even when both endpoints belong to the
 same cohort.
 

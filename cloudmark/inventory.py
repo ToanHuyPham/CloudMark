@@ -216,6 +216,7 @@ def collect_inventory(workspace: Path | None = None) -> dict[str, Any]:
         "network": {"addresses": _network_addresses()},
         "capabilities": {
             "filesystem_metadata_benchmark": True,
+            "storage_environment_linux": uname.system == "Linux" and Path("/proc/self/mountinfo").is_file(),
             "fio": shutil.which("fio") is not None,
             "iperf3": shutil.which("iperf3") is not None,
             "iproute2": shutil.which("ip") is not None,

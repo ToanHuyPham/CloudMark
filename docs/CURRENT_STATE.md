@@ -1,6 +1,6 @@
 # CloudMark current state
 
-Last updated: 2026-09-11
+Last updated: 2026-09-12
 
 ## Repository baseline
 
@@ -31,6 +31,20 @@ baseline is still the repository head.
   166 Python tests, 3 rendered-dashboard tests, dashboard lint, and the
   production build. Verification used only an eight-file unit fixture and did
   not start a production storage benchmark;
+- bounded read-only `storage-environment-v1` evidence attached to every storage
+  Run: Linux workspace mount resolution, allow-listed mount semantics,
+  guest-visible device identity, scheduler, I/O geometry, read-ahead, request
+  depth, discard ceiling, write-cache/zoned state, and stacked-device names.
+  Raw mount sources, serials, sysfs paths, and physical-device claims are not
+  persisted; unsupported platforms and collection failures remain explicit
+  unavailable evidence without blocking the benchmark. Provider observations
+  advance to v5 and refuse to merge storage metrics across different or
+  unverified filesystem/block/tool contracts. Seven dedicated tests cover
+  mount parsing, sysfs normalization, source/serial redaction, unsupported and
+  failed collection, exact contract construction, and cohort separation. The
+  complete development head passes 173 Python tests, 3 rendered-dashboard
+  tests, dashboard lint, and the production build without starting a storage
+  benchmark;
 - progress, heartbeat, timeout, cancellation, cleanup, and partial-result
   preservation;
 - local Controller API, authenticated mutations, SQLite history, and dashboard;
@@ -205,10 +219,11 @@ baseline is still the repository head.
   cleanup are comparison gates. The complete development head passes
   146 Python tests, 3 rendered-dashboard tests, dashboard lint, and the
   production build without starting load;
-- `provider-observations-v4` exact provider/SKU/region/OS/topology/evidence-class
+- `provider-observations-v5` exact provider/SKU/region/OS/topology/evidence-class
   cohorts with strict profile/methodology/topology compatibility, UTC-day
-  windows, network Run de-duplication, and database/cache engine implementation
-  plus exact server-version isolation. PostgreSQL, Redis GET/SET, and
+  windows, network Run de-duplication, database/cache engine implementation
+  plus exact server-version isolation, and storage filesystem/mount/block/tool
+  isolation. PostgreSQL, Redis GET/SET, and
   MySQL/MariaDB read/write metrics now enter descriptive cohorts without being
   converted into a score. Median/P10/P90/best/worst/spread statistics retain a
   guarded nine-sample/three-target/three-window comparable state. MySQL and

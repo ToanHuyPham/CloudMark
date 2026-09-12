@@ -105,11 +105,13 @@ provenance. It produces target observations only; provider status stays
 `not-rated` until multi-target, repeated-window, operational, and cost evidence
 is implemented.
 
-`provider-observations-v4` now produces descriptive exact-cohort distributions
+`provider-observations-v5` now produces descriptive exact-cohort distributions
 for repeated evidence. It requires matching provider/SKU/region/OS and exact
 profile/methodology/topology/evidence-class compatibility; database/cache
-metrics also require exact engine implementation and server version. It exposes
-PostgreSQL, Redis, and MySQL/MariaDB observations, Run IDs, and sampling counts,
+metrics also require exact engine implementation and server version. Storage
+metrics require exact filesystem, bounded mount semantics, guest-visible block
+policy, and executor version. It exposes PostgreSQL, Redis, MySQL/MariaDB, and
+storage observations, Run IDs, and sampling counts,
 and does not enable provider ratings. Pair declarations are
 independently checked when trusted provider metadata can establish a placement
 scope; contradictions remain observational. Globally routable addresses alone

@@ -18,6 +18,12 @@ systems.
 - Test files, Run directories, and fio log files are removed in a `finally`
   block after completion, failure, timeout, cancellation, or an interrupted CLI
   session.
+- Storage context collection is read-only and bounded to 1 MiB/4,096 mount
+  records, 256 bytes per sysfs value, and 16 visible stacked devices. It never
+  changes mount flags, queue schedulers, read-ahead, cache mode, discard, or any
+  block-device property.
+- Raw mount sources, serial numbers, unknown mount flags, and sysfs paths are
+  not persisted. Guest block evidence never becomes a physical-device claim.
 - Raw devices, TRIM, full-device preconditioning, and power-loss tests are off.
 
 ## Compute and memory

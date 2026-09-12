@@ -58,6 +58,14 @@ scope, and verified cleanup. It is kept methodologically separate from
 `storage-v1` fio IOPS. Object storage, snapshots, restoration, physical-media
 durability, and power-loss behavior remain outside this executor.
 
+Every storage Run now adds `storage-environment-v1` read-only context on Linux:
+workspace filesystem, allow-listed mount semantics, guest block identity and
+stack, scheduler, I/O geometry, read-ahead, queue depth, discard ceiling,
+write-cache, and zoned state where visible. Raw sources and serials are not
+persisted, and guest observations do not establish physical media. Provider
+comparison v5 requires this exact context and executor version before storage
+metrics can become comparable.
+
 The current development head implements domain 10 through
 `database-postgresql-v2`: a durable ephemeral PostgreSQL service, built-in
 pgbench throughput and connection-churn jobs, an exact fixed-count transaction

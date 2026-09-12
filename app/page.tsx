@@ -84,6 +84,50 @@ type FilesystemMetric = {
   post_measurement_verification_seconds?: number;
 };
 
+type StorageEnvironment = {
+  methodology_version: string;
+  observed_at?: string;
+  platform: string;
+  evidence_status: "complete" | "partial" | "unavailable";
+  mount: {
+    status: "observed" | "unavailable";
+    mount_point?: string;
+    filesystem_type?: string;
+    source_class?: string;
+    mount_options?: string[];
+    major_minor?: string;
+    reason?: string;
+  };
+  block_device: {
+    status: "observed" | "partial" | "unavailable";
+    kernel_name?: string;
+    partition_name?: string | null;
+    device_type?: string;
+    vendor?: string | null;
+    model?: string | null;
+    scheduler?: { status: string; selected?: string | null; available?: string[] };
+    rotational?: boolean | null;
+    logical_block_size_bytes?: number | null;
+    physical_block_size_bytes?: number | null;
+    minimum_io_size_bytes?: number | null;
+    optimal_io_size_bytes?: number | null;
+    read_ahead_kib?: number | null;
+    request_queue_depth?: number | null;
+    discard_max_bytes?: number | null;
+    write_cache?: string | null;
+    zoned?: string | null;
+    stacked_slave_devices?: string[];
+    stacked_slave_count?: number;
+    reason?: string;
+  };
+  policy: {
+    read_only: true;
+    guest_visible_only: true;
+    physical_device_claim: false;
+    raw_source_persisted: false;
+  };
+};
+
 type ComputeMetric = {
   name: string;
   threads: number;
@@ -508,6 +552,7 @@ type Run = {
   result?: {
     jobs?: StorageMetric[];
     filesystem_operations?: FilesystemMetric[];
+    storage_environment?: StorageEnvironment;
     safety?: {
       mode?: string;
       raw_device?: boolean;
@@ -931,6 +976,7 @@ type ProviderMetricCohort = {
   topology_scope: TopologyScope | "single-target";
   topology_evidence: "single-target" | "operator-declared" | "independently-derived" | "contradicted" | "unavailable";
   implementation_contract: string;
+  storage_contract: string;
   status: "comparable" | "observational";
   reasons: string[];
   sample_count: number;
@@ -981,6 +1027,7 @@ type ProviderObservations = {
     exact_pair_topology: boolean;
     exact_pair_topology_evidence: boolean;
     exact_database_implementation_and_version: boolean;
+    exact_storage_environment_and_tool: boolean;
     cross_sku_aggregation: boolean;
     cross_region_aggregation: boolean;
     cross_os_aggregation: boolean;
@@ -1412,6 +1459,9 @@ export default function Home() {
   );
   const filesystemReadVerify = filesystemOperations.find((operation) => operation.name === "small-file-read-verify");
   const filesystemDurableCreate = filesystemOperations.find((operation) => operation.name === "durable-create-fsync");
+  const storageEnvironment = latestStorage?.result?.storage_environment;
+  const storageMount = storageEnvironment?.mount;
+  const storageBlockDevice = storageEnvironment?.block_device;
   const bandwidthTimeline = useMemo(() => {
     const job = storageJobs[storageJobs.length - 1];
     const points = job?.time_series?.bandwidth || [];
@@ -2265,6 +2315,16 @@ export default function Home() {
                 ) : <div className="timeline-empty">Run the selected fio profile to capture one-second bandwidth, IOPS, and latency evidence.</div>}
               </section>
             )}
+            <section className="panel storage-environment-panel">
+              <div className="panel-head"><div><span className="section-kicker">READ-ONLY STORAGE CONTEXT</span><h3>Filesystem and guest-visible block stack</h3></div><span className={`environment-status ${storageEnvironment?.evidence_status || "unavailable"}`}>{storageEnvironment?.evidence_status || "unavailable"}</span></div>
+              <div className="storage-environment-grid">
+                <div><span>FILESYSTEM</span><strong>{storageMount?.filesystem_type || "Unavailable"}</strong><small>{storageMount?.source_class ? `${storageMount.source_class} · ${storageMount.mount_point || "mount hidden"}` : storageMount?.reason || "Run the selected profile on Linux to collect mount evidence."}</small></div>
+                <div><span>DEVICE IDENTITY</span><strong>{storageBlockDevice?.model || storageBlockDevice?.kernel_name || "Unavailable"}</strong><small>{storageBlockDevice?.status === "observed" || storageBlockDevice?.status === "partial" ? `${storageBlockDevice.vendor || "vendor unavailable"} · ${storageBlockDevice.device_type || "unknown type"}${storageBlockDevice.partition_name ? ` · ${storageBlockDevice.partition_name}` : ""}` : storageBlockDevice?.reason || "No guest-visible block device evidence."}</small></div>
+                <div><span>I/O GEOMETRY</span><strong>{storageBlockDevice?.logical_block_size_bytes && storageBlockDevice?.physical_block_size_bytes ? `${formatBytes(storageBlockDevice.logical_block_size_bytes)} / ${formatBytes(storageBlockDevice.physical_block_size_bytes)}` : "Unavailable"}</strong><small>logical / physical · read-ahead {storageBlockDevice?.read_ahead_kib == null ? "unavailable" : `${storageBlockDevice.read_ahead_kib.toLocaleString()} KiB`} · queue {storageBlockDevice?.request_queue_depth ?? "unavailable"}</small></div>
+                <div><span>QUEUE POLICY</span><strong>{storageBlockDevice?.scheduler?.selected || "Unavailable"}</strong><small>{storageBlockDevice?.rotational == null ? "media class unavailable" : storageBlockDevice.rotational ? "rotational" : "non-rotational"} · write cache {storageBlockDevice?.write_cache || "unavailable"} · {storageBlockDevice?.stacked_slave_count || 0} visible slave devices</small></div>
+              </div>
+              <p className="method-note">{storageEnvironment?.evidence_status === "unavailable" ? storageMount?.reason || "Storage context has not been collected for this profile and target." : `Mount flags: ${storageMount?.mount_options?.join(", ") || "none observed"}. Evidence is guest-visible and read-only; raw mount sources, serial numbers, and physical-device claims are not persisted.`}</p>
+            </section>
             <section className="validity-panel panel"><span>FILESYSTEM COMPARISON CONTRACT</span><p>Compare only identical profile, methodology, operating system, filesystem, mount options, storage allocation, Python version, background load, and cache conditions. Filesystem operation rates are not interchangeable with fio block-I/O results.</p></section>
           </div>
         )}
@@ -2543,7 +2603,7 @@ export default function Home() {
         {activeView === "providers" && (
           <div className="view providers-view">
             <section className="section-intro">
-              <div><span className="section-kicker">REPEATED-WINDOW OBSERVATIONS</span><h2>Compare like with like without inventing a provider score.</h2><p>CloudMark separates cohorts by provider, SKU, region, operating system, profile, methodology, paired topology, and database implementation/version. Descriptive statistics become comparable only after the minimum target, window, and sample contract is met.</p></div>
+              <div><span className="section-kicker">REPEATED-WINDOW OBSERVATIONS</span><h2>Compare like with like without inventing a provider score.</h2><p>CloudMark separates cohorts by provider, SKU, region, operating system, profile, methodology, paired topology, database implementation/version, and the exact storage filesystem/block/tool contract. Descriptive statistics become comparable only after the minimum target, window, and sample contract is met.</p></div>
               <div className="runner-actions provider-contract-selector">
                 <label><span>METRIC CONTRACT</span><select value={activeProviderContract?.contract_id || ""} onChange={(event) => setSelectedProviderContract(event.target.value)} disabled={!providerContracts.length}>
                   {!providerContracts.length && <option value="">No repeated evidence</option>}
@@ -2558,17 +2618,18 @@ export default function Home() {
               <article className="panel caution"><span>PROVIDER RATING</span><strong>Not rated</strong><small>operational and cost gates remain unavailable</small></article>
             </section>
             <section className="panel comparison-contract-panel">
-              <div className="panel-head"><div><span className="section-kicker">COMPARISON CONTRACT</span><h3>{activeProviderContract?.label || "No compatible metric evidence yet"}</h3></div><span className="run-id">{providerObservations?.version || "provider-observations-v4"}</span></div>
+              <div className="panel-head"><div><span className="section-kicker">COMPARISON CONTRACT</span><h3>{activeProviderContract?.label || "No compatible metric evidence yet"}</h3></div><span className="run-id">{providerObservations?.version || "provider-observations-v5"}</span></div>
               <div className="comparison-contract-grid">
                 <div><span>PROFILE</span><strong>{activeProviderContract?.profile || "Unavailable"}</strong></div>
                 <div><span>METHODOLOGY</span><strong>{activeProviderContract?.methodology_version || "Unavailable"}</strong></div>
                 <div><span>PAIR TOPOLOGY</span><strong>{activeProviderContract?.topology_scope || "Unavailable"}</strong></div>
                 <div><span>TOPOLOGY EVIDENCE</span><strong>{activeProviderContract?.topology_evidence || "Unavailable"}</strong></div>
-                <div><span>ENGINE / TOOL CONTRACT</span><strong>{activeProviderContract?.implementation_contract === "not-applicable" ? "Not applicable" : activeProviderContract?.implementation_contract || "Unavailable"}</strong></div>
+                <div><span>DATABASE ENGINE CONTRACT</span><strong>{activeProviderContract?.implementation_contract === "not-applicable" ? "Not applicable" : activeProviderContract?.implementation_contract || "Unavailable"}</strong></div>
+                <div><span>STORAGE ENVIRONMENT / TOOL</span><strong>{activeProviderContract?.storage_contract === "not-applicable" ? "Not applicable" : activeProviderContract?.storage_contract || "Unavailable"}</strong></div>
                 <div><span>DIRECTION</span><strong>{activeProviderContract ? `${activeProviderContract.direction} is better` : "Unavailable"}</strong></div>
                 <div><span>MINIMUM SAMPLE</span><strong>{providerObservations ? `${providerObservations.minimum_comparable_sampling.samples} runs / ${providerObservations.minimum_comparable_sampling.targets} targets / ${providerObservations.minimum_comparable_sampling.windows} days` : "Unavailable"}</strong></div>
               </div>
-              <p className="method-note">A measurement window is one UTC calendar day. Paired runs with different scopes or topology evidence classes are never merged, and database/cache evidence also requires the same engine implementation and server version. P10, median, P90, actual best/worst, sample count, target count, and relative spread remain descriptive evidence; CloudMark does not rank providers.</p>
+              <p className="method-note">A measurement window is one UTC calendar day. Paired runs with different scopes or topology evidence classes are never merged. Database/cache evidence requires the same engine implementation and server version; storage evidence requires the same filesystem, bounded mount semantics, guest-visible block policy, and executor version. P10, median, P90, actual best/worst, sample count, target count, and relative spread remain descriptive evidence; CloudMark does not rank providers.</p>
             </section>
             {providerGroups.length ? <section className="provider-comparison-grid" aria-label="Provider cohort observations">
               {providerGroups.map((group) => {

@@ -544,3 +544,25 @@ prevents filesystem operations per second from being mislabeled as block IOPS,
 while explicit Python-runtime and cache disclosures keep the evidence honest.
 An fsync return is application-visible durability-path evidence, not proof of
 physical-media persistence or power-loss protection.
+
+## D-037: Storage comparison requires bounded guest storage context
+
+**Decision:** Attach one `storage-environment-v1` read-only observation to every
+storage Run before load. Linux collection resolves the workspace mount through
+a bounded mountinfo read and, for a block-backed mount, reads bounded queue and
+geometry attributes through the exact major:minor sysfs mapping. Raw mount
+sources, serials, sysfs paths, and unknown options are not persisted. Collection
+failure or unsupported platforms return unavailable evidence without blocking
+the benchmark. Advance repeated provider observations to
+`provider-observations-v5`; storage metric contracts now include the exact
+filesystem, allow-listed mount semantics, applicable guest block policy, and
+executor version. Missing or different storage context keeps a cohort separate
+or observational.
+
+**Reason:** Identical provider SKU and fio profile do not make results
+comparable when one Run uses another filesystem, mount policy, scheduler,
+sector geometry, device stack, or tool generation. Guest evidence cannot prove
+the physical drive or provider replication layer, but it can prevent known
+configuration differences from being silently aggregated. Keeping collection
+read-only, bounded, and non-blocking preserves benchmark safety and supports
+providers that expose limited virtualization detail.

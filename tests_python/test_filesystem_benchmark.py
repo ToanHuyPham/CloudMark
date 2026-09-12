@@ -106,6 +106,7 @@ class FilesystemBenchmarkTests(unittest.TestCase):
         self.assertEqual(durable["durability"]["file_fsync_count"], 2)
         self.assertEqual(durable["integrity"]["status"], "verified")
         self.assertTrue(result["safety"]["workspace_removed"])
+        self.assertIn(result["storage_environment"]["evidence_status"], {"complete", "partial", "unavailable"})
         self.assertEqual(context.completed_steps, 8)
         self.assertEqual(updates[-1]["progress"], 1.0)
 

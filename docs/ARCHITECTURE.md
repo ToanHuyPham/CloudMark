@@ -37,6 +37,9 @@ heartbeat, cancellation request, and runner/methodology/tool versions. Compute,
 memory, and storage persist completed jobs as partial results during execution.
 A native storage operation profile persists `filesystem_operations` under the
 same Run lifecycle while retaining a methodology distinct from fio jobs.
+All storage executors attach a bounded read-only `storage_environment`
+observation before load. Collection failure is converted to explicit
+unavailable evidence and never changes benchmark execution.
 A Controller restart marks unfinished runs as interrupted instead of leaving
 them running forever.
 
@@ -83,12 +86,14 @@ measurement windows, observed suites, and missing operational domains, but
 does not produce a provider rating until the complete aggregation contract is
 implemented.
 
-`provider-observations-v4` adds a second read-time projection for repeated
+`provider-observations-v5` adds a second read-time projection for repeated
 measurements. Cohorts must match provider, SKU, region, operating system,
 profile, methodology, metric, unit, paired topology, and topology evidence
 class. Database/cache cohorts additionally match engine implementation and
-exact server version, and expose PostgreSQL, Redis, and MySQL/MariaDB metrics
-under distinct keys. It de-duplicates a paired network Run, uses UTC calendar days as
+exact server version. Storage cohorts match bounded filesystem/mount semantics,
+guest-visible block policy, and executor version. It exposes PostgreSQL, Redis,
+MySQL/MariaDB, and storage metrics under distinct keys, de-duplicates a paired
+network Run, and uses UTC calendar days as
 windows, and reports descriptive distributions only. Trusted Agent metadata
 may independently derive a placement scope; contradictory operator
 declarations fail closed to observational evidence. Globally routable peer

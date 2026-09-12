@@ -407,10 +407,11 @@ class CloudMarkTests(unittest.TestCase):
 
         report = evaluate_suitability(runs, self._suitability_system("controller"), agents.get)
         observations = report["provider_observations"]
-        self.assertEqual(observations["version"], "provider-observations-v4")
+        self.assertEqual(observations["version"], "provider-observations-v5")
         self.assertTrue(observations["policy"]["exact_pair_topology"])
         self.assertTrue(observations["policy"]["exact_pair_topology_evidence"])
         self.assertTrue(observations["policy"]["exact_database_implementation_and_version"])
+        self.assertTrue(observations["policy"]["exact_storage_environment_and_tool"])
         self.assertFalse(observations["policy"]["provider_ranking"])
         group = observations["groups"][0]
         self.assertEqual(group["target_count"], 3)
@@ -535,7 +536,7 @@ class CloudMarkTests(unittest.TestCase):
             systems.get,
         )
         observations = report["provider_observations"]
-        self.assertEqual(observations["version"], "provider-observations-v4")
+        self.assertEqual(observations["version"], "provider-observations-v5")
         metrics = observations["groups"][0]["metric_cohorts"]
         mysql_tps = [item for item in metrics if item["key"] == "database.mysql_read_write_t4_tps"]
         self.assertEqual(len(mysql_tps), 3)
@@ -5693,12 +5694,13 @@ max: 1.50
                 self.assertEqual(suitability["requirements_version"], "workload-requirements-1.0")
                 with urllib.request.urlopen(f"{base}/provider-comparisons", timeout=5) as response:
                     provider_observations = json.load(response)
-                self.assertEqual(provider_observations["version"], "provider-observations-v4")
+                self.assertEqual(provider_observations["version"], "provider-observations-v5")
                 self.assertEqual(provider_observations["rating_status"], "not-rated")
                 self.assertFalse(provider_observations["policy"]["provider_ranking"])
                 self.assertTrue(
                     provider_observations["policy"]["exact_database_implementation_and_version"]
                 )
+                self.assertTrue(provider_observations["policy"]["exact_storage_environment_and_tool"])
                 with urllib.request.urlopen(f"{base}/network-campaigns", timeout=5) as response:
                     campaigns = json.load(response)
                 self.assertEqual(campaigns["items"], [])
@@ -5962,7 +5964,13 @@ max: 1.50
                 timeout_seconds=30,
                 on_progress=updates.append,
             )
-            with patch("cloudmark.benchmarks.storage_preflight", return_value=preflight), patch.object(
+            storage_environment = {
+                "methodology_version": "storage-environment-v1",
+                "evidence_status": "partial",
+            }
+            with patch("cloudmark.benchmarks.storage_preflight", return_value=preflight), patch(
+                "cloudmark.benchmarks.collect_storage_environment", return_value=storage_environment
+            ), patch.object(
                 context,
                 "run_process",
                 side_effect=process_results,
@@ -5971,6 +5979,7 @@ max: 1.50
             self.assertEqual(result["profile_version"], "1.1")
             self.assertEqual(result["methodology_version"], "storage-v1")
             self.assertEqual(result["tool"]["version"], "fio-3.39")
+            self.assertEqual(result["storage_environment"], storage_environment)
             self.assertEqual(len(result["jobs"]), 4)
             self.assertTrue(result["safety"]["test_file_removed"])
             self.assertEqual(context.completed_steps, 6)

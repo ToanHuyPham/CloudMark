@@ -18,7 +18,7 @@ from .profiles import (
 
 SUITABILITY_ENGINE_VERSION = "suitability-v1"
 REQUIREMENTS_VERSION = "workload-requirements-1.0"
-PROVIDER_OBSERVATION_VERSION = "provider-observations-v4"
+PROVIDER_OBSERVATION_VERSION = "provider-observations-v5"
 EVIDENCE_MAX_AGE_DAYS = 30
 EVIDENCE_FUTURE_SKEW_SECONDS = 86_400
 COMPARISON_MIN_SAMPLES = 9
@@ -740,6 +740,59 @@ def _run_implementation_contract(run: dict[str, Any]) -> tuple[str, bool]:
     return f"{engine}:{safe_implementation}:{safe_version}", verified
 
 
+def _contract_token(value: Any, fallback: str = "unknown") -> str:
+    normalized = " ".join(str(value or "").split()).replace("|", "/")
+    return normalized[:160] if normalized else fallback
+
+
+def _run_storage_contract(run: dict[str, Any]) -> tuple[str, bool]:
+    if str(run.get("suite") or "") != "storage":
+        return "not-applicable", True
+    result = run.get("result") if isinstance(run.get("result"), dict) else {}
+    environment = result.get("storage_environment") if isinstance(result.get("storage_environment"), dict) else {}
+    mount = environment.get("mount") if isinstance(environment.get("mount"), dict) else {}
+    block = environment.get("block_device") if isinstance(environment.get("block_device"), dict) else {}
+    tool = result.get("tool") if isinstance(result.get("tool"), dict) else {}
+    filesystem = _contract_token(mount.get("filesystem_type"))
+    source_class = _contract_token(mount.get("source_class"))
+    mount_options = mount.get("mount_options") if isinstance(mount.get("mount_options"), list) else []
+    safe_options = ",".join(sorted(_contract_token(item) for item in mount_options[:32])) or "none-observed"
+    tool_contract = f"{_contract_token(tool.get('name'))}:{_contract_token(tool.get('version'))}"
+    base = (
+        f"environment={_contract_token(environment.get('methodology_version'))};"
+        f"filesystem={filesystem};source={source_class};mount-options={safe_options};tool={tool_contract}"
+    )
+    mount_verified = (
+        environment.get("methodology_version") == "storage-environment-v1"
+        and environment.get("evidence_status") == "complete"
+        and mount.get("status") == "observed"
+        and filesystem != "unknown"
+        and source_class in {"block-device", "network-filesystem", "memory-filesystem", "overlay-filesystem"}
+        and tool.get("name")
+        and tool.get("version")
+    )
+    if source_class != "block-device":
+        return f"{base};block=not-applicable", bool(mount_verified)
+    scheduler = block.get("scheduler") if isinstance(block.get("scheduler"), dict) else {}
+    block_contract = (
+        f"type={_contract_token(block.get('device_type'))};"
+        f"scheduler={_contract_token(scheduler.get('selected'))};"
+        f"rotational={str(block.get('rotational')).lower() if isinstance(block.get('rotational'), bool) else 'unknown'};"
+        f"logical={_contract_token(block.get('logical_block_size_bytes'))};"
+        f"physical={_contract_token(block.get('physical_block_size_bytes'))};"
+        f"write-cache={_contract_token(block.get('write_cache'))};"
+        f"stacked-slaves={_contract_token(block.get('stacked_slave_count'), '0')}"
+    )
+    block_verified = (
+        block.get("status") == "observed"
+        and scheduler.get("selected")
+        and isinstance(block.get("rotational"), bool)
+        and isinstance(block.get("logical_block_size_bytes"), int)
+        and isinstance(block.get("physical_block_size_bytes"), int)
+    )
+    return f"{base};block={block_contract}", bool(mount_verified and block_verified)
+
+
 def _percentile(values: list[float], fraction: float) -> float:
     ordered = sorted(values)
     if len(ordered) == 1:
@@ -793,7 +846,7 @@ def _provider_observations(targets: list[dict[str, Any]]) -> dict[str, Any]:
         peer_ids = {peer["id"] for peer in peers}
         identity_verified = all(_provider_identity_verified(peer["provider"]) for peer in peers)
         runs_by_id: dict[str, dict[str, Any]] = {}
-        metric_builders: dict[tuple[str, str, str, str, str, str, str], dict[str, Any]] = {}
+        metric_builders: dict[tuple[str, str, str, str, str, str, str, str], dict[str, Any]] = {}
         for peer in peers:
             for run in peer["_runs"]:
                 if not _run_is_fresh(run):
@@ -819,6 +872,7 @@ def _provider_observations(targets: list[dict[str, Any]]) -> dict[str, Any]:
                     unit = str(item.get("unit") or "")
                     topology_scope, topology_evidence = _run_topology_contract(run)
                     implementation_contract, implementation_verified = _run_implementation_contract(run)
+                    storage_contract, storage_contract_verified = _run_storage_contract(run)
                     contract_key = (
                         metric_key,
                         profile,
@@ -827,6 +881,7 @@ def _provider_observations(targets: list[dict[str, Any]]) -> dict[str, Any]:
                         topology_scope,
                         topology_evidence,
                         implementation_contract,
+                        storage_contract,
                     )
                     builder = metric_builders.setdefault(contract_key, {
                         "values": [],
@@ -835,10 +890,14 @@ def _provider_observations(targets: list[dict[str, Any]]) -> dict[str, Any]:
                         "windows": set(),
                         "observed_at": [],
                         "implementation_verified": True,
+                        "storage_contract_verified": True,
                         "_seen_runs": set(),
                     })
                     builder["implementation_verified"] = (
                         builder["implementation_verified"] and implementation_verified
+                    )
+                    builder["storage_contract_verified"] = (
+                        builder["storage_contract_verified"] and storage_contract_verified
                     )
                     if run_id in builder["_seen_runs"]:
                         builder["target_ids"].update(participating_targets)
@@ -862,6 +921,7 @@ def _provider_observations(targets: list[dict[str, Any]]) -> dict[str, Any]:
                 topology_scope,
                 topology_evidence,
                 implementation_contract,
+                storage_contract,
             ) = contract_key
             values = builder["values"]
             median = _percentile(values, 0.5)
@@ -885,6 +945,8 @@ def _provider_observations(targets: list[dict[str, Any]]) -> dict[str, Any]:
                 reasons.append("Paired benchmark topology is not declared.")
             if not builder["implementation_verified"]:
                 reasons.append("Database engine implementation or server version evidence is unavailable.")
+            if not builder["storage_contract_verified"]:
+                reasons.append("Storage filesystem, block-device, or tool contract evidence is unavailable.")
             relative_spread, stability = _stability(values, median, p10, p90)
             metric_cohorts.append({
                 "contract_id": "|".join(contract_key),
@@ -898,6 +960,7 @@ def _provider_observations(targets: list[dict[str, Any]]) -> dict[str, Any]:
                 "topology_scope": topology_scope,
                 "topology_evidence": topology_evidence,
                 "implementation_contract": implementation_contract,
+                "storage_contract": storage_contract,
                 "status": "comparable" if not reasons else "observational",
                 "reasons": reasons,
                 "sample_count": len(values),
@@ -970,6 +1033,7 @@ def _provider_observations(targets: list[dict[str, Any]]) -> dict[str, Any]:
             "exact_pair_topology": True,
             "exact_pair_topology_evidence": True,
             "exact_database_implementation_and_version": True,
+            "exact_storage_environment_and_tool": True,
             "cross_sku_aggregation": False,
             "cross_region_aggregation": False,
             "cross_os_aggregation": False,

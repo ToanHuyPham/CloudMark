@@ -390,6 +390,14 @@ and a **Cancel run** control. Cancellation stops the current executor, removes
 temporary files, and retains already completed jobs or operations as partial
 evidence. Cancelled results are never treated as a completed assessment.
 
+Completed storage results also display **Read-only storage context**. On Linux,
+this identifies the workspace filesystem, safe mount semantics, guest-visible
+block family/model, queue scheduler, logical/physical block sizes, read-ahead,
+queue depth, write-cache mode, and visible stacked devices. `Partial` or
+`Unavailable` is valid evidence of limited guest visibility; it does not become
+a zero score. Raw mount sources, device serials, and physical-device claims are
+not stored.
+
 ### Operations CloudMark does not perform
 
 - write to `/dev/sda`, `/dev/nvme0n1`, or a raw Windows disk;

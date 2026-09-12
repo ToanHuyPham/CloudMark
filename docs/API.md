@@ -389,11 +389,13 @@ are satisfied.
 GET /api/v1/provider-comparisons
 ```
 
-The `provider-observations-v4` response groups fresh valid evidence only when
+The `provider-observations-v5` response groups fresh valid evidence only when
 provider, product/SKU, region, operating system, profile, methodology, metric,
 unit, paired topology, and topology evidence class match. Database and cache
 metrics additionally require the same engine, implementation, and exact server
-version. A UTC calendar day is one measurement window. Each metric
+version. Storage metrics additionally require the same filesystem, bounded
+mount semantics, guest-visible block policy, and exact executor version. A UTC
+calendar day is one measurement window. Each metric
 cohort exposes sample, target, window, and Run ID sets plus median, P10, P90,
 actual minimum/maximum, direction-aware best/worst, and P10-P90 relative
 spread.

@@ -17,6 +17,7 @@ from .filesystem_benchmark import (
 )
 from .profiles import STORAGE_PROFILES
 from .runner import JobContext, RunStopped
+from .storage_environment import collect_storage_environment
 
 
 class BenchmarkError(RuntimeError):
@@ -183,6 +184,7 @@ def _partial_result(
     results: list[dict[str, Any]],
     started: float,
     test_file: Path,
+    storage_environment: dict[str, Any],
 ) -> dict[str, Any]:
     return {
         "suite": "storage",
@@ -192,6 +194,7 @@ def _partial_result(
         "tool": {"name": "fio", "version": preflight["fio_version"]},
         "elapsed_seconds": round(time.monotonic() - started, 3),
         "preflight": preflight,
+        "storage_environment": storage_environment,
         "jobs": list(results),
         "safety": {
             "mode": "filesystem-test-file",
@@ -217,6 +220,7 @@ def run_storage(
     preflight = storage_preflight(profile_name, workspace)
     profile = STORAGE_PROFILES[profile_name]
     workspace = Path(preflight["workspace"])
+    storage_environment = collect_storage_environment(workspace)
     test_file = workspace / f"{_safe_name(run_id)}.fio"
     fio = str(preflight["fio"])
     ioengine = "windowsaio" if os.name == "nt" else "libaio"
@@ -232,7 +236,7 @@ def run_storage(
     pending_error: BaseException | None = None
 
     try:
-        context.report("preparing", "allocate-test-file", partial_result=_partial_result(profile_name, profile, preflight, results, started, test_file))
+        context.report("preparing", "allocate-test-file", partial_result=_partial_result(profile_name, profile, preflight, results, started, test_file, storage_environment))
         prepare = [
             fio,
             "--name=cloudmark-prepare",
@@ -254,7 +258,7 @@ def run_storage(
 
         for index, workload in enumerate(profile["jobs"]):
             job_name = str(workload["name"])
-            context.report("benchmarking", job_name, partial_result=_partial_result(profile_name, profile, preflight, results, started, test_file))
+            context.report("benchmarking", job_name, partial_result=_partial_result(profile_name, profile, preflight, results, started, test_file, storage_environment))
             log_prefix = workspace / f"{_safe_name(run_id)}-{index:02d}-{_safe_name(job_name)}"
             command = [
                 fio,
@@ -300,7 +304,7 @@ def run_storage(
             context.complete_step(
                 "benchmarking" if index + 1 < len(profile["jobs"]) else "cleanup",
                 next_job,
-                partial_result=_partial_result(profile_name, profile, preflight, results, started, test_file),
+                partial_result=_partial_result(profile_name, profile, preflight, results, started, test_file, storage_environment),
             )
     except BaseException as exc:
         pending_error = exc
@@ -321,7 +325,7 @@ def run_storage(
                 pass
 
     remaining_logs = list(workspace.glob(f"{_safe_name(run_id)}-*_*.log"))
-    result = _partial_result(profile_name, profile, preflight, results, started, test_file)
+    result = _partial_result(profile_name, profile, preflight, results, started, test_file, storage_environment)
     result["safety"]["fio_logs_removed"] = not remaining_logs
     if pending_error is not None:
         if isinstance(pending_error, (RunStopped, BenchmarkError, OSError)):

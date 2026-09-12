@@ -89,6 +89,34 @@ measurement. It does not claim kernel-only metadata latency. Cache state is
 not manipulated: create-followed-by-stat/read phases may use warm directory,
 inode, or page cache, and that scope is recorded on every operation.
 
+## Storage environment evidence
+
+Every storage Run attempts one read-only `storage-environment-v1` snapshot of
+the exact benchmark workspace before load begins. On Linux, CloudMark reads at
+most 1 MiB and 4,096 lines from `/proc/self/mountinfo`, selects the longest
+mount matching the workspace device identity, and persists only bounded mount
+semantics. For a guest-visible block mount, it follows the matching
+`/sys/dev/block/<major>:<minor>` link and reads bounded queue attributes from
+the top-level guest block device.
+
+The snapshot can include:
+
+- filesystem type, mount point, source class, and an allow-listed subset of
+  mount flags;
+- guest kernel device and partition names, device family, bounded vendor/model,
+  and visible stacked-slave names;
+- active and available queue scheduler;
+- rotational flag, logical/physical/minimum/optimal I/O sizes;
+- read-ahead, request queue depth, discard ceiling, write-cache mode, and zoned
+  mode where the guest exposes them.
+
+Raw mount sources, storage serial numbers, unknown mount options, and sysfs
+paths are not persisted. This is guest-visible configuration evidence: it does
+not identify a physical drive, host cache, RAID controller, replication layer,
+or provider durability implementation. Linux evidence can be `complete`,
+`partial`, or `unavailable`; other operating systems currently report the
+platform limitation explicitly without blocking the benchmark.
+
 ## Reported evidence
 
 Each `fio` job retains:
@@ -133,3 +161,7 @@ Compare only identical profile, methodology, executor/tool version,
 architecture, OS, filesystem, mount options, storage allocation, cache context,
 power context, and background-load policy. Never compare filesystem operations
 per second directly with fio IOPS.
+
+`provider-observations-v5` enforces this boundary for storage metrics. A storage
+cohort is not comparable unless the filesystem/mount contract, block policy
+when applicable, and exact executor version are present and identical.

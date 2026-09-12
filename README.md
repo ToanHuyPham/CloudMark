@@ -22,6 +22,7 @@ timestamp, and raw result.
 | Partial | Cache-resistant native memory read, write, copy, and triad bandwidth profiles |
 | Available | Filesystem-safe `fio` storage profiles with latency percentiles |
 | Available | Native small-file metadata, SHA-256 integrity, per-file fsync, tail latency, and cleanup evidence |
+| Available | Bounded read-only Linux mount, block topology, queue policy, and I/O geometry evidence for every storage Run |
 | Available | Versioned job runner with progress, heartbeat, timeout, cancellation, cleanup, and partial results |
 | Available | Quick, Standard, Database, Throughput, and Sustained storage profiles with one-second time series |
 | Available | Local Controller API, SQLite history, and responsive dashboard |
@@ -202,7 +203,7 @@ are available.
 Web/API/TLS remains partial until database-backed applications, HTTP/3, CDN,
 WAF, and autoscaling evidence are available.
 The current development head also implements `suitability-v1` target-scoped
-hard gates with exact evidence provenance and `provider-observations-v4`
+hard gates with exact evidence provenance and `provider-observations-v5`
 topology-, evidence-class-, and database-implementation-aware same-SKU
 repeated-window descriptive comparisons. Provider-wide ratings and
 control-plane executors remain explicitly unavailable.

@@ -82,6 +82,11 @@ tool during inventory enrollment.
 `storage-filesystem-v1` requires only the native
 `filesystem_metadata_benchmark` capability reported by the installed Agent.
 Both retain the same explicit write confirmation and workspace safety reserve.
+Linux Agents additionally collect bounded read-only
+`storage-environment-v1` evidence from procfs/sysfs. This observation is not an
+admission requirement: an older Agent or unsupported operating system may run
+the benchmark, but its storage metrics remain observational rather than
+comparison-eligible under `provider-observations-v5`.
 
 ## Control and safety contract
 

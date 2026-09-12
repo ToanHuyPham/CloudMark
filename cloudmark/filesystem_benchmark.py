@@ -12,6 +12,7 @@ from typing import Any, Callable
 
 from .profiles import STORAGE_PROFILES
 from .runner import JobContext, RunStopped
+from .storage_environment import collect_storage_environment
 
 
 FILESYSTEM_METHODOLOGY_VERSION = "storage-filesystem-v1"
@@ -149,6 +150,7 @@ def _partial_result(
     operations: list[dict[str, Any]],
     root: Path,
     started: float,
+    storage_environment: dict[str, Any],
 ) -> dict[str, Any]:
     return {
         "suite": "storage",
@@ -161,6 +163,7 @@ def _partial_result(
         },
         "elapsed_seconds": round(time.monotonic() - started, 6),
         "preflight": preflight,
+        "storage_environment": storage_environment,
         "filesystem_operations": list(operations),
         "measurement_contract": {
             "worker_model": "single-process-sequential",
@@ -188,6 +191,7 @@ def run_filesystem_storage(
     preflight = filesystem_preflight(profile_name, workspace)
     profile = STORAGE_PROFILES[profile_name]
     workspace = Path(preflight["workspace"])
+    storage_environment = collect_storage_environment(workspace)
     base = (workspace / "filesystem-benchmarks").resolve()
     root = (base / _safe_run_name(run_id)).resolve()
     try:
@@ -215,7 +219,7 @@ def run_filesystem_storage(
         context.report(
             "benchmarking-filesystem",
             name,
-            partial_result=_partial_result(profile_name, profile, preflight, operations, root, started),
+            partial_result=_partial_result(profile_name, profile, preflight, operations, root, started, storage_environment),
         )
         samples: list[int] = []
         phase_started = time.perf_counter()
@@ -232,7 +236,7 @@ def run_filesystem_storage(
         context.complete_step(
             "benchmarking-filesystem",
             None,
-            partial_result=_partial_result(profile_name, profile, preflight, operations, root, started),
+            partial_result=_partial_result(profile_name, profile, preflight, operations, root, started, storage_environment),
         )
 
     try:
@@ -245,7 +249,7 @@ def run_filesystem_storage(
         context.complete_step(
             "benchmarking-filesystem",
             "small-file-create",
-            partial_result=_partial_result(profile_name, profile, preflight, operations, root, started),
+            partial_result=_partial_result(profile_name, profile, preflight, operations, root, started, storage_environment),
         )
 
         def create_file(index: int) -> None:
@@ -372,7 +376,7 @@ def run_filesystem_storage(
         except OSError:
             pass
 
-    result = _partial_result(profile_name, profile, preflight, operations, root, started)
+    result = _partial_result(profile_name, profile, preflight, operations, root, started, storage_environment)
     if pending_error is not None:
         if isinstance(pending_error, (RunStopped, FilesystemBenchmarkError, OSError)):
             pending_error.partial_result = result
