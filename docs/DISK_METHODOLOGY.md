@@ -2,24 +2,27 @@
 
 Storage is CloudMark's first production-oriented executor. A single throughput
 number is insufficient for databases, web applications, media, backup, or
-analytics. Every profile therefore combines workload shape, queue depth, tail
-latency, CPU cost, and one-second behavior over time.
+analytics. CloudMark keeps two evidence families separate: direct-I/O `fio`
+profiles for block-I/O behavior and a native filesystem profile for small-file
+metadata, checksum, and fsync behavior.
 
 ## Safety boundary
 
-All profiles use one temporary file inside the configured workspace. Preflight
-requires the file size plus the larger of 1 GiB or 5% of total filesystem
-capacity to remain free. CloudMark never accepts a raw device, never formats a
-volume, and removes the temporary file and fio logs on completion, failure,
-timeout, or cancellation.
+All profiles use generated files inside the configured workspace. The `fio`
+profiles use one exact test-file path. The filesystem profile uses one
+Run-specific directory containing only fixed-size generated files. Preflight
+requires the configured workspace allowance plus the larger of 1 GiB or 5% of
+total filesystem capacity to remain free. CloudMark never accepts a raw device,
+never formats a volume, and removes generated files and logs on completion,
+failure, timeout, or cancellation.
 
 ## Versioning
 
 Storage results record:
 
 - profile version;
-- `storage-v1` methodology version;
-- exact fio version;
+- `storage-v1` or `storage-filesystem-v1` methodology version;
+- exact fio version or native executor and Python version;
 - shared runner version;
 - workload arguments and run topology;
 - timestamps, phase, and terminal state.
@@ -70,9 +73,25 @@ changes that preserve semantics increment the profile version.
 - explicit ramp time before measurement;
 - intended to reveal burst-credit exhaustion and throttling.
 
+### Filesystem Metadata & Integrity
+
+- fixed 2,048-file, 32-directory shape with deterministic 4 KiB payloads;
+- single-process sequential create, stat, read with SHA-256 verification,
+  rename, and delete phases;
+- a separate 128-file create/flush/fsync phase;
+- directory fsync timing when supported by the operating system;
+- per-operation throughput plus minimum, P50, P95, P99, and maximum latency;
+- verified Run-directory cleanup after success, failure, timeout, or cancel;
+- no `fio` dependency, so the installed CloudMark Agent itself is sufficient.
+
+The profile intentionally reports a guest-filesystem-and-Python-runtime
+measurement. It does not claim kernel-only metadata latency. Cache state is
+not manipulated: create-followed-by-stat/read phases may use warm directory,
+inode, or page cache, and that scope is recorded on every operation.
+
 ## Reported evidence
 
-Each job retains:
+Each `fio` job retains:
 
 - read and write bytes, IOPS, and bytes per second;
 - P50/P90/P95/P99/P99.9 completion latency;
@@ -84,6 +103,16 @@ Each job retains:
 One-second fio logs use KiB/s for bandwidth and nanoseconds for latency;
 CloudMark normalizes them to bytes/s and milliseconds before persistence.
 
+Each native filesystem operation retains:
+
+- operation count, elapsed time, and operations per second;
+- minimum, P50, P95, P99, and maximum user-space elapsed latency;
+- bytes processed where applicable;
+- cache-scope disclosure;
+- SHA-256 verified-file and mismatch counts for read phases;
+- per-file fsync count and supported directory-fsync observation;
+- workspace-removal evidence.
+
 ## Interpretation
 
 - QD1 random latency influences OS boot and latency-sensitive applications.
@@ -91,7 +120,16 @@ CloudMark normalizes them to bytes/s and milliseconds before persistence.
 - Large sequential throughput influences media, backup, restore, and analytics.
 - Mixed sustained time series reveal burst-credit exhaustion and throttling.
 - CPU per unit of I/O helps detect an instance bottleneck rather than a storage limit.
+- Small-file operations influence package trees, source checkouts, mail queues,
+  container layers, and metadata-heavy application workloads.
+- Per-file fsync completion is application-visible durability-path evidence. It
+  does not prove physical-media persistence or power-loss protection.
 
 CloudMark does not infer durability, replication, snapshot quality, or SLA from
 disk performance. Those claims require provider API evidence and verified
 restore drills.
+
+Compare only identical profile, methodology, executor/tool version,
+architecture, OS, filesystem, mount options, storage allocation, cache context,
+power context, and background-load policy. Never compare filesystem operations
+per second directly with fio IOPS.

@@ -21,6 +21,7 @@ timestamp, and raw result.
 | Partial | Versioned CPU integer scaling and sustained-load profiles through `sysbench` |
 | Partial | Cache-resistant native memory read, write, copy, and triad bandwidth profiles |
 | Available | Filesystem-safe `fio` storage profiles with latency percentiles |
+| Available | Native small-file metadata, SHA-256 integrity, per-file fsync, tail latency, and cleanup evidence |
 | Available | Versioned job runner with progress, heartbeat, timeout, cancellation, cleanup, and partial results |
 | Available | Quick, Standard, Database, Throughput, and Sustained storage profiles with one-second time series |
 | Available | Local Controller API, SQLite history, and responsive dashboard |
@@ -120,6 +121,7 @@ python -m cloudmark run storage --profile disk-quick --yes
 python -m cloudmark run storage --profile disk-database --yes
 python -m cloudmark run storage --profile disk-throughput --yes
 python -m cloudmark run storage --profile disk-sustained --yes
+python -m cloudmark run storage --profile disk-filesystem --yes
 python -m cloudmark run security --profile linux-security-posture
 ```
 
@@ -140,9 +142,11 @@ host.
 Security Posture does not require `--yes`, does not start a load process, and
 produces guest evidence rather than a security score.
 
-Storage runs use a temporary file, preserve a free-space reserve, never target
-a raw device, and remove the test file after completion, failure, timeout, or
-operator cancellation.
+Storage runs use generated files in a bounded workspace, preserve a free-space
+reserve, never target a raw device, and remove the Run files after completion,
+failure, timeout, or operator cancellation. `disk-filesystem` separately
+measures small-file metadata, checksum verification, and fsync behavior without
+presenting those results as fio IOPS.
 
 For provider-internal network measurement, create a pairing session in the
 dashboard and keep one worker running on each provider VM:

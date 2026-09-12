@@ -66,6 +66,24 @@ type StorageMetric = {
   };
 };
 
+type FilesystemMetric = {
+  name: string;
+  operation: string;
+  operation_count: number;
+  elapsed_seconds: number;
+  operations_per_second: number;
+  latency_ms: { minimum: number; p50: number; p95: number; p99: number; maximum: number };
+  bytes_processed: number;
+  integrity: { status: string; algorithm?: string; verified_files?: number; mismatches?: number };
+  durability: {
+    status: string;
+    file_fsync_count?: number;
+    directory_fsync?: { status: string; duration_ms?: number; reason?: string };
+  };
+  cache_scope: string;
+  post_measurement_verification_seconds?: number;
+};
+
 type ComputeMetric = {
   name: string;
   threads: number;
@@ -489,6 +507,20 @@ type Run = {
   request?: { agent_id?: string; execution?: "controller-host" | "remote-agent" };
   result?: {
     jobs?: StorageMetric[];
+    filesystem_operations?: FilesystemMetric[];
+    safety?: {
+      mode?: string;
+      raw_device?: boolean;
+      test_file_removed?: boolean;
+      workspace_removed?: boolean;
+    };
+    measurement_contract?: {
+      worker_model?: string;
+      payload?: string;
+      latency_clock?: string;
+      cache_control?: string;
+      claim_scope?: string;
+    };
     compute_jobs?: ComputeMetric[];
     memory_jobs?: MemoryMetric[];
     scaling?: {
@@ -978,7 +1010,7 @@ type Dashboard = {
   profiles: {
     compute: Record<string, { label: string; description: string; estimated_minutes: number; profile_version: string; methodology_version: string; jobs: { name: string }[] }>;
     memory: Record<string, { label: string; description: string; estimated_minutes: number; profile_version: string; methodology_version: string; jobs: { name: string }[] }>;
-    storage: Record<string, { label: string; description: string; estimated_minutes: number; profile_version: string; methodology_version: string; jobs: { name: string }[] }>;
+    storage: Record<string, { label: string; description: string; estimated_minutes: number; profile_version: string; methodology_version: string; executor?: string; jobs: { name: string; operation?: string }[] }>;
     network: Record<string, {
       label: string;
       description: string;
@@ -1355,16 +1387,31 @@ export default function Home() {
     ...webMeasurements.map((item) => item.metrics.requests_per_second || 0),
     ...http2Measurements.map((item) => item.metrics.requests_per_second || 0),
   );
+  const selectedProfile = dashboard?.profiles.storage[selectedStorageProfile];
+  const selectedFilesystemProfile = selectedProfile?.executor === "native-filesystem";
+  const storageReady = selectedFilesystemProfile
+    ? Boolean(executionInventory?.capabilities?.filesystem_metadata_benchmark)
+    : Boolean(executionInventory?.capabilities?.fio);
   const latestStorage = dashboard?.runs.find(
-    (run) => run.suite === "storage" && run.status === "completed" && run.result?.jobs?.length
+    (run) => run.suite === "storage" && run.profile === selectedStorageProfile && run.status === "completed"
+      && (run.result?.jobs?.length || run.result?.filesystem_operations?.length)
       && (run.request?.agent_id || "local") === selectedExecutionTarget,
   );
-  const selectedProfile = dashboard?.profiles.storage[selectedStorageProfile];
   const storageJobs = useMemo(() => latestStorage?.result?.jobs || [], [latestStorage]);
+  const filesystemOperations = useMemo(
+    () => latestStorage?.result?.filesystem_operations || [],
+    [latestStorage],
+  );
   const maxStorage = useMemo(
     () => Math.max(1, ...storageJobs.map((job) => Math.max(job.read.iops || 0, job.write.iops || 0))),
     [storageJobs],
   );
+  const maxFilesystemRate = useMemo(
+    () => Math.max(1, ...filesystemOperations.map((operation) => operation.operations_per_second || 0)),
+    [filesystemOperations],
+  );
+  const filesystemReadVerify = filesystemOperations.find((operation) => operation.name === "small-file-read-verify");
+  const filesystemDurableCreate = filesystemOperations.find((operation) => operation.name === "durable-create-fsync");
   const bandwidthTimeline = useMemo(() => {
     const job = storageJobs[storageJobs.length - 1];
     const points = job?.time_series?.bandwidth || [];
@@ -1451,8 +1498,10 @@ export default function Home() {
       setNotice("The selected Agent is offline. Start its persistent worker before dispatching a benchmark.");
       return;
     }
-    if (!executionInventory?.capabilities?.fio) {
-      setNotice(`fio is not installed on ${executionTargetLabel}. Run CloudMark bootstrap --packs storage there first.`);
+    if (!storageReady) {
+      setNotice(selectedFilesystemProfile
+        ? `The native filesystem executor is not available on ${executionTargetLabel}. Refresh or update the CloudMark Agent first.`
+        : `fio is not installed on ${executionTargetLabel}. Run CloudMark bootstrap --packs storage there first.`);
       return;
     }
     setBusy(true);
@@ -1470,7 +1519,7 @@ export default function Home() {
       });
       const payload = await response.json();
       if (!response.ok) throw new Error(payload.error || "Unable to start the benchmark");
-      setNotice(`Created ${payload.id} on ${executionTargetLabel} with the ${selectedProfile?.label || selectedStorageProfile} profile. The temporary file will be removed after the run.`);
+      setNotice(`Created ${payload.id} on ${executionTargetLabel} with the ${selectedProfile?.label || selectedStorageProfile} profile. The generated ${selectedFilesystemProfile ? "Run workspace" : "test file"} will be removed after the run.`);
       await loadDashboard();
     } catch (error) {
       setNotice(error instanceof Error ? error.message : "Benchmark failed");
@@ -1969,7 +2018,7 @@ export default function Home() {
         <span className={executionTargetOnline ? "ready" : "missing"}>{executionTargetOnline ? "ONLINE" : "OFFLINE"}</span>
         <span className={executionInventory?.capabilities?.sysbench ? "ready" : "missing"}>CPU</span>
         <span className={memoryReady ? "ready" : "missing"}>MEMORY</span>
-        <span className={executionInventory?.capabilities?.fio ? "ready" : "missing"}>STORAGE</span>
+        <span className={(executionInventory?.capabilities?.fio || executionInventory?.capabilities?.filesystem_metadata_benchmark) ? "ready" : "missing"}>STORAGE</span>
         <span className={securityReady ? "ready" : "missing"}>SECURITY</span>
       </div>
     </section>
@@ -2063,11 +2112,11 @@ export default function Home() {
               <article className="panel storage-summary">
                 <div className="panel-head"><div><span className="section-kicker">PRIORITY ASSESSMENT</span><h3>Storage capability</h3></div><button className="text-button" onClick={() => setActiveView("storage")}>Open storage assessment →</button></div>
                 <div className="storage-content">
-                  <div className="disk-visual"><div className="disk-core"><span>{primaryDisk?.name || "DISK"}</span><strong>{inventory?.capabilities.fio ? "FIO AVAILABLE" : "INSTALL FIO"}</strong></div></div>
+                  <div className="disk-visual"><div className="disk-core"><span>{primaryDisk?.name || "DISK"}</span><strong>{inventory?.capabilities.fio ? "FIO + NATIVE" : inventory?.capabilities.filesystem_metadata_benchmark ? "NATIVE READY" : "TOOLS NEEDED"}</strong></div></div>
                   <div className="check-list">
-                    <div><span className="ok">✓</span><p><strong>Filesystem-safe</strong><small>Temporary files only, never raw devices</small></p></div>
-                    <div><span className={inventory?.capabilities.fio ? "ok" : "warn"}>{inventory?.capabilities.fio ? "✓" : "!"}</span><p><strong>fio runtime</strong><small>{inventory?.capabilities.fio ? "Ready" : "Storage pack bootstrap required"}</small></p></div>
-                    <div><span className="ok">✓</span><p><strong>Latency percentiles</strong><small>P50 / P95 / P99 / P99.9</small></p></div>
+                    <div><span className={inventory?.capabilities.filesystem_metadata_benchmark ? "ok" : "warn"}>{inventory?.capabilities.filesystem_metadata_benchmark ? "✓" : "!"}</span><p><strong>Native filesystem evidence</strong><small>Metadata, checksum, fsync, and cleanup</small></p></div>
+                    <div><span className={inventory?.capabilities.fio ? "ok" : "warn"}>{inventory?.capabilities.fio ? "✓" : "!"}</span><p><strong>fio block-I/O evidence</strong><small>{inventory?.capabilities.fio ? "Ready" : "Storage pack bootstrap required"}</small></p></div>
+                    <div><span className="ok">✓</span><p><strong>Filesystem-safe</strong><small>Generated files only, never raw devices</small></p></div>
                   </div>
                 </div>
               </article>
@@ -2148,7 +2197,7 @@ export default function Home() {
         {activeView === "storage" && (
           <div className="view storage-view">
             <section className="section-intro">
-              <div><span className="section-kicker">CURRENT AVAILABLE EXECUTOR</span><h2>Measure storage by workload, not by a single MB/s number.</h2><p>Five profiles cover short validation, general-purpose, database, large-block throughput, and sustained behavior using safe 512 MiB–8 GiB temporary files.</p></div>
+              <div><span className="section-kicker">WORKLOAD-SPECIFIC STORAGE EVIDENCE</span><h2>Measure block I/O and filesystem behavior as separate workloads.</h2><p>Six profiles cover validation, general-purpose, database, throughput, sustained I/O, and bounded small-file metadata with integrity verification. Every profile uses a generated filesystem workspace and preserves a free-space reserve.</p></div>
               <div className="runner-actions">
                 <label><span>PROFILE</span><select value={selectedStorageProfile} onChange={(event) => setSelectedStorageProfile(event.target.value)} disabled={Boolean(activeLocal)}>{Object.entries(dashboard?.profiles.storage || {}).map(([id, profile]) => <option key={id} value={id}>{profile.label} · ≈ {profile.estimated_minutes} min</option>)}</select></label>
                 <button className="button primary" onClick={startStorage} disabled={busy || Boolean(activeLocal)}>Run assessment</button>
@@ -2164,8 +2213,19 @@ export default function Home() {
             )}
             <section className="storage-layout">
               <article className="panel chart-panel">
-                <div className="panel-head"><div><span className="section-kicker">LATEST MEASUREMENT</span><h3>IOPS by workload</h3></div><span className="run-id">{latestStorage?.id || "NO RUN YET"}</span></div>
-                {storageJobs.length ? (
+                <div className="panel-head"><div><span className="section-kicker">LATEST MATCHING PROFILE</span><h3>{selectedFilesystemProfile ? "Filesystem operations by workload" : "IOPS by workload"}</h3></div><span className="run-id">{latestStorage?.id || "NO RUN YET"}</span></div>
+                {selectedFilesystemProfile && filesystemOperations.length ? (
+                  <div className="bar-chart">
+                    {filesystemOperations.map((operation) => (
+                      <div className="bar-row" key={operation.name}>
+                        <span>{operation.name}</span>
+                        <div><i style={{ width: `${Math.max(3, (operation.operations_per_second / maxFilesystemRate) * 100)}%` }} /></div>
+                        <strong>{Math.round(operation.operations_per_second).toLocaleString()} ops/s</strong>
+                        <small className="bar-detail">P99 {operation.latency_ms.p99.toFixed(3)} ms · {operation.operation_count.toLocaleString()} operations</small>
+                      </div>
+                    ))}
+                  </div>
+                ) : storageJobs.length ? (
                   <div className="bar-chart">
                     {storageJobs.map((job) => {
                       const value = Math.max(job.read.iops || 0, job.write.iops || 0);
@@ -2173,29 +2233,39 @@ export default function Home() {
                     })}
                   </div>
                 ) : (
-                  <div className="empty-chart"><div className="chart-grid" /><strong>No fio results yet</strong><p>Bootstrap the storage pack, then run Disk Quick to create the first baseline.</p></div>
+                  <div className="empty-chart"><div className="chart-grid" /><strong>No result for this profile yet</strong><p>{selectedFilesystemProfile ? "Run the native filesystem profile to measure small-file operations, SHA-256 integrity, fsync durability evidence, and cleanup." : "Bootstrap the storage pack, then run the selected fio profile to create a matching baseline."}</p></div>
                 )}
               </article>
               <article className="panel profile-panel">
                 <div className="panel-head"><div><span className="section-kicker">{selectedStorageProfile.toUpperCase()}</span><h3>Test matrix</h3></div><span className="duration">≈ {selectedProfile?.estimated_minutes || "—"} min</span></div>
                 <p className="profile-description">{selectedProfile?.description}</p>
                 <div className="profile-jobs">
-                  {selectedProfile?.jobs.map((job, index) => <div key={job.name}><span>{String(index + 1).padStart(2, "0")}</span><strong>{job.name}</strong><small>filesystem-safe</small></div>)}
+                  {selectedProfile?.jobs.map((job, index) => <div key={job.name}><span>{String(index + 1).padStart(2, "0")}</span><strong>{job.name}</strong><small>{job.operation || "filesystem-safe"}</small></div>)}
                 </div>
                 <div className="safety-note"><strong>Safety gate</strong><p>Raw-device access, TRIM, and destructive preconditioning are disabled in the default configuration.</p></div>
               </article>
             </section>
-            <section className="panel timeline-panel">
-              <div className="panel-head"><div><span className="section-kicker">ONE-SECOND TELEMETRY</span><h3>Bandwidth stability</h3></div><span className="run-id">{storageJobs[storageJobs.length - 1]?.name || "NO TIME SERIES"}</span></div>
-              {bandwidthTimeline.length ? (
-                <div className="timeline-content">
-                  <div className="timeline-chart" aria-label="One-second storage bandwidth samples">
-                    {bandwidthTimeline.map((point, index) => <i key={`${point.elapsed_ms}-${point.direction}-${index}`} className={point.direction} style={{ height: `${Math.max(3, (point.value / maxTimelineBandwidth) * 100)}%` }} title={`${Math.round(point.elapsed_ms / 1000)}s · ${point.direction} · ${formatBytes(point.value)}/s`} />)}
+            {selectedFilesystemProfile ? (
+              <section className="filesystem-evidence-grid">
+                <article className="panel"><span>READ INTEGRITY</span><strong>{filesystemReadVerify?.integrity.status === "verified" ? "Verified" : "Unavailable"}</strong><small>{filesystemReadVerify?.integrity.status === "verified" ? `${filesystemReadVerify.integrity.verified_files?.toLocaleString()} files · SHA-256 · zero mismatches` : "Run this profile to collect checksum evidence."}</small></article>
+                <article className="panel"><span>WRITE DURABILITY</span><strong>{filesystemDurableCreate?.durability.status === "per-file-fsync" ? `${filesystemDurableCreate.durability.file_fsync_count?.toLocaleString()} fsync calls` : "Unavailable"}</strong><small>{filesystemDurableCreate?.durability.directory_fsync?.status === "observed" ? `Directory fsync observed in ${filesystemDurableCreate.durability.directory_fsync.duration_ms?.toFixed(3)} ms` : "Directory fsync is reported separately when the OS supports it."}</small></article>
+                <article className={`panel cleanup-evidence ${latestStorage?.result?.safety?.workspace_removed ? "verified" : "unknown"}`}><span>WORKSPACE CLEANUP</span><strong>{latestStorage?.result?.safety?.workspace_removed ? "Verified" : "Unavailable"}</strong><small>Raw devices and discard operations are outside this methodology.</small></article>
+                <article className="panel"><span>CACHE & CLAIM SCOPE</span><strong>Observed, not flushed</strong><small>{latestStorage?.result?.measurement_contract?.claim_scope || "Guest filesystem and Python runtime"} · cache state is disclosed per operation.</small></article>
+              </section>
+            ) : (
+              <section className="panel timeline-panel">
+                <div className="panel-head"><div><span className="section-kicker">ONE-SECOND TELEMETRY</span><h3>Bandwidth stability</h3></div><span className="run-id">{storageJobs[storageJobs.length - 1]?.name || "NO TIME SERIES"}</span></div>
+                {bandwidthTimeline.length ? (
+                  <div className="timeline-content">
+                    <div className="timeline-chart" aria-label="One-second storage bandwidth samples">
+                      {bandwidthTimeline.map((point, index) => <i key={`${point.elapsed_ms}-${point.direction}-${index}`} className={point.direction} style={{ height: `${Math.max(3, (point.value / maxTimelineBandwidth) * 100)}%` }} title={`${Math.round(point.elapsed_ms / 1000)}s · ${point.direction} · ${formatBytes(point.value)}/s`} />)}
+                    </div>
+                    <div className="timeline-legend"><span><i className="read" />READ</span><span><i className="write" />WRITE</span><strong>Peak {formatBytes(maxTimelineBandwidth)}/s</strong></div>
                   </div>
-                  <div className="timeline-legend"><span><i className="read" />READ</span><span><i className="write" />WRITE</span><strong>Peak {formatBytes(maxTimelineBandwidth)}/s</strong></div>
-                </div>
-              ) : <div className="timeline-empty">Run any storage profile to capture one-second bandwidth, IOPS, and latency evidence.</div>}
-            </section>
+                ) : <div className="timeline-empty">Run the selected fio profile to capture one-second bandwidth, IOPS, and latency evidence.</div>}
+              </section>
+            )}
+            <section className="validity-panel panel"><span>FILESYSTEM COMPARISON CONTRACT</span><p>Compare only identical profile, methodology, operating system, filesystem, mount options, storage allocation, Python version, background load, and cache conditions. Filesystem operation rates are not interchangeable with fio block-I/O results.</p></section>
           </div>
         )}
 

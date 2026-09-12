@@ -35,6 +35,8 @@ queued → running → completed
 SQLite stores phase, current job, completed/total steps, normalized progress,
 heartbeat, cancellation request, and runner/methodology/tool versions. Compute,
 memory, and storage persist completed jobs as partial results during execution.
+A native storage operation profile persists `filesystem_operations` under the
+same Run lifecycle while retaining a methodology distinct from fio jobs.
 A Controller restart marks unfinished runs as interrupted instead of leaving
 them running forever.
 

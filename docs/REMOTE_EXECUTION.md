@@ -78,6 +78,11 @@ Storage uses `confirm_write: true`. Memory uses `confirm_load: true` and require
 a Linux Agent with GCC/OpenMP. The selected Agent must advertise the required
 tool during inventory enrollment.
 
+`storage-v1` block-I/O profiles require the Agent to advertise `fio`.
+`storage-filesystem-v1` requires only the native
+`filesystem_metadata_benchmark` capability reported by the installed Agent.
+Both retain the same explicit write confirmation and workspace safety reserve.
+
 ## Control and safety contract
 
 - Remote kinds are fixed to `benchmark-compute`, `benchmark-memory`,

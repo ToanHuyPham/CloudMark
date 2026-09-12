@@ -2492,7 +2492,15 @@ RSS hash function:
         self.assertIn("disk-database", STORAGE_PROFILES)
         self.assertIn("disk-throughput", STORAGE_PROFILES)
         self.assertIn("disk-sustained", STORAGE_PROFILES)
-        self.assertTrue(all(profile["methodology_version"] == "storage-v1" for profile in STORAGE_PROFILES.values()))
+        self.assertIn("disk-filesystem", STORAGE_PROFILES)
+        self.assertTrue(
+            all(
+                profile["methodology_version"] == "storage-v1"
+                for profile in STORAGE_PROFILES.values()
+                if profile.get("executor") != "native-filesystem"
+            )
+        )
+        self.assertEqual(STORAGE_PROFILES["disk-filesystem"]["methodology_version"], "storage-filesystem-v1")
         profile = NETWORK_PROFILES["network-peer-standard"]
         self.assertFalse(profile["cloud_to_controller"])
         self.assertEqual(profile["requires_agents"], 2)

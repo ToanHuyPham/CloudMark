@@ -156,8 +156,9 @@ In the dashboard:
 - **Compute & Memory** runs CPU integer scaling/sustained profiles and native
   cache-resistant memory-bandwidth profiles with an explicit local/Agent target,
   live progress, and cancellation.
-- **Storage Assessment** provides Quick, Standard, Database, Throughput, and
-  Sustained profiles with live progress and cancellation.
+- **Storage Assessment** provides Quick, Standard, Database, Throughput,
+  Sustained, and Filesystem Metadata & Integrity profiles with live progress
+  and cancellation.
 - **Distributed Testing** creates an authenticated multi-agent topology and
   runs guarded path evidence, TCP, UDP, idle-latency, and simultaneous
   bidirectional profiles plus read-only NIC, driver per-queue counters,
@@ -334,7 +335,8 @@ python -m cloudmark run storage --profile disk-quick
 
 Without `--yes`, CloudMark checks only:
 
-- whether `fio` exists;
+- whether the selected executor exists (`fio` is not required by
+  `disk-filesystem`);
 - whether the workspace path is valid;
 - available free space;
 - the required safety reserve;
@@ -372,11 +374,21 @@ Additional profiles:
 - `disk-database`: 2 GiB, database-oriented 8 KiB latency and fsync workloads;
 - `disk-throughput`: 4 GiB, large-block scaling for backup, media, and analytics;
 - `disk-sustained`: 8 GiB, long mixed phases for burst-credit and throttling detection.
+- `disk-filesystem`: 2,048 deterministic 4 KiB files across 32 directories;
+  create/stat/read-and-SHA-256-verify/rename/delete plus 128 per-file fsync
+  operations. It records per-operation tail latency, cache scope, integrity,
+  durability-path observations, and cleanup without requiring `fio`.
+
+Run the filesystem profile with:
+
+```bash
+python -m cloudmark run storage --profile disk-filesystem --yes
+```
 
 The Storage page displays the current phase, job, completed steps, percentage,
-and a **Cancel run** control. Cancellation stops fio, removes temporary files,
-and retains already completed jobs as partial evidence. Cancelled results are
-never treated as a completed assessment.
+and a **Cancel run** control. Cancellation stops the current executor, removes
+temporary files, and retains already completed jobs or operations as partial
+evidence. Cancelled results are never treated as a completed assessment.
 
 ### Operations CloudMark does not perform
 
@@ -752,6 +764,8 @@ The complete directory is excluded by `.gitignore`.
 ### Storage reports missing fio
 
 Run `doctor`, then run `bootstrap --packs storage --yes` with sudo or root.
+The `disk-filesystem` profile remains available without `fio`; if the dashboard
+does not show its native capability, update and restart the Controller or Agent.
 
 ### Compute or memory preflight fails
 

@@ -21,6 +21,16 @@ baseline is still the repository head.
 - versioned native memory-bandwidth quick and standard profiles;
 - filesystem-safe fio quick, standard, database, throughput, and sustained
   profiles;
+- native `storage-filesystem-v1` small-file create/stat/read-and-SHA-256-
+  verify/rename/delete and per-file fsync profile, with bounded deterministic
+  payloads, user-space latency percentiles, explicit cache/runtime scope,
+  cancellation, remote Agent execution, provider-observation metrics, and
+  verified workspace cleanup. Eleven dedicated tests cover determinism, preflight,
+  execution, cancellation, residual-state refusal, remote dispatch, evidence
+  extraction, and dashboard retention. The complete development head passes
+  166 Python tests, 3 rendered-dashboard tests, dashboard lint, and the
+  production build. Verification used only an eight-file unit fixture and did
+  not start a production storage benchmark;
 - progress, heartbeat, timeout, cancellation, cleanup, and partial-result
   preservation;
 - local Controller API, authenticated mutations, SQLite history, and dashboard;

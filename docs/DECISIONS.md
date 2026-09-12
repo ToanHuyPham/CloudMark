@@ -526,3 +526,21 @@ without generating load, but it cannot establish provider IAM, firewall,
 physical-host isolation, encryption, vulnerability, audit, or compliance
 quality. A normal versioned Run makes the evidence traceable while keeping the
 claim strictly narrower than a provider security assessment.
+
+## D-036: Filesystem operations are separate from block-I/O evidence
+
+**Decision:** Add `storage-filesystem-v1` as a separately selectable native
+storage profile. It creates one fixed, bounded tree of deterministic small files
+inside a sanitized Run workspace; measures single-process create, stat,
+read-and-SHA-256-verify, rename, delete, and per-file flush/fsync operations;
+records minimum/P50/P95/P99/maximum user-space elapsed latency and cache scope;
+and verifies cleanup. Directory fsync is observed where supported. The profile
+does not require fio, does not flush host caches, accepts no caller-selected
+operation or raw device, and exposes separate provider-observation metrics.
+
+**Reason:** Direct-I/O fio results do not represent metadata-heavy package,
+source-tree, mail-queue, or container-layer behavior. A separate methodology
+prevents filesystem operations per second from being mislabeled as block IOPS,
+while explicit Python-runtime and cache disclosures keep the evidence honest.
+An fsync return is application-visible durability-path evidence, not proof of
+physical-media persistence or power-loss protection.

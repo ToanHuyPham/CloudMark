@@ -144,6 +144,27 @@ STORAGE_PROFILES: dict[str, dict[str, Any]] = {
             {"name": "sustained-sequential-write", "rw": "write", "bs": "1m", "iodepth": 8, "runtime": 300, "ramp_time": 10},
         ],
     },
+    "disk-filesystem": {
+        "label": "Filesystem Metadata & Integrity",
+        "description": "Bounded small-file create/stat/read-verify/rename/delete plus per-file fsync evidence in a generated filesystem workspace.",
+        "estimated_minutes": 6,
+        "profile_version": "1.0",
+        "methodology_version": "storage-filesystem-v1",
+        "executor": "native-filesystem",
+        "file_size_mib": 32,
+        "file_count": 2048,
+        "file_bytes": 4096,
+        "directory_count": 32,
+        "durable_file_count": 128,
+        "jobs": [
+            {"name": "small-file-create", "operation": "create"},
+            {"name": "small-file-stat", "operation": "stat"},
+            {"name": "small-file-read-verify", "operation": "read-verify"},
+            {"name": "small-file-rename", "operation": "rename"},
+            {"name": "small-file-delete", "operation": "delete"},
+            {"name": "durable-create-fsync", "operation": "durable-create"},
+        ],
+    },
 }
 
 

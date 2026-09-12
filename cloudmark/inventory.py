@@ -215,6 +215,7 @@ def collect_inventory(workspace: Path | None = None) -> dict[str, Any]:
         "disks": _disks(workspace),
         "network": {"addresses": _network_addresses()},
         "capabilities": {
+            "filesystem_metadata_benchmark": True,
             "fio": shutil.which("fio") is not None,
             "iperf3": shutil.which("iperf3") is not None,
             "iproute2": shutil.which("ip") is not None,

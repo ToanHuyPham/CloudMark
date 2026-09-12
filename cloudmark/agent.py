@@ -4112,7 +4112,7 @@ class AgentWorker:
             }
         except Exception as exc:
             with latest_lock:
-                partial = latest.get("result")
+                partial = getattr(exc, "partial_result", None) or latest.get("result")
             result = (
                 {
                     "benchmark": partial,

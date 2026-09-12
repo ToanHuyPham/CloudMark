@@ -91,6 +91,8 @@ def _dashboard_run_summaries(runs: list[dict[str, Any]]) -> list[dict[str, Any]]
         suite = str(run.get("suite", ""))
         request = run.get("request") or {}
         scope = str(request.get("agent_id") or "controller") if suite in target_scoped_suites else "global"
+        if suite == "storage":
+            scope = f"{scope}:{run.get('profile', 'unknown')}"
         key = (suite, scope)
         status = str(run.get("status", ""))
         retain_result = status in {"queued", "running"} or (status == "completed" and key not in completed_scopes)
@@ -334,7 +336,14 @@ class CloudMarkController:
             preflight = None if remote_agent else storage_preflight(profile, self.benchmark_dir)
             total_steps = remote_total_steps(suite, profile) if remote_agent else len(STORAGE_PROFILES[profile]["jobs"]) + 2
             methodology_version = str(STORAGE_PROFILES[profile]["methodology_version"])
-            tool_version = "fio-agent" if remote_agent else str(preflight["fio_version"])
+            native_filesystem = STORAGE_PROFILES[profile].get("executor") == "native-filesystem"
+            tool_version = (
+                "cloudmark-filesystem-bench-agent"
+                if remote_agent and native_filesystem
+                else "fio-agent"
+                if remote_agent
+                else str(preflight["tool_version"] if native_filesystem else preflight["fio_version"])
+            )
             default_timeout = remote_default_timeout(suite, profile) if remote_agent else int(preflight["default_timeout_seconds"])
         elif suite in {"compute", "memory"}:
             if not request.get("confirm_load"):
@@ -668,7 +677,12 @@ class CloudMarkController:
                 phase="failed",
             )
         except (BenchmarkError, ComputeError, SecurityPostureError, OSError, ValueError, json.JSONDecodeError) as exc:
-            finish_run(status="failed", error=str(exc), phase="failed")
+            finish_run(
+                status="failed",
+                result=getattr(exc, "partial_result", None),
+                error=str(exc),
+                phase="failed",
+            )
         except Exception as exc:  # defensive runner boundary
             finish_run(
                 status="failed",

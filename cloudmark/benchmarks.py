@@ -10,12 +10,19 @@ import time
 from pathlib import Path
 from typing import Any
 
+from .filesystem_benchmark import (
+    FilesystemBenchmarkError,
+    filesystem_preflight,
+    run_filesystem_storage,
+)
 from .profiles import STORAGE_PROFILES
 from .runner import JobContext, RunStopped
 
 
 class BenchmarkError(RuntimeError):
-    pass
+    def __init__(self, message: str, partial_result: dict[str, Any] | None = None):
+        super().__init__(message)
+        self.partial_result = partial_result
 
 
 def _percentile(section: dict[str, Any], key: str) -> float | None:
@@ -80,6 +87,11 @@ def storage_preflight(profile_name: str, workspace: Path) -> dict[str, Any]:
     if profile_name not in STORAGE_PROFILES:
         raise BenchmarkError(f"Unknown storage profile: {profile_name}")
     profile = STORAGE_PROFILES[profile_name]
+    if profile.get("executor") == "native-filesystem":
+        try:
+            return filesystem_preflight(profile_name, workspace)
+        except FilesystemBenchmarkError as exc:
+            raise BenchmarkError(str(exc), exc.partial_result) from exc
     workspace = workspace.resolve()
     workspace.mkdir(parents=True, exist_ok=True)
     usage = shutil.disk_usage(workspace)
@@ -196,6 +208,12 @@ def run_storage(
     *,
     context: JobContext | None = None,
 ) -> dict[str, Any]:
+    profile = STORAGE_PROFILES.get(profile_name)
+    if profile and profile.get("executor") == "native-filesystem":
+        try:
+            return run_filesystem_storage(profile_name, workspace, run_id, context=context)
+        except FilesystemBenchmarkError as exc:
+            raise BenchmarkError(str(exc), exc.partial_result) from exc
     preflight = storage_preflight(profile_name, workspace)
     profile = STORAGE_PROFILES[profile_name]
     workspace = Path(preflight["workspace"])
@@ -302,10 +320,15 @@ def run_storage(
             except OSError:
                 pass
 
+    remaining_logs = list(workspace.glob(f"{_safe_name(run_id)}-*_*.log"))
     result = _partial_result(profile_name, profile, preflight, results, started, test_file)
+    result["safety"]["fio_logs_removed"] = not remaining_logs
     if pending_error is not None:
-        if isinstance(pending_error, RunStopped):
+        if isinstance(pending_error, (RunStopped, BenchmarkError, OSError)):
             pending_error.partial_result = result
         raise pending_error
+    if test_file.exists() or remaining_logs:
+        error = BenchmarkError("Storage benchmark cleanup could not be verified.", result)
+        raise error
     context.complete_step("completed", None, partial_result=result)
     return result

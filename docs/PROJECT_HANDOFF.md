@@ -32,7 +32,8 @@ providers are a primary use case.
 - CPU performance, scaling, stability, and steal time;
 - memory bandwidth and scaling;
 - storage throughput, IOPS, latency percentiles, synchronous behavior, mixed
-  workload behavior, sustained behavior, and cleanup evidence;
+  and sustained behavior, plus small-file metadata, checksum integrity,
+  filesystem fsync, cache-scope, and cleanup evidence;
 - direct provider-internal network throughput, directionality, concurrency,
   latency, jitter, loss, and loaded behavior;
 - database client/server behavior;

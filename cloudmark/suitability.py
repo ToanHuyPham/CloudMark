@@ -37,6 +37,10 @@ COMPARISON_METRICS: dict[str, dict[str, Any]] = {
     "storage.sequential_write_bps": {"label": "Sequential storage write", "direction": "higher"},
     "storage.random_read_qd1_iops": {"label": "Low-queue random read", "direction": "higher"},
     "storage.sync_write_iops": {"label": "Durable synchronous write", "direction": "higher"},
+    "storage.small_file_create_ops": {"label": "Small-file create rate", "direction": "higher"},
+    "storage.small_file_stat_ops": {"label": "Small-file stat rate", "direction": "higher"},
+    "storage.small_file_read_verify_p99_ms": {"label": "Small-file read and verify P99", "direction": "lower"},
+    "storage.durable_create_fsync_ops": {"label": "Per-file durable create rate", "direction": "higher"},
     "network.directional_floor_bps": {"label": "Peer TCP directional floor", "direction": "higher"},
     "network.idle_latency_ms": {"label": "Worst peer idle latency", "direction": "lower"},
     "network.idle_loss_pct": {"label": "Worst idle packet loss", "direction": "lower"},
@@ -416,6 +420,24 @@ def _extract_run_evidence(evidence: dict[str, dict[str, Any]], run: dict[str, An
                 write_iops = _number(_nested(job, "write", "iops"))
                 if write_iops is not None:
                     _put(evidence, "storage.sync_write_iops", _evidence_item(write_iops, "IOPS", run=run, source="storage"))
+        filesystem_metric_keys = {
+            "small-file-create": ("storage.small_file_create_ops", "operations_per_second", "ops/s"),
+            "small-file-stat": ("storage.small_file_stat_ops", "operations_per_second", "ops/s"),
+            "small-file-read-verify": ("storage.small_file_read_verify_p99_ms", "latency_ms.p99", "ms"),
+            "durable-create-fsync": ("storage.durable_create_fsync_ops", "operations_per_second", "ops/s"),
+        }
+        for operation in result.get("filesystem_operations") or []:
+            mapping = filesystem_metric_keys.get(str(operation.get("name", "")))
+            if not mapping:
+                continue
+            key, value_path, unit = mapping
+            value = (
+                _number(_nested(operation, "latency_ms", "p99"))
+                if value_path == "latency_ms.p99"
+                else _number(operation.get(value_path))
+            )
+            if value is not None:
+                _put(evidence, key, _evidence_item(value, unit, run=run, source="storage"))
         _put(evidence, "storage.cleanup_verified", _evidence_item(1, "boolean", run=run, source="storage"))
     elif suite == "network":
         direction_peaks: dict[str, float] = {}

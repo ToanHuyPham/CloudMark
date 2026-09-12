@@ -11,8 +11,13 @@ systems.
 - Free space must cover the test file plus the larger of 1 GiB or 5% volume
   reserve.
 - `fio` receives an exact filename under CloudMark's benchmark directory.
-- The file and fio log files are removed in a `finally` block after completion,
-  failure, timeout, cancellation, or an interrupted CLI session.
+- The native filesystem profile accepts no caller-defined path or operation. It
+  creates a fixed bounded file tree under one sanitized Run directory and uses
+  only create, stat, read, rename, delete, file fsync, and supported directory
+  fsync operations.
+- Test files, Run directories, and fio log files are removed in a `finally`
+  block after completion, failure, timeout, cancellation, or an interrupted CLI
+  session.
 - Raw devices, TRIM, full-device preconditioning, and power-loss tests are off.
 
 ## Compute and memory

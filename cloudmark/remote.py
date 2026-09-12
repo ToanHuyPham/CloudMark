@@ -44,6 +44,8 @@ def remote_default_timeout(suite: str, profile_name: str) -> int:
     )
     if suite == "security":
         return 120
+    if suite == "storage" and profile.get("executor") == "native-filesystem":
+        return max(300, int(profile["estimated_minutes"]) * 60 + 180)
     storage_overhead = 300 if suite == "storage" else 180
     return max(180, runtime + storage_overhead)
 
@@ -82,12 +84,16 @@ def validate_remote_agent(
         raise ValueError(f"Agent {agent.get('name', agent_id)} is offline. Start its persistent worker first.")
     inventory = agent.get("system", {}).get("inventory", {})
     capabilities = inventory.get("capabilities", {})
-    required = {
-        "compute": "sysbench",
-        "memory": "gcc",
-        "storage": "fio",
-        "security": "security_posture_linux",
-    }[suite]
+    required = (
+        "filesystem_metadata_benchmark"
+        if suite == "storage" and STORAGE_PROFILES[profile_name].get("executor") == "native-filesystem"
+        else {
+            "compute": "sysbench",
+            "memory": "gcc",
+            "storage": "fio",
+            "security": "security_posture_linux",
+        }[suite]
+    )
     if not capabilities.get(required):
         raise ValueError(f"Agent {agent.get('name', agent_id)} does not report the {required} capability.")
     if suite in {"memory", "security"} and inventory.get("os", {}).get("system") != "Linux":

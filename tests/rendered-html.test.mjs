@@ -48,6 +48,9 @@ test("keeps production metadata and project policy explicit", async () => {
   assert.match(page, /Run assessment/);
   assert.match(page, /Cancel run/);
   assert.match(page, /ONE-SECOND TELEMETRY/);
+  assert.match(page, /WORKLOAD-SPECIFIC STORAGE EVIDENCE/);
+  assert.match(page, /FILESYSTEM COMPARISON CONTRACT/);
+  assert.match(page, /filesystem_operations/);
   assert.match(page, /LOCAL SATURATION EXECUTORS/);
   assert.match(page, /EXCLUSIVE LOAD POLICY/);
   assert.match(page, /EXECUTION TARGET/);

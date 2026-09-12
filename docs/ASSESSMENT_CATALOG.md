@@ -51,6 +51,13 @@ storage profiles on an explicitly selected authenticated Agent. Remote execution
 improves topology accuracy and attribution; it does not change incomplete domain
 coverage into a complete suitability score.
 
+The current development head adds `storage-filesystem-v1`, a bounded native
+small-file workload with create/stat/read-and-SHA-256-verify/rename/delete,
+per-file fsync, supported directory-fsync evidence, latency percentiles, cache
+scope, and verified cleanup. It is kept methodologically separate from
+`storage-v1` fio IOPS. Object storage, snapshots, restoration, physical-media
+durability, and power-loss behavior remain outside this executor.
+
 The current development head implements domain 10 through
 `database-postgresql-v2`: a durable ephemeral PostgreSQL service, built-in
 pgbench throughput and connection-churn jobs, an exact fixed-count transaction
