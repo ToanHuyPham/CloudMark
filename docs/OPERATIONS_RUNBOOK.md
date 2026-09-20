@@ -159,18 +159,28 @@ not prove provider ownership or public-Internet transit.
 Review driver queue distribution separately. An `unavailable` per-queue result
 usually means that the virtual NIC does not expose a recognized `ethtool -S`
 counter shape; it does not turn throughput into a failed or zero result.
-`queue-counters-v2` recognizes bounded common ENA/virtio/netvsc/mlx5 forms,
-MANA indexed names, gVNIC bracketed byte/drop names, and vmxnet3 sectioned
-queues. Packet distribution may remain unavailable when a driver exposes only
-per-queue bytes; review the separate byte distribution in that case.
+`queue-counters-v3` recognizes bounded common ENA/virtio/netvsc/mlx5 forms,
+MANA indexed names, gVNIC bracketed byte/drop names, vmxnet3 sectioned queues,
+Intel i40e hyphen/dot packet and byte names, and Broadcom bnx2x bracketed queue
+names. Packet distribution may remain unavailable when a driver exposes only
+per-queue bytes; review the separate byte distribution in that case. A
+`partial` snapshot can indicate duplicate direct/component fields, an invalid
+counter, truncation, reset, queue-set drift, or normalization-version drift;
+inspect the retained reason before interpreting queue balance.
 Review queue steering and IRQ evidence separately. Zero configured RPS/XPS
 queues can be a valid guest configuration, while `unavailable` RSS or MSI IRQ
 evidence commonly means that the virtual NIC hides the control. Neither state
 proves how the physical host distributes traffic, and neither invalidates the
 throughput Run.
-Review system-resolver observations as diagnostics only: a local stub, cache,
-split DNS, or unidentified upstream prevents provider attribution from a
-single fixed query.
+Review `system-resolver-diagnostic-v3` observations as diagnostics only. Each
+Agent issues fixed A/AAAA checks over UDP without automatic TCP retry and then
+over explicit TCP while requesting DNSSEC records and AD reporting. A `partial`
+result can therefore reveal a transport-specific timeout without invalidating
+throughput. `resolver_asserted_authenticated_data=true` means only that the
+configured resolver set AD; confirm `cloudmark_dnssec_validation_performed` is
+false. A local stub, cache, split DNS, or unidentified upstream still prevents
+provider attribution; explicit TCP success proves neither automatic application
+fallback nor provider DNS quality.
 
 For a repeated network campaign, keep the same Target/Generator pair and
 topology declaration for the entire contract. In the Network dashboard select
@@ -378,7 +388,31 @@ Nginx directory, or a directory while its process is still active.
 - remember that `comparable` describes sampling compatibility, not a provider
   rating or a winner.
 
-## 12. Optional Codex local environment
+## 12. Verification and continuous integration
+
+Before integrating a material change, run:
+
+```powershell
+python -m pip install -e ".[quality]"
+python -m ruff check cloudmark tests_python scripts
+python -m coverage erase
+python -m coverage run -m unittest discover -s tests_python -v
+python -m coverage report
+pnpm run lint
+pnpm run typecheck
+pnpm run validate:openapi
+pnpm test
+```
+
+`.github/workflows/ci.yml` repeats these non-load-bearing checks for the Python
+3.9 compatibility floor, Python 3.13 on Linux and Windows, and pinned Node
+22.23.2. The workflow has only `contents: read`, requires the pnpm lockfile, and
+pins third-party actions by full commit SHA. It enforces high-signal Python lint
+and a 70% branch-coverage floor; the current clean baseline is 75.5%. CI must
+never run a CloudMark benchmark or receive Controller, Agent, provider, or
+runtime-snapshot secrets.
+
+## 13. Optional Codex local environment
 
 In the ChatGPT desktop app, open the local-project environment settings and
 configure the checked-in scripts as common actions:
@@ -386,7 +420,7 @@ configure the checked-in scripts as common actions:
 - setup: create `.venv`, install the Python package, and run `pnpm install`;
 - start: `.\scripts\start-local.ps1`;
 - stop: `.\scripts\stop-local.ps1`;
-- verify: run the Python unit tests and `pnpm test`.
+- verify: run the complete commands from section 12.
 
 The desktop app writes its generated project environment configuration under
 `.codex`. Review the generated file for machine-specific paths or secrets before

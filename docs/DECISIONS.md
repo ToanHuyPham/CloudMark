@@ -566,3 +566,276 @@ the physical drive or provider replication layer, but it can prevent known
 configuration differences from being silently aggregated. Keeping collection
 read-only, bounded, and non-blocking preserves benchmark safety and supports
 providers that expose limited virtualization detail.
+
+## D-038: Storage campaigns start from an immutable eligible baseline
+
+**Decision:** Add `storage-campaign-v1` as a manually dispatched 3–30-window
+acquisition contract. Creation accepts only a completed storage Run containing
+the exact installed profile/methodology, complete executor-specific measurement
+payloads, verified cleanup, complete storage-environment evidence, persisted
+run-time Target evidence, and a verified v5 storage/tool contract. That
+immutable baseline counts as window one. Each later Run requires both write and
+campaign-window confirmation through the guarded campaign endpoint; both values
+remain in the Run request, and generic Run submission cannot inject campaign
+fields. A counted Run must retain the same target/provider/SKU/region/OS
+identity, profile, filesystem/mount/block/tool contract, complete measurement
+shape, and timezone-aware start/completion within its declared UTC day. Only one
+Run counts per day. Drifted, duplicate, cross-midnight, failed, and cancelled
+attempts remain visible. Campaign completion is one-target temporal evidence
+and never enables provider rating.
+
+**Reason:** Starting a campaign before the filesystem and virtual block stack
+are observed would create a contract that cannot distinguish material storage
+configuration changes. Reusing a verified baseline makes the acquisition
+identity concrete without an extra probe or hidden load. Manual confirmation
+preserves operator control over write-heavy tests, while distinct completion
+days reveal temporal variation without pretending one repeatedly measured VM
+represents a provider fleet.
+
+## D-039: CI is cross-platform, immutable, least-privilege, and non-load-bearing
+
+**Decision:** Add one GitHub Actions workflow for pushes, pull requests, and
+manual validation. Grant only `contents: read`; cancel superseded runs; pin all
+third-party actions by full commit SHA; test Python 3.9 and 3.13 on Linux and
+3.13 on Windows; and run the dashboard with exact Node 22.23.2 plus the
+manifest-pinned pnpm version and frozen lockfile. Required checks are Python
+compile/unit tests, high-signal Ruff `E9`/`F` lint, branch coverage with a 70%
+floor, ESLint, strict TypeScript checking, deterministic OpenAPI YAML/local-
+reference validation, production build, rendered-dashboard tests, and a CI
+contract test. coverage.py is pinned to the last line supporting Python 3.9.
+The contract test rejects mutable action references and known benchmark
+commands. CI never contacts a provider or starts CPU, memory, storage, database,
+web, or network load.
+
+**Reason:** Local green tests are not an enforceable integration boundary, and
+dashboard builds can miss strict TypeScript errors. Cross-platform, pinned,
+read-only automation catches compatibility, contract, and supply-chain drift
+without turning shared runners into benchmark targets or granting workflow
+write authority.
+
+## D-040: CLI dispatch is tested without executing benchmark work
+
+**Decision:** Cover the public `cloudmark` command dispatcher with isolated
+tests that replace inventory, provider, bootstrap, Controller, Agent, preflight,
+and benchmark implementations at their module boundaries. Tests may verify
+argument parsing, JSON/progress output, preview-versus-execute behavior,
+confirmation requirements, timeout bounds, profile defaults, and JobContext
+construction, but routine CI never invokes a real benchmark executor. An
+explicit `--timeout-seconds` value is always validated, including zero, rather
+than being replaced through truthiness fallback.
+
+**Reason:** The CLI is an operational entry point with permission to install
+packages, start services, join Agents, and run saturation suites. Leaving its
+dispatcher uncovered can bypass otherwise-tested safety semantics, while
+calling real executors in CI would violate the no-load policy. Boundary mocks
+exercise the control contract without granting or simulating external effects.
+
+## D-041: Provider identity probes fail closed on incomplete bounded evidence
+
+**Decision:** Keep AWS, Azure, and Google Cloud discovery limited to their fixed
+identity metadata endpoints with environment proxies disabled, a 64 KiB
+response ceiling, and sub-second deadlines. AWS detection requires a bounded
+ASCII/control-free IMDSv2 token plus region, zone, and instance type. Azure
+requires location and VM size from a compute object; zone may be unavailable.
+Google Cloud requires the metadata-flavor response plus bounded zone and machine
+type paths. Wrong JSON types, malformed documents, missing required fields, or
+oversized responses return no detection rather than a high-confidence partial
+identity. Operator manifests accept bounded string fields, remain unverified at
+0.70 confidence, and do not persist their filesystem path.
+
+**Reason:** Metadata endpoints are high-confidence only when the provider-
+specific handshake and useful identity shape are both present. Treating an
+empty or malformed response as 0.99 confidence can contaminate target identity,
+campaign contracts, and provider cohorts. Bounded, path-redacted fallback keeps
+smaller providers usable without elevating an operator claim into detected fact
+or copying arbitrary local data into evidence.
+
+## D-042: The packaged Web fixture is an exact loopback HTTP contract
+
+**Decision:** Keep the Web v2 application fixture bound only to
+`127.0.0.1:58081`. It accepts GET only for `/ready` and the exact
+`/api/v2/dynamic` path; query variants and unknown paths return 404, and
+unsupported methods use the standard 501 response. Successful responses declare
+their exact content length, disable caching, and identify the Web v2 fixture.
+The dynamic route rebuilds the same valid 1 KiB JSON body on every request.
+Routine verification instantiates the handler with fake sockets and replaces
+the server object, so it tests framing, fixed endpoint validation, interrupt
+handling, and close behavior without binding a port or generating traffic.
+
+**Reason:** Nginx reverse-proxy measurements depend on the application path
+being deterministic and exactly scoped. A permissive route, cacheable response,
+wrong length, or silently accepted bind address would change the workload or
+expose the fixture beyond loopback. Handler-level tests prove this contract
+without violating the rule against web-load validation on developer or CI
+machines.
+
+## D-043: Confirmed bootstrap requires an executable installation plan
+
+**Decision:** Package-manager detection may produce a manual Windows bundle or
+an unsupported-platform plan for preview, but `bootstrap --yes` executes only a
+non-empty predefined argument-array command list. Empty plans fail before any
+privilege check or subprocess call. Linux execution still requires root, and a
+non-zero package-manager result stops the plan before later commands. Dedicated
+tests replace platform detection and subprocess execution; routine verification
+never installs packages.
+
+**Reason:** A confirmed empty plan previously returned an empty result that
+could be mistaken for successful dependency installation on Windows or an
+unsupported host. Failing closed preserves the distinction between guidance and
+completed installation, while boundary tests prove manager priority, exact
+commands, privilege enforcement, and failure propagation without modifying the
+developer or CI environment.
+
+## D-044: Queue-counter v3 adds only source-confirmed Intel and Broadcom forms
+
+**Decision:** Keep Network v9 unchanged and advance only its observational
+queue normalizer to `queue-counters-v3`. Add the exact hyphen/dot packet and
+byte names emitted by the Linux i40e driver and the bracketed queue packet,
+byte, and discard names emitted by bnx2x. Broadcom unicast, multicast, and
+broadcast packet components may be summed only within one queue/direction.
+Conflicting direct and component fields, repeated component sources, invalid
+values, truncation, version drift, queue-set drift, or counter decreases remain
+partial. Checksum, offload, TPA, XDP, descriptor, and unknown vendor fields stay
+unclassified. The 4,096-line, queue-index 0-127, and unsigned 64-bit bounds do
+not change.
+
+**Reason:** Intel and Broadcom drivers use source-defined names that were not
+covered by v2, which left otherwise useful bare-metal and virtual-function
+queue evidence unavailable. Restricting v3 to fields confirmed in the upstream
+Linux driver sources expands diagnostic portability without guessing that an
+offload or descriptor counter represents packets. Keeping normalization
+separate from Network v9 avoids changing throughput methodology or making NIC
+visibility a provider-quality gate.
+
+## D-045: Resolver diagnostic v2 separates fixed UDP and TCP observations
+
+**Decision:** Keep Network v9 unchanged and version its observational resolver
+payload as `system-resolver-diagnostic-v2`. Each Linux Agent may issue exactly
+four `dig` queries for the fixed `example.com.` name: A and AAAA over UDP with
+`+notcp +ignore`, followed by A and AAAA over explicit TCP. Each query retains
+its transport, bounded outcome, TC state, elapsed time, answer count, and answer
+address classes without answer addresses. The Controller bounds the four
+records and independently re-derives the transport comparison. A matching TCP
+response is labelled as a recovered path only when the UDP response carried TC. Missing tools,
+timeouts, or incomplete transports remain partial and never invalidate Network
+v9 throughput evidence. Cache state, upstream identity, automatic application
+fallback, and provider DNS quality remain unknown.
+
+**Reason:** A normal UDP lookup may silently retry over TCP after truncation,
+which hides the transport boundary and cannot show whether TCP/53 is usable.
+An explicit no-retry UDP observation plus a separate bounded TCP observation
+makes that boundary visible without allowing arbitrary names, record types,
+servers, retries, or transports. It remains a diagnostic rather than a DNS
+benchmark because the system resolver may be a local stub or cache and no
+controlled authoritative endpoint is used.
+
+## D-046: Resolver diagnostic v3 records AD without claiming local DNSSEC validation
+
+**Decision:** Advance the observational resolver payload to
+`system-resolver-diagnostic-v3` without adding queries. Add `+dnssec +adflag` to
+the same fixed A/AAAA over UDP/TCP command matrix and retain whether each
+response carried AD. The Controller accepts only bounded boolean DNSSEC fields,
+re-derives per-record UDP/TCP AD consistency, and requires all four v3 records
+to show that DNSSEC was requested before declaring the diagnostic complete.
+Every query and summary sets `cloudmark_dnssec_validation_performed=false`.
+CloudMark stores no RRSIG/DNSKEY material, performs no chain/signature
+validation, and does not make AD a network-comparison gate or provider-security
+claim.
+
+**Reason:** The configured recursive resolver's AD response is useful evidence
+for diagnosing a guest's DNS path, but it is not equivalent to CloudMark
+validating DNSSEC itself. Keeping the assertion explicit and independently
+bounded prevents a successful resolver response from being promoted into an
+unsupported security conclusion while adding diagnostic value without more
+outbound queries.
+
+## D-047: Memory environment records bounded guest NUMA topology without performance inference
+
+**Decision:** Add `memory-environment-v1` to local/Agent inventory and every
+memory preflight/result. On Linux, read only the sysfs node `online`, `cpulist`,
+`meminfo`, and `distance` files plus the guest page size. Cap every file at 4
+KiB, online nodes at 64, node indexes at 1023, CPU indexes at 8191, and distance
+values at unsigned 16-bit range. Preserve complete, partial, and unavailable
+states; collection failure never blocks a memory bandwidth run. Label distance
+values as relative Linux topology rather than latency, set
+`remote_node_penalty_measured=false`, and make no physical-host placement or
+performance claim.
+
+**Reason:** Memory bandwidth results are easier to interpret when the guest's
+NUMA exposure is known, especially across VPS and bare-metal systems. However,
+guest node files do not prove host placement and the kernel distance matrix is
+not a measured remote-memory penalty. A bounded read-only contract improves
+evidence context now without overstating completion of the planned NUMA latency
+executor.
+
+## D-048: Memory environment v2 treats paging data as a snapshot, not pressure
+
+**Decision:** Advance the memory environment contract to
+`memory-environment-v2`. In addition to v1 NUMA topology, read at most 64 KiB of
+Linux `/proc/meminfo` for swap, anonymous huge pages, HugeTLB, and zswap usage;
+read at most 4 KiB from top-level THP enabled/defrag and zswap-enabled sysfs
+controls. Normalize only allow-listed numeric fields and selected bracketed
+policies. Set `snapshot_only=true` and `pressure_measured=false`. Missing paging
+fields make the combined evidence partial but never block inventory or memory
+bandwidth execution. Do not write policy controls, allocate huge pages, or run
+swap/reclaim operations.
+
+**Reason:** Swap usage and huge-page configuration materially affect how a
+memory result should be interpreted, but one instantaneous read cannot measure
+pressure, latency, reclaim behavior, or performance benefit. Keeping those
+limitations machine-readable adds useful operational context without promoting
+a configuration snapshot into a benchmark conclusion.
+
+## D-049: Memory preflight uses verified cgroup headroom and fails closed
+
+**Decision:** Before compiling or executing the native memory tool on Linux,
+read at most 4 KiB of `/proc/self/cgroup` and at most 64 bytes from each selected
+memory-controller limit/current file across the current group and up to 32
+ancestors. Support cgroup v2
+`memory.max`/`memory.current` and v1 `memory.limit_in_bytes`/
+`memory.usage_in_bytes`. Treat `max`, v1 unlimited sentinel values, and absent
+controllers as no finite cgroup limit. When a finite limit exists, require a
+valid current usage and calculate non-negative headroom. Apply the existing 512
+MiB reserve to the smallest governing cgroup headroom and host MemAvailable.
+This includes finite parents above an unlimited child. Never
+persist the cgroup path. A finite limit with unreadable usage fails before
+compilation or load.
+
+**Reason:** `/proc/meminfo` may describe host memory rather than the memory a
+container or service cgroup can actually allocate. Using host availability
+alone can pass preflight and then trigger reclaim or an in-cgroup OOM kill.
+Bounding the working set by verified controller headroom preserves the existing
+reserve at the resource boundary that governs the process.
+
+## D-050: System profiles cap threads by process CPU affinity
+
+**Decision:** Resolve compute and memory profile thread counts against the
+smaller of `os.cpu_count()` and the current process affinity count when
+`sched_getaffinity(0)` is available and valid. Persist only host, affinity, and
+effective logical-core counts, never the CPU ID set. Keep
+`cgroup_cpu_quota_applied=false`; affinity/cpuset restriction is a concurrency
+boundary, while translating a fractional CPU bandwidth quota into benchmark
+thread policy requires a separate methodology decision.
+
+**Reason:** Python 3.9 can report host-wide logical CPUs even when a container or
+service is restricted to a smaller affinity set. Expanding an `all` profile to
+the host count would oversubscribe the allowed CPUs and distort scaling evidence.
+Affinity-aware resolution respects the executable placement boundary without
+pretending it measures quota entitlement or physical-core topology.
+
+## D-051: Cgroup CPU quota caps threads by capacity ceiling
+
+**Decision:** Extend the system-profile CPU boundary to cgroup v2 `cpu.max` and
+cgroup v1 CFS quota/period files across the current group and up to 32
+ancestors. Retain the smallest quota/period ratio as
+`quota_capacity_cores`, and cap executable threads by `ceil(capacity)` after
+the host and affinity caps. Keep the fractional capacity separate from the
+integer thread ceiling and never label either as physical cores. Bound cgroup
+membership to 4 KiB and each control to 64 bytes, redact paths, and fail before
+load when a present quota control is malformed.
+
+**Reason:** CPU affinity controls placement while CPU quota controls time; either
+can be the actual execution boundary. A 1.5-core quota may need two threads to
+consume its allowance but does not represent two cores. Preserving both values
+avoids host-wide oversubscription without erasing the throttled nature of the
+environment from comparison evidence.

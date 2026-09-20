@@ -52,6 +52,12 @@ test("keeps production metadata and project policy explicit", async () => {
   assert.match(page, /FILESYSTEM COMPARISON CONTRACT/);
   assert.match(page, /filesystem_operations/);
   assert.match(page, /LOCAL SATURATION EXECUTORS/);
+  assert.match(page, /GUEST NUMA TOPOLOGY/);
+  assert.match(page, /SYSTEM EXECUTION BOUNDARY/);
+  assert.match(page, /Fractional quota capacity is never labelled as physical cores/);
+  assert.match(page, /memory-environment-v2/);
+  assert.match(page, /Relative Linux distances are not latency measurements/);
+  assert.match(page, /swap usage is a point-in-time snapshot/);
   assert.match(page, /EXCLUSIVE LOAD POLICY/);
   assert.match(page, /EXECUTION TARGET/);
   assert.match(page, /EVIDENCE-GATED SUITABILITY/);
@@ -62,7 +68,14 @@ test("keeps production metadata and project policy explicit", async () => {
   assert.match(page, /provider-observations-v5/);
   assert.match(page, /READ-ONLY STORAGE CONTEXT/);
   assert.match(page, /STORAGE ENVIRONMENT \/ TOOL/);
+  assert.match(page, /REPEATED UTC-DAY STORAGE EVIDENCE/);
+  assert.match(page, /Create 3-day campaign/);
+  assert.match(page, /storage-campaign-v1/);
   assert.match(page, /SYSTEM RESOLVER/);
+  assert.match(page, /system-resolver-diagnostic-v3/);
+  assert.match(page, /fixed UDP\/TCP A\/AAAA \+ resolver AD/);
+  assert.match(page, /automatic fallback not claimed/);
+  assert.match(page, /CloudMark did not validate signatures/);
   assert.match(page, /QUEUE STEERING/);
   assert.match(page, /rx_byte_distribution/);
   assert.match(page, /network-v9/i);
@@ -123,6 +136,7 @@ test("keeps public product copy English-only", async () => {
     "../docs/HTTP2_LOAD_METHODOLOGY.md",
     "../docs/SUITABILITY_METHODOLOGY.md",
     "../docs/SECURITY_POSTURE_METHODOLOGY.md",
+    "../docs/STORAGE_CAMPAIGN_METHODOLOGY.md",
     "../docs/REMOTE_EXECUTION.md",
     "../docs/ROADMAP.md",
     "../docs/USER_GUIDE.md",

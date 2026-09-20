@@ -7,7 +7,6 @@ from pathlib import Path
 from unittest.mock import patch
 
 from cloudmark.agent import AgentWorker
-from cloudmark.database import Database
 from cloudmark.remote import REMOTE_METHODOLOGY_VERSION, validate_remote_agent
 from cloudmark.runner import JobContext
 from cloudmark.server import CloudMarkController

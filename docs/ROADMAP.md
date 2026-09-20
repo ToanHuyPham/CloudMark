@@ -73,6 +73,11 @@ storage-service qualification.
 - multiple working-set sizes to reduce cache distortion;
 - filesystem metadata and small-file profiles;
 - integrity checksums after write/read;
+- bounded Linux filesystem/mount/block-policy evidence attached to every Run —
+  available in `storage-environment-v1`;
+- immutable baseline-anchored storage campaigns, manual per-window
+  confirmation, and one exact-contract Run per UTC completion day — available
+  in `storage-campaign-v1`;
 - SMART/NVMe health only when the OS and provider permit it.
 
 ### Storage services and backup
@@ -107,11 +112,15 @@ Required topology: Controller + Agent A + Agent B.
   comparison-eligible Run per UTC day — available in `network-campaign-v1`;
 - unattended campaign schedules and cross-pair orchestration — planned;
 - bounded read-only driver per-queue counter evidence with versioned common
-  ENA/virtio/netvsc/mlx5, MANA, gVNIC, and vmxnet3 normalization —
-  observational in `network-v9`;
-- bounded Linux system-resolver configuration plus fixed A/AAAA diagnostic — observational in `network-v9`;
+  ENA/virtio/netvsc/mlx5, MANA, gVNIC, vmxnet3, Intel i40e, and Broadcom
+  bnx2x normalization — observational in `network-v9`;
+- bounded Linux system-resolver configuration plus fixed explicit UDP/TCP
+  A/AAAA and resolver-asserted AD diagnostic — observational in
+  `system-resolver-diagnostic-v3` within `network-v9`;
 - bounded guest-visible RSS/RPS/XPS and MSI IRQ-affinity evidence — observational in `network-v9`;
-- controlled authoritative DNS, cache-cold repetition, DNSSEC, TCP fallback, and Windows resolver parity — planned;
+- controlled authoritative DNS, cache-cold repetition, independent DNSSEC
+  validation, automatic application-fallback verification, and Windows resolver
+  parity — planned;
 - additional vendor NIC counter-name normalization and physical-host steering verification — planned;
 - operator-declared same-host, same-zone, cross-zone, cross-region, and
   public-Internet labels — available;
@@ -130,7 +139,10 @@ combined with private or VPC network results.
 - sustained CPU runs with event-rate stability and steal-time telemetry — available;
 - native userspace memory read/write/copy/triad bandwidth — available;
 - floating-point, compression, crypto, and compilation workloads — planned;
-- memory latency, NUMA topology, and remote-node penalties — planned;
+- bounded guest-visible NUMA node/CPU/memory/distance topology — available in
+  `memory-environment-v2`, including snapshot-only swap/THP/HugeTLB/zswap
+  context; measured memory latency, remote-node penalties, and time-series
+  pressure remain planned;
 - repeated-run and same-SKU variance analysis — planned;
 - authenticated remote dispatch, progress, cancellation, and result attribution for single-system suites — available;
 - GPU inventory, H2D/D2H bandwidth, compute, VRAM, and thermal/power stability;

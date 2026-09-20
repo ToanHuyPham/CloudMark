@@ -214,13 +214,17 @@ Current inventory includes:
 
 Cloud detection probes AWS IMDSv2, Azure IMDS, and Google Compute metadata. If
 trusted evidence is unavailable, the result is `Unknown`; CloudMark does not
-guess from an IP address.
+guess from an IP address. Probes use fixed identity endpoints, bypass proxies,
+have sub-second deadlines, cap responses at 64 KiB, and require each provider's
+complete bounded identity shape. They never request user-data or credentials.
 
 For regional or self-hosted clouds without standard metadata, place a manifest
 based on `examples/provider-manifest.json` at `/etc/cloudmark/provider.json`,
 `C:\ProgramData\CloudMark\provider.json`, or set
 `CLOUDMARK_PROVIDER_MANIFEST`. An unsigned manifest is always labeled
 `declared, unverified` with lower confidence than trusted provider metadata.
+Manifest fields are bounded strings and the local manifest path is not retained
+in evidence.
 
 ## 6. Inspect dependencies before installation
 
@@ -241,6 +245,11 @@ This command displays a plan and does not modify the system.
 | `web` | Nginx, ApacheBench, curl, OpenSSL, and h2load/nghttp2 client tools |
 
 ## 7. Bootstrap tools
+
+Run bootstrap without `--yes` first to inspect the detected manager, package
+list, exact argument-array commands, and notes. Adding `--yes` is accepted only
+when the plan contains executable package-manager commands; an unsupported or
+manual-bundle plan stops with an error instead of reporting an empty success.
 
 ### Ubuntu or Debian
 
@@ -279,7 +288,9 @@ Python 3.9+ runtime or offline bundle instead of replacing the system Python.
 CloudMark detects `winget`, but does not yet map every portable `fio` and
 `iperf3` package automatically. Inventory and the Controller are operational;
 the dashboard marks Windows benchmark automation as `Partial` until the package
-mapping is complete.
+mapping is complete. Use preview mode to inspect the manual bundle note;
+`bootstrap --yes` deliberately stops because no automatic Windows install plan
+exists yet.
 
 ## 8. Run compute and memory assessments
 
@@ -314,6 +325,32 @@ P95 latency, one-second stability, and Linux host telemetry. The memory profile
 compiles the packaged C/OpenMP benchmark, uses a fixed 384 MiB allocation in
 quick mode, and preserves a 512 MiB available-memory reserve. Standard mode uses
 a 768 MiB allocation and more read, write, copy, and triad phases.
+
+For both CPU and memory profiles, `all` and `half` thread counts are resolved
+against the process CPU-affinity set when available, not only the host CPU
+count. Preflight records the host/affinity/effective counts without exposing the
+individual CPU IDs. CloudMark also reads cgroup v2/v1 CPU quota across ancestors, records the
+fractional capacity, and caps threads at its ceiling. For example, a 1.5-core
+quota permits at most two benchmark threads; it is not reported as two physical
+cores.
+
+When running inside a Linux container or service cgroup, CloudMark uses the
+smaller of host MemAvailable and verified cgroup memory headroom for its safety
+reserve. Both cgroup v2 and v1 are recognized, including a finite ancestor above
+an unlimited child. If a governing limit is finite or malformed but cannot be
+verified, preflight stops before compiling or starting the memory workload.
+
+Before memory load, CloudMark attaches `memory-environment-v2` from bounded
+read-only Linux procfs/sysfs. The **Guest NUMA Topology** panel shows online guest node
+IDs, CPU lists/counts, visible node memory, page size, and relative Linux
+distance values. Missing topology remains `Partial` or `Unavailable` and does
+not block the bandwidth profile. Relative distances are not latency
+measurements, and this evidence does not establish physical-host placement or
+remote-node performance.
+It also shows point-in-time swap usage, anonymous huge-page allocation, the
+selected THP policy, and zswap state when exposed. These fields describe one
+snapshot only; they do not measure swap pressure, reclaim behavior, or huge-page
+performance.
 
 Do not compare results across CPU architectures as if the event represents
 identical work. Match the profile, tool version, architecture, OS/power context,
@@ -398,6 +435,29 @@ queue depth, write-cache mode, and visible stacked devices. `Partial` or
 a zero score. Raw mount sources, device serials, and physical-device claims are
 not stored.
 
+### Create a repeated storage campaign
+
+After completing a storage profile on a Linux Controller or Agent with complete
+storage context, select **Create 3-day campaign**. The selected Run becomes the
+immutable baseline and counts as window one. Campaign creation does not start
+another benchmark.
+
+On a later UTC day, select **Run next campaign window**. CloudMark requires a
+fresh write and campaign-window confirmation for every window and retains both
+in the Run request. The generic Run endpoint cannot attach campaign metadata.
+The target, provider/SKU identity,
+profile/methodology, filesystem, bounded mount flags, guest block policy, and
+executor version must still match the baseline using evidence captured with the
+Run. The complete fio or native-filesystem payload must be present. At most one
+valid Run counts on each timezone-aware UTC completion day. Failed, cancelled,
+duplicate-day, cross-midnight, or configuration-drift attempts remain visible
+but do not consume a window.
+
+A three-window campaign describes time variation on one exact target. Repeat
+the same contract on independent provider instances before interpreting the
+evidence as provider consistency. See
+[`STORAGE_CAMPAIGN_METHODOLOGY.md`](STORAGE_CAMPAIGN_METHODOLOGY.md).
+
 ### Operations CloudMark does not perform
 
 - write to `/dev/sda`, `/dev/nvme0n1`, or a raw Windows disk;
@@ -473,15 +533,20 @@ during the Run, so CloudMark reports this scope explicitly. Observed drops and
 errors remain evidence; they do not make a poor result disappear. Network v9
 also records bounded common driver per-queue counters from `ethtool -S`. The
 versioned normalizer covers common ENA/virtio/netvsc/mlx5 forms, MANA indexed
-names, gVNIC bracketed byte/drop names, and vmxnet3 sectioned queues. It shows
+names, gVNIC bracketed byte/drop names, vmxnet3 sectioned queues, Intel i40e
+hyphen/dot counters, and Broadcom bnx2x bracketed counters. It shows
 active queue distribution and busiest-queue share by packets and, when only
 those fields exist, by bytes. Driver names still vary, so missing per-queue
 evidence remains observational rather than a failure. At the pre-load boundary,
-each Agent also records bounded resolver
-configuration and, when `dig` is present, one A and one AAAA result for the
-fixed `example.com.` name. Search-domain names and answer addresses are not
-persisted. Cache state and upstream ownership remain unknown, so resolver
-evidence is diagnostic and not a comparison gate. The same pre-load boundary
+each Agent also records bounded resolver configuration and, when `dig` is
+present, fixed A and AAAA results over UDP and TCP for the `example.com.` name.
+The UDP commands disable automatic TCP retry so a truncated response remains
+visible; the explicit TCP commands record the separate transport outcome. Each
+command requests DNSSEC records and AD reporting. The dashboard labels AD as a
+resolver assertion and states that CloudMark did not independently validate
+signatures. Search-domain names and answer addresses are not persisted. Cache
+state, automatic application fallback, and upstream ownership remain unknown,
+so resolver evidence is diagnostic and not a comparison gate. The same pre-load boundary
 records bounded RSS indirection, RPS/XPS CPU masks, and MSI IRQ affinity when
 the guest exposes them. The RSS hash key is never stored, no setting is changed,
 and guest evidence does not prove physical-host placement. CloudMark rejects v9
@@ -502,7 +567,8 @@ campaign without deleting its existing Runs. Completing this campaign describes 
 pair across time; provider comparison still requires independent targets.
 
 Overall network coverage remains `Partial`
-because controlled authoritative DNS and repeated cache-cold resolver testing,
+because controlled authoritative DNS, independent DNSSEC validation, and
+repeated cache-cold resolver testing,
 unattended campaign scheduling, physical-fabric verification, additional
 vendor per-queue NIC normalization, administrative path verification, Windows route
 parity, and mTLS Agent enrollment are not complete. Session topology declarations are already
@@ -822,16 +888,25 @@ credentials and requires HTTPS for remote control connections by default.
 
 ## 20. Validate the project
 
-Python tests:
+Python quality and tests:
 
 ```bash
-python -m unittest discover -s tests_python -v
+python -m pip install -e ".[quality]"
+python -m ruff check cloudmark tests_python scripts
+python -m coverage erase
+python -m coverage run -m unittest discover -s tests_python -v
+python -m coverage report
 ```
 
-Dashboard production build:
+Dashboard and API-contract checks:
 
 ```bash
-pnpm run build
+pnpm run lint
+pnpm run typecheck
+pnpm run validate:openapi
+pnpm test
 ```
 
-Never run CPU, memory, or full storage benchmarks in shared CI environments.
+The checked-in GitHub Actions workflow runs the same non-load-bearing gates on
+Python 3.9/3.13 Linux, Python 3.13 Windows, and pinned Node 22.23.2. Never run
+CPU, memory, storage, network, database, or web benchmarks in shared CI.

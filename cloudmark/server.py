@@ -20,6 +20,7 @@ from .campaigns import (
     NETWORK_CAMPAIGN_MAX_WINDOWS,
     NETWORK_CAMPAIGN_MIN_WINDOWS,
     NETWORK_CAMPAIGN_PROFILE,
+    NETWORK_CAMPAIGN_VERSION,
     build_network_campaign_contract,
     campaign_contract_matches_session,
     project_network_campaign,
@@ -53,10 +54,26 @@ from .profiles import (
     all_profiles,
 )
 from .provider import detect_provider
-from .remote import RemoteError, remote_default_timeout, remote_total_steps, run_remote_benchmark, validate_remote_agent
+from .remote import (
+    RemoteError,
+    remote_agent_online,
+    remote_default_timeout,
+    remote_total_steps,
+    run_remote_benchmark,
+    validate_remote_agent,
+)
 from .runner import RUNNER_VERSION, CancellationToken, JobContext, RunCancelled, RunTimedOut
 from .security_posture import SecurityPostureError, run_security_posture, security_posture_preflight
 from .suitability import evaluate_suitability
+from .storage_campaigns import (
+    STORAGE_CAMPAIGN_MAX_WINDOWS,
+    STORAGE_CAMPAIGN_MIN_WINDOWS,
+    STORAGE_CAMPAIGN_VERSION,
+    build_storage_campaign_contract,
+    project_storage_campaign,
+    storage_target_identity,
+    storage_target_id,
+)
 from .topology import PAIRING_TOPOLOGY_SCOPES, assess_pairing_topology, enrich_pairing_session
 from .web_benchmark import (
     WebBenchmarkError,
@@ -165,6 +182,7 @@ class CloudMarkController:
             "runs": _dashboard_run_summaries(runs),
             "sessions": [enrich_pairing_session(session) for session in self.database.list_sessions(10)],
             "network_campaigns": self.list_network_campaigns(),
+            "storage_campaigns": self.list_storage_campaigns(),
             "profiles": all_profiles(),
             "suitability": evaluate_suitability(
                 evidence_runs,
@@ -184,6 +202,8 @@ class CloudMarkController:
         campaign_runs = runs if runs is not None else self.database.list_campaign_runs()
         results: list[dict[str, Any]] = []
         for campaign in self.database.list_campaigns(50):
+            if (campaign.get("contract") or {}).get("version") != "network-campaign-v1":
+                continue
             session_id = str((campaign.get("contract") or {}).get("session_id") or "")
             session = self.database.get_session(session_id)
             enriched = enrich_pairing_session(session) if session else None
@@ -192,7 +212,7 @@ class CloudMarkController:
 
     def get_network_campaign(self, campaign_id: str) -> dict[str, Any]:
         campaign = self.database.get_campaign(campaign_id)
-        if not campaign:
+        if not campaign or (campaign.get("contract") or {}).get("version") != "network-campaign-v1":
             raise LookupError("Network campaign not found.")
         session_id = str((campaign.get("contract") or {}).get("session_id") or "")
         session = self.database.get_session(session_id)
@@ -273,26 +293,191 @@ class CloudMarkController:
                 "profile": profile_name,
                 "session_id": session_id,
                 "confirm_network_load": True,
+                "confirm_campaign_window": True,
                 "campaign_id": campaign_id,
                 "campaign_contract_version": contract.get("version"),
                 "campaign_window_day": view["next_window"]["window_day"],
                 "campaign_window_number": view["next_window"]["window_number"],
                 "campaign_attempt_number": view["next_window"]["attempt_number"],
-            })
+            }, campaign_dispatch_version=NETWORK_CAMPAIGN_VERSION)
             return {
                 "run": run,
                 "campaign": self.get_network_campaign(campaign_id),
             }
 
+    def _storage_target_state(
+        self,
+        target_id: str,
+        *,
+        refresh_controller: bool = False,
+    ) -> tuple[dict[str, Any] | None, bool, dict[str, Any] | None]:
+        if target_id == "controller":
+            system = self.system(refresh=refresh_controller)
+            return storage_target_identity(target_id, system), True, system
+        agent = self.database.get_agent(target_id)
+        if not agent:
+            return None, False, None
+        system = agent.get("system") if isinstance(agent.get("system"), dict) else {}
+        return storage_target_identity(target_id, system), remote_agent_online(agent), system
+
+    def _storage_campaign_runs(self, campaign: dict[str, Any]) -> list[dict[str, Any]]:
+        runs = self.database.list_campaign_runs(str(campaign.get("id") or ""))
+        baseline_id = str((((campaign.get("contract") or {}).get("baseline") or {}).get("run_id") or ""))
+        baseline = self.database.get_run(baseline_id) if baseline_id else None
+        if baseline and all(str(run.get("id") or "") != baseline_id for run in runs):
+            runs.insert(0, baseline)
+        return runs
+
+    def _project_storage_campaign(
+        self,
+        campaign: dict[str, Any],
+        *,
+        refresh_controller: bool = False,
+    ) -> dict[str, Any]:
+        target_id = str(((campaign.get("contract") or {}).get("target") or {}).get("id") or "")
+        target, online, _ = self._storage_target_state(
+            target_id,
+            refresh_controller=refresh_controller,
+        )
+        return project_storage_campaign(
+            campaign,
+            self._storage_campaign_runs(campaign),
+            current_target=target,
+            target_online=online,
+        )
+
+    def list_storage_campaigns(self) -> list[dict[str, Any]]:
+        return [
+            self._project_storage_campaign(campaign)
+            for campaign in self.database.list_campaigns(50)
+            if (campaign.get("contract") or {}).get("version") == STORAGE_CAMPAIGN_VERSION
+        ]
+
+    def get_storage_campaign(self, campaign_id: str) -> dict[str, Any]:
+        campaign = self.database.get_campaign(campaign_id)
+        if not campaign or (campaign.get("contract") or {}).get("version") != STORAGE_CAMPAIGN_VERSION:
+            raise LookupError("Storage campaign not found.")
+        return self._project_storage_campaign(campaign)
+
+    def create_storage_campaign(self, request: dict[str, Any]) -> dict[str, Any]:
+        with self._submission_lock:
+            baseline_id = str(request.get("baseline_run_id") or "").strip()
+            baseline = self.database.get_run(baseline_id)
+            if not baseline:
+                raise LookupError("Baseline storage Run not found.")
+            try:
+                target_windows = int(request.get("target_windows", STORAGE_CAMPAIGN_MIN_WINDOWS))
+            except (TypeError, ValueError) as exc:
+                raise ValueError("target_windows must be an integer.") from exc
+            if isinstance(request.get("target_windows"), bool):
+                raise ValueError("target_windows must be an integer.")
+            if not STORAGE_CAMPAIGN_MIN_WINDOWS <= target_windows <= STORAGE_CAMPAIGN_MAX_WINDOWS:
+                raise ValueError(
+                    f"target_windows must be between {STORAGE_CAMPAIGN_MIN_WINDOWS} and {STORAGE_CAMPAIGN_MAX_WINDOWS}."
+                )
+            target_id = storage_target_id(baseline)
+            current_target, _, current_system = self._storage_target_state(
+                target_id,
+                refresh_controller=True,
+            )
+            if current_target is None or current_system is None:
+                raise ValueError("The baseline storage target is no longer registered.")
+            contract = build_storage_campaign_contract(baseline, current_system, target_windows)
+            if current_target != contract.get("target"):
+                raise ValueError("The current target identity no longer matches the baseline storage evidence.")
+            label = str(request.get("label") or "Storage repeated-window campaign").strip()
+            if not label:
+                raise ValueError("Campaign label cannot be empty.")
+            if len(label) > 120:
+                raise ValueError("Campaign label cannot exceed 120 characters.")
+            for existing in self.database.list_campaigns(500):
+                existing_contract = existing.get("contract") or {}
+                if existing_contract.get("version") != STORAGE_CAMPAIGN_VERSION:
+                    continue
+                if (
+                    existing_contract.get("target") == contract.get("target")
+                    and existing_contract.get("profile") == contract.get("profile")
+                    and existing_contract.get("storage_contract") == contract.get("storage_contract")
+                    and self._project_storage_campaign(existing)["status"] == "active"
+                ):
+                    raise ValueError("An active repeated storage campaign already exists for this exact contract.")
+            campaign_id = f"storage_campaign_{uuid.uuid4().hex[:12]}"
+            self.database.create_campaign(campaign_id, label, target_windows, contract)
+            return self.get_storage_campaign(campaign_id)
+
+    def start_storage_campaign_window(self, campaign_id: str, request: dict[str, Any]) -> dict[str, Any]:
+        if request.get("confirm_write") is not True or request.get("confirm_campaign_window") is not True:
+            raise ValueError("Campaign dispatch requires confirm_write=true and confirm_campaign_window=true.")
+        with self._submission_lock:
+            campaign = self.database.get_campaign(campaign_id)
+            if not campaign or (campaign.get("contract") or {}).get("version") != STORAGE_CAMPAIGN_VERSION:
+                raise LookupError("Storage campaign not found.")
+            view = self._project_storage_campaign(campaign, refresh_controller=True)
+            if not view["next_window"]["eligible"]:
+                raise ValueError(
+                    "The next storage campaign window cannot start: " + str(view["next_window"]["reason_code"]) + "."
+                )
+            contract = campaign.get("contract") or {}
+            profile_name = str(contract.get("profile") or "")
+            installed = STORAGE_PROFILES.get(profile_name) or {}
+            if (
+                str(installed.get("profile_version") or "") != str(contract.get("profile_version") or "")
+                or str(installed.get("methodology_version") or "") != str(contract.get("methodology_version") or "")
+            ):
+                raise ValueError("The installed storage profile no longer matches the immutable campaign contract.")
+            target_id = str((contract.get("target") or {}).get("id") or "")
+            run = self._submit_run_locked({
+                "suite": "storage",
+                "profile": profile_name,
+                "confirm_write": True,
+                "confirm_campaign_window": True,
+                **({"agent_id": target_id} if target_id != "controller" else {}),
+                "campaign_id": campaign_id,
+                "campaign_contract_version": contract.get("version"),
+                "campaign_target_id": target_id,
+                "campaign_window_day": view["next_window"]["window_day"],
+                "campaign_window_number": view["next_window"]["window_number"],
+                "campaign_attempt_number": view["next_window"]["attempt_number"],
+            }, campaign_dispatch_version=STORAGE_CAMPAIGN_VERSION)
+            return {"run": run, "campaign": self.get_storage_campaign(campaign_id)}
+
     def submit_run(self, request: dict[str, Any]) -> dict[str, Any]:
         with self._submission_lock:
             return self._submit_run_locked(request)
 
-    def _submit_run_locked(self, request: dict[str, Any]) -> dict[str, Any]:
+    def _submit_run_locked(
+        self,
+        request: dict[str, Any],
+        *,
+        campaign_dispatch_version: str | None = None,
+    ) -> dict[str, Any]:
         request = dict(request)
         suite = str(request.get("suite", ""))
         profile = str(request.get("profile", ""))
         agent_id = str(request.get("agent_id", "")).strip()
+        campaign_fields = {
+            "campaign_id",
+            "campaign_contract_version",
+            "campaign_target_id",
+            "campaign_window_day",
+            "campaign_window_number",
+            "campaign_attempt_number",
+        }
+        supplied_campaign_fields = campaign_fields.intersection(request)
+        if supplied_campaign_fields and campaign_dispatch_version is None:
+            raise ValueError("Campaign metadata is accepted only through a guarded campaign-window endpoint.")
+        if campaign_dispatch_version is not None:
+            expected_suite = {
+                NETWORK_CAMPAIGN_VERSION: "network",
+                STORAGE_CAMPAIGN_VERSION: "storage",
+            }.get(campaign_dispatch_version)
+            if (
+                expected_suite is None
+                or suite != expected_suite
+                or request.get("campaign_contract_version") != campaign_dispatch_version
+                or not request.get("campaign_id")
+            ):
+                raise ValueError("Internal campaign dispatch metadata does not match its guarded contract.")
         if suite not in {"inventory", "compute", "memory", "storage", "security", "network", "database", "web"}:
             raise ValueError("Supported suites are inventory, compute, memory, storage, security, network, database, and web.")
         if agent_id and suite not in {"compute", "memory", "storage", "security"}:
@@ -633,6 +818,8 @@ class CloudMarkController:
                 )
             else:
                 raise ValueError(f"No executor is registered for suite {request['suite']}.")
+            if request["suite"] == "storage" and request.get("execution") == "controller-host":
+                result["target_evidence"] = deepcopy(self.system(refresh=True))
             result_tool = result.get("tool") if isinstance(result, dict) else None
             finish_run(
                 status="completed",
@@ -960,6 +1147,10 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(200, {"items": self.controller.list_network_campaigns()})
             elif path.startswith("/api/v1/network-campaigns/"):
                 self._send(200, self.controller.get_network_campaign(path.rsplit("/", 1)[-1]))
+            elif path == "/api/v1/storage-campaigns":
+                self._send(200, {"items": self.controller.list_storage_campaigns()})
+            elif path.startswith("/api/v1/storage-campaigns/"):
+                self._send(200, self.controller.get_storage_campaign(path.rsplit("/", 1)[-1]))
             elif path == "/api/v1/runs":
                 self._send(200, {"items": self.controller.database.list_runs()})
             elif path.startswith("/api/v1/runs/"):
@@ -1018,6 +1209,11 @@ class Handler(BaseHTTPRequestHandler):
             elif path.startswith("/api/v1/network-campaigns/") and path.endswith("/runs"):
                 campaign_id = path.split("/")[-2]
                 self._send(202, self.controller.start_network_campaign_window(campaign_id, body))
+            elif path == "/api/v1/storage-campaigns":
+                self._send(201, self.controller.create_storage_campaign(body))
+            elif path.startswith("/api/v1/storage-campaigns/") and path.endswith("/runs"):
+                campaign_id = path.split("/")[-2]
+                self._send(202, self.controller.start_storage_campaign_window(campaign_id, body))
             elif path == "/api/v1/sessions":
                 self._send(
                     201,

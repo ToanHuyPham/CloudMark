@@ -44,7 +44,11 @@ Target itself, then deny every other client. The API cannot supply a URL,
 path, port, payload, Nginx directive, or command fragment.
 The Python fixture accepts only `/ready` and `/api/v2/dynamic`, binds only
 `127.0.0.1:58081`, and rebuilds a deterministic JSON response for every dynamic
-request. The application port is never exposed to the Generator.
+request. Both successful routes return an exact content length, `Cache-Control:
+no-store`, and the fixed fixture identity header. Query variants of the dynamic
+path are not accepted, unsupported methods remain unsupported, and the
+application port is never exposed to the Generator. Unit tests exercise this
+HTTP framing through fake sockets and never open a listener.
 
 The HTTPS listener uses a one-day, per-run self-signed RSA-2048 certificate
 whose subject alternative name is the Target IP. `web-http-v1` fixes TLS 1.2

@@ -6,6 +6,12 @@ requires-python = ">=3.9"
 license = { text = "Apache-2.0" }
 authors = [{ name = "CloudMark contributors" }]
 
+[project.optional-dependencies]
+quality = [
+    "coverage[toml]==7.10.7",
+    "ruff==0.16.7",
+]
+
 [project.scripts]
 cloudmark = "cloudmark.__main__:main"
 
@@ -18,3 +24,20 @@ include = ["cloudmark*"]
 
 [tool.setuptools.package-data]
 cloudmark = ["native/*.c"]
+
+[tool.ruff]
+target-version = "py39"
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E9", "F"]
+
+[tool.coverage.run]
+branch = true
+source = ["cloudmark"]
+
+[tool.coverage.report]
+fail_under = 70
+precision = 1
+show_missing = true
+skip_covered = true

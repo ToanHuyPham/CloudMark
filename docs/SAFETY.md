@@ -25,6 +25,11 @@ systems.
 - Raw mount sources, serial numbers, unknown mount flags, and sysfs paths are
   not persisted. Guest block evidence never becomes a physical-device claim.
 - Raw devices, TRIM, full-device preconditioning, and power-loss tests are off.
+- Storage campaign creation is side-effect free. Every later window requires
+  separate `confirm_write=true` and `confirm_campaign_window=true` values;
+  CloudMark never schedules campaign load unattended. Both confirmations are
+  retained in the Run request, and the generic Run endpoint refuses caller-
+  supplied campaign metadata.
 
 ## Compute and memory
 
@@ -32,11 +37,26 @@ systems.
 - CPU, memory, and storage saturation suites cannot overlap locally.
 - CPU duration, warm-up, prime limit, and thread count come from versioned
   profiles rather than caller-controlled command fragments.
+- Profile thread expansion respects the current process CPU-affinity count when
+  exposed. CPU IDs are not persisted. Verified cgroup v2/v1 quota across up to
+  32 ancestors adds a ceiling thread cap; malformed quota fails closed.
 - The native memory tool accepts only read, write, copy, and triad kernels.
 - Memory profiles allocate a fixed working set and preserve at least 512 MiB of
   available memory when the operating system exposes that measurement.
+- Linux memory preflight bounds allocation by the smaller of host MemAvailable
+  and verified cgroup v2/v1 headroom across the current group and at most 32
+  ancestors. A finite or malformed governing boundary with unreadable current
+  usage fails closed before compilation or load.
 - The native source is compiled in the benchmark workspace with an exact GCC
   argument list; compiler output is retained when compilation fails.
+- Memory topology collection reads only bounded Linux sysfs node files: at most
+  64 nodes and 4 KiB per online/cpulist/meminfo/distance file. It changes no
+  affinity, memory policy, huge-page, kernel, or NUMA setting.
+- Paging context reads at most 64 KiB of `/proc/meminfo` and 4 KiB from each
+  THP/zswap policy file. It never runs swapoff/swapon, writes a sysctl/sysfs
+  control, allocates huge pages, or triggers reclaim.
+- Guest NUMA distance values remain configuration evidence, not measured
+  latency, physical-host placement, or remote-memory performance claims.
 - Cancellation terminates the current child process. A failed or cancelled run
   retains completed jobs only as partial evidence.
 
@@ -78,9 +98,13 @@ systems.
   or NIC configuration. Unknown driver counters remain unclassified.
 - Network v9 resolver diagnostics read at most 64 KiB from Linux
   `/etc/resolv.conf` and, when `dig` is present, query only `example.com.` for
-  A and AAAA once per Agent with fixed retry and timeout bounds. The Controller
-  cannot submit a hostname. Search-domain names and answer addresses are not
-  persisted, and the diagnostic never claims provider DNS ownership.
+  A and AAAA over explicit UDP and TCP once per Agent with fixed retry and
+  timeout bounds. UDP disables automatic TCP retry so truncation is not hidden.
+  The Controller cannot submit a hostname, record type, or transport.
+  Search-domain names and answer addresses are not persisted, and the
+  diagnostic never claims provider DNS ownership or automatic fallback. DNSSEC
+  and AD are requested, but AD remains a configured-resolver assertion;
+  CloudMark stores no signature material and performs no local validation.
 - Network v9 runs `ethtool -x` only for the route-derived interface and parses
   at most 4,096 RSS entries with queue indexes 0-127. It never persists the RSS
   hash key. Linux sysfs RPS/XPS masks are limited to 128 queues, procfs affinity
@@ -259,6 +283,9 @@ systems.
 - Preview is the default. Installation requires `bootstrap --yes` and
   administrator/root privileges.
 - Installed package names and commands are visible in the preview.
+- Confirmed execution fails closed if the detected platform has no executable
+  package-manager commands. Windows bundle guidance and unsupported platforms
+  remain manual installation paths, never empty successful installations.
 
 ## Linux Security Posture
 
@@ -311,3 +338,14 @@ systems.
   task recovery closes the associated work rather than reconstructing or
   persisting a plaintext credential.
 - Provider credentials and instance user-data are never included in reports.
+
+## Provider identity probes
+
+- Cloud metadata uses only fixed AWS IMDSv2, Azure IMDS, and Google Compute
+  Engine metadata identity endpoints with sub-second timeouts and proxies
+  disabled. It never requests user-data, service-account tokens, or credentials.
+- Every response is capped at 64 KiB. Malformed JSON, wrong JSON types,
+  incomplete required identity fields, oversized responses, unsafe AWS tokens,
+  or a missing GCP metadata-flavor response fail closed to unavailable evidence.
+- Declared provider manifests accept bounded string fields only, remain labelled
+  unverified at 0.70 confidence, and do not persist the local manifest path.

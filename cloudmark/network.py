@@ -46,6 +46,175 @@ QUEUE_COUNTER_FIELDS = (
 STEERING_QUEUE_LIMIT = 128
 STEERING_IRQ_LIMIT = 256
 STEERING_TEXT_LIMIT = 4096
+RESOLVER_QUERY_LIMIT = 4
+RESOLVER_OBSERVED_STATUSES = {"resolved", "no-data", "negative", "truncated"}
+RESOLVER_DNSSEC_RESULT_STATUSES = {"resolved", "no-data", "negative"}
+RESOLVER_QUERY_STATUSES = RESOLVER_OBSERVED_STATUSES | {"timeout", "error", "response-error"}
+RESOLVER_ADDRESS_CLASSES = {
+    "documentation",
+    "global-unicast",
+    "link-local",
+    "loopback",
+    "multicast",
+    "non-global-unicast",
+    "private",
+    "reserved",
+    "shared-address-space",
+    "unique-local",
+    "unspecified",
+}
+
+
+def _bounded_resolver_queries(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    normalized: list[dict[str, Any]] = []
+    seen: set[tuple[str, str | None]] = set()
+    for item in value[:RESOLVER_QUERY_LIMIT]:
+        if not isinstance(item, dict):
+            continue
+        record_type = item.get("record_type")
+        transport = item.get("transport")
+        status = item.get("status")
+        if (
+            record_type not in {"A", "AAAA"}
+            or transport not in {None, "udp", "tcp"}
+            or status not in RESOLVER_QUERY_STATUSES
+            or (record_type, transport) in seen
+        ):
+            continue
+        seen.add((record_type, transport))
+        elapsed = item.get("elapsed_ms")
+        answer_count = item.get("answer_count")
+        dns_status = item.get("dns_status")
+        address_classes = item.get("answer_address_classes")
+        row: dict[str, Any] = {
+            "record_type": record_type,
+            "transport": transport,
+            "status": status,
+            "dns_status": (
+                dns_status
+                if isinstance(dns_status, str) and re.fullmatch(r"[A-Z0-9_-]{1,32}", dns_status)
+                else None
+            ),
+            "response_truncated": status == "truncated" and item.get("response_truncated") is True,
+            "dnssec_requested": item.get("dnssec_requested") is True,
+            "authenticated_data": (
+                item.get("authenticated_data") is True
+                and item.get("dnssec_requested") is True
+                and status in RESOLVER_DNSSEC_RESULT_STATUSES
+            ),
+            "cloudmark_dnssec_validation_performed": False,
+            "elapsed_ms": (
+                round(float(elapsed), 3)
+                if isinstance(elapsed, (int, float))
+                and not isinstance(elapsed, bool)
+                and 0 <= float(elapsed) <= 10_000
+                else None
+            ),
+            "answer_count": (
+                answer_count
+                if isinstance(answer_count, int) and not isinstance(answer_count, bool) and 0 <= answer_count <= 64
+                else 0
+            ),
+            "answer_address_classes": (
+                list(
+                    dict.fromkeys(
+                        entry
+                        for entry in address_classes
+                        if isinstance(entry, str) and entry in RESOLVER_ADDRESS_CLASSES
+                    )
+                )[:8]
+                if isinstance(address_classes, list)
+                else []
+            ),
+            "answer_addresses_persisted": False,
+        }
+        reason = item.get("reason")
+        if isinstance(reason, str) and reason:
+            row["reason"] = reason[:256]
+        normalized.append(row)
+    return normalized
+
+
+def _resolver_transport_comparison(queries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    comparisons: list[dict[str, Any]] = []
+    for record_type in ("A", "AAAA"):
+        by_transport = {
+            item.get("transport"): item
+            for item in queries
+            if item.get("record_type") == record_type and item.get("transport") in {"udp", "tcp"}
+        }
+        udp_status = str((by_transport.get("udp") or {}).get("status", "unavailable"))
+        tcp_status = str((by_transport.get("tcp") or {}).get("status", "unavailable"))
+        comparisons.append(
+            {
+                "record_type": record_type,
+                "udp_status": udp_status,
+                "tcp_status": tcp_status,
+                "udp_response_observed": udp_status in RESOLVER_OBSERVED_STATUSES,
+                "tcp_response_observed": tcp_status in RESOLVER_OBSERVED_STATUSES,
+                "udp_truncated": udp_status == "truncated",
+                "truncated_udp_recovered_over_tcp": (
+                    udp_status == "truncated" and tcp_status in RESOLVER_OBSERVED_STATUSES - {"truncated"}
+                ),
+            }
+        )
+    return comparisons
+
+
+def _resolver_dnssec_summary(queries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    summaries: list[dict[str, Any]] = []
+    for record_type in ("A", "AAAA"):
+        by_transport = {
+            item.get("transport"): item
+            for item in queries
+            if item.get("record_type") == record_type and item.get("transport") in {"udp", "tcp"}
+        }
+        udp = by_transport.get("udp") or {}
+        tcp = by_transport.get("tcp") or {}
+        udp_ad = udp.get("authenticated_data") is True and udp.get("dnssec_requested") is True
+        tcp_ad = tcp.get("authenticated_data") is True and tcp.get("dnssec_requested") is True
+        summaries.append(
+            {
+                "record_type": record_type,
+                "udp_authenticated_data": udp_ad,
+                "tcp_authenticated_data": tcp_ad,
+                "authenticated_data_consistent": udp_ad == tcp_ad,
+                "resolver_asserted_authenticated_data": udp_ad or tcp_ad,
+                "cloudmark_dnssec_validation_performed": False,
+            }
+        )
+    return summaries
+
+
+def _resolver_diagnostic_status(
+    diagnostic_version: str,
+    configuration_status: Any,
+    queries: list[dict[str, Any]],
+    declared_status: Any,
+) -> str:
+    if diagnostic_version not in {"system-resolver-diagnostic-v2", "system-resolver-diagnostic-v3"}:
+        return declared_status if declared_status in {"complete", "partial", "unavailable"} else "unavailable"
+    expected = {(record_type, transport) for record_type in ("A", "AAAA") for transport in ("udp", "tcp")}
+    observed = {
+        (item["record_type"], item["transport"])
+        for item in queries
+        if item["status"] in RESOLVER_OBSERVED_STATUSES
+    }
+    dnssec_complete = diagnostic_version != "system-resolver-diagnostic-v3" or all(
+        item.get("dnssec_requested") is True for item in queries
+    )
+    if (
+        configuration_status == "observed"
+        and observed == expected
+        and len(queries) == RESOLVER_QUERY_LIMIT
+        and dnssec_complete
+    ):
+        return "complete"
+    if configuration_status in {"observed", "partial"} or observed:
+        return "partial"
+    return "unavailable"
 
 
 class NetworkError(RuntimeError):
@@ -772,13 +941,26 @@ def _network_analysis(result: dict[str, Any]) -> dict[str, Any]:
     for item in path_items:
         resolver = (item.get("evidence") or {}).get("resolver") or {}
         configuration = resolver.get("configuration") or {}
-        status = str(resolver.get("status", "unavailable"))
+        requested_diagnostic_version = resolver.get("diagnostic_version")
+        diagnostic_version = (
+            requested_diagnostic_version
+            if requested_diagnostic_version in {"system-resolver-diagnostic-v2", "system-resolver-diagnostic-v3"}
+            else "system-resolver-diagnostic-v1"
+        )
+        queries = _bounded_resolver_queries(resolver.get("queries"))
+        status = _resolver_diagnostic_status(
+            diagnostic_version,
+            configuration.get("status"),
+            queries,
+            resolver.get("status", "unavailable"),
+        )
         resolver_statuses.append(status)
         resolver_observations.append(
             {
                 "direction": item.get("direction"),
                 "agent": item.get("sender"),
                 "status": status,
+                "diagnostic_version": diagnostic_version,
                 "observed_at": resolver.get("observed_at"),
                 "scope": resolver.get("scope", "agent-system-resolver-diagnostic"),
                 "query_name": resolver.get("query_name"),
@@ -790,7 +972,27 @@ def _network_analysis(result: dict[str, Any]) -> dict[str, Any]:
                     "options": configuration.get("options") or {},
                     "search_domain_names_persisted": False,
                 },
-                "queries": resolver.get("queries") or [],
+                "queries": queries,
+                "transport_comparison": (
+                    _resolver_transport_comparison(queries)
+                    if diagnostic_version in {"system-resolver-diagnostic-v2", "system-resolver-diagnostic-v3"}
+                    else []
+                ),
+                "transport_policy": (
+                    "explicit-udp-without-tcp-retry-and-explicit-tcp"
+                    if diagnostic_version in {"system-resolver-diagnostic-v2", "system-resolver-diagnostic-v3"}
+                    else None
+                ),
+                "dnssec_summary": (
+                    _resolver_dnssec_summary(queries)
+                    if diagnostic_version == "system-resolver-diagnostic-v3"
+                    else []
+                ),
+                "dnssec_policy": (
+                    "request-dnssec-and-observe-resolver-ad-without-local-validation"
+                    if diagnostic_version == "system-resolver-diagnostic-v3"
+                    else None
+                ),
                 "cache_state": resolver.get("cache_state", "unknown"),
                 "provider_dns_service_attributed": False,
                 "reason": resolver.get("reason"),

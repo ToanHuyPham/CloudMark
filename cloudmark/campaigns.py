@@ -123,6 +123,8 @@ def _attempt_contract_status(run: dict[str, Any], contract: dict[str, Any]) -> t
     result = run.get("result") or {}
     if request.get("campaign_contract_version") != contract.get("version"):
         return False, "campaign-contract-version-mismatch"
+    if request.get("confirm_network_load") is not True or request.get("confirm_campaign_window") is not True:
+        return False, "campaign-confirmation-missing"
     if request.get("session_id") != contract.get("session_id") or request.get("profile") != contract.get("profile"):
         return False, "campaign-contract-target-mismatch"
     if run.get("status") != "completed":

@@ -69,6 +69,10 @@ def _fresh(timestamp: Any, seconds: int) -> bool:
     return observed >= datetime.now(timezone.utc) - timedelta(seconds=seconds)
 
 
+def remote_agent_online(agent: dict[str, Any]) -> bool:
+    return agent.get("status") == "online" and _fresh(agent.get("last_seen_at"), AGENT_ONLINE_SECONDS)
+
+
 def validate_remote_agent(
     database: Database,
     agent_id: str,
@@ -80,7 +84,7 @@ def validate_remote_agent(
     agent = database.get_agent(agent_id)
     if not agent:
         raise ValueError("Remote benchmark requires an existing Agent.")
-    if agent.get("status") != "online" or not _fresh(agent.get("last_seen_at"), AGENT_ONLINE_SECONDS):
+    if not remote_agent_online(agent):
         raise ValueError(f"Agent {agent.get('name', agent_id)} is offline. Start its persistent worker first.")
     inventory = agent.get("system", {}).get("inventory", {})
     capabilities = inventory.get("capabilities", {})

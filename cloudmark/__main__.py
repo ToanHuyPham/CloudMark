@@ -100,7 +100,11 @@ def main() -> None:
         if args.suite != "security" and not args.yes:
             action = "temporary-file writes" if args.suite == "storage" else "intentional benchmark load"
             raise SystemExit(f"Add --yes to confirm {action}.")
-        timeout_seconds = args.timeout_seconds or preflight["default_timeout_seconds"]
+        timeout_seconds = (
+            args.timeout_seconds
+            if args.timeout_seconds is not None
+            else preflight["default_timeout_seconds"]
+        )
         if not 30 <= timeout_seconds <= 43_200:
             raise SystemExit("--timeout-seconds must be between 30 and 43200.")
 

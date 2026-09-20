@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from .profiles import COMPUTE_PROFILES, MEMORY_PROFILES
+from .memory_environment import collect_memory_environment
 from .runner import JobContext, RunStopped
 
 
@@ -51,6 +52,231 @@ def _memory_available_bytes() -> int | None:
         return int(os.sysconf("SC_AVPHYS_PAGES")) * int(os.sysconf("SC_PAGE_SIZE"))
     except (AttributeError, OSError, TypeError, ValueError):
         return None
+
+
+def _logical_cpu_boundary(
+    *,
+    proc_cgroup_path: Path = Path("/proc/self/cgroup"),
+    cgroup_root: Path = Path("/sys/fs/cgroup"),
+) -> dict[str, Any]:
+    host_logical_cores = max(1, os.cpu_count() or 1)
+    affinity_logical_cores: int | None = None
+    if hasattr(os, "sched_getaffinity"):
+        try:
+            affinity = os.sched_getaffinity(0)
+            if affinity and all(isinstance(cpu, int) and 0 <= cpu <= 8191 for cpu in affinity):
+                affinity_logical_cores = len(affinity)
+        except OSError:
+            pass
+    quota = _cpu_quota_boundary(proc_cgroup_path=proc_cgroup_path, cgroup_root=cgroup_root)
+    effective_logical_cores = min(
+        value
+        for value in (host_logical_cores, affinity_logical_cores, quota["quota_thread_ceiling"])
+        if value is not None
+    )
+    return {
+        "host_logical_cores": host_logical_cores,
+        "affinity_logical_cores": affinity_logical_cores,
+        "effective_logical_cores": effective_logical_cores,
+        "affinity_respected": affinity_logical_cores is not None,
+        "cpu_ids_persisted": False,
+        "cgroup_cpu_quota_applied": quota["quota_thread_ceiling"] is not None,
+        "cgroup_cpu_quota_verified": quota["verified"],
+        "cgroup_version": quota["cgroup_version"],
+        "quota_capacity_cores": quota["quota_capacity_cores"],
+        "quota_thread_ceiling": quota["quota_thread_ceiling"],
+        "quota_levels_checked": quota["levels_checked"],
+        "quota_limiting_ancestor_depth": quota["limiting_ancestor_depth"],
+    }
+
+
+def _bounded_control(path: Path) -> str | None:
+    try:
+        with path.open("r", encoding="utf-8", errors="strict") as handle:
+            value = handle.read(65)
+    except (OSError, UnicodeError):
+        return None
+    return value.strip() if len(value) <= 64 else None
+
+
+def _control_integer(value: str | None, *, v1_limit: bool = False) -> int | None:
+    if value is None or value == "max" or not value.isdigit():
+        return None
+    parsed = int(value)
+    if parsed < 0 or parsed > 2**63 - 1 or (v1_limit and parsed >= 2**60):
+        return None
+    return parsed
+
+
+def _cpu_quota_boundary(
+    *,
+    proc_cgroup_path: Path = Path("/proc/self/cgroup"),
+    cgroup_root: Path = Path("/sys/fs/cgroup"),
+) -> dict[str, Any]:
+    try:
+        with proc_cgroup_path.open("r", encoding="utf-8", errors="strict") as handle:
+            text = handle.read(4097)
+        lines = text.splitlines() if len(text) <= 4096 else []
+    except (OSError, UnicodeError):
+        lines = []
+    version: str | None = None
+    relative_path: str | None = None
+    for line in lines:
+        fields = line.split(":", 2)
+        if len(fields) != 3:
+            continue
+        hierarchy, controllers, candidate = fields
+        if hierarchy == "0" and controllers == "":
+            version, relative_path = "v2", candidate
+            break
+        if "cpu" in controllers.split(","):
+            version, relative_path = "v1", candidate
+    safe_parts = [] if relative_path is None else [part for part in relative_path.split("/") if part]
+    verified = version is None or len(safe_parts) <= 32
+    if any(part in {".", ".."} for part in safe_parts):
+        version, safe_parts, verified = None, [], False
+    if version == "v1":
+        candidates = [cgroup_root / "cpu", cgroup_root / "cpu,cpuacct"]
+        base = next((candidate for candidate in candidates if candidate.is_dir()), candidates[0])
+    else:
+        base = cgroup_root
+    directories = (
+        [base.joinpath(*safe_parts[:depth]) for depth in range(len(safe_parts), -1, -1)]
+        if version is not None and len(safe_parts) <= 32
+        else []
+    )
+    quotas: list[tuple[float, int]] = []
+    levels_checked = 0
+    for depth, directory in enumerate(directories):
+        if version == "v2":
+            raw = _bounded_control(directory / "cpu.max")
+            if raw is None:
+                continue
+            levels_checked += 1
+            fields = raw.split()
+            if len(fields) != 2 or not fields[1].isdigit() or int(fields[1]) <= 0:
+                verified = False
+                continue
+            if fields[0] == "max":
+                continue
+            if not fields[0].isdigit() or int(fields[0]) <= 0:
+                verified = False
+                continue
+            quotas.append((int(fields[0]) / int(fields[1]), depth))
+        elif version == "v1":
+            raw_quota = _bounded_control(directory / "cpu.cfs_quota_us")
+            raw_period = _bounded_control(directory / "cpu.cfs_period_us")
+            if raw_quota is None and raw_period is None:
+                continue
+            levels_checked += 1
+            if raw_quota == "-1" and raw_period is not None and raw_period.isdigit() and int(raw_period) > 0:
+                continue
+            if (
+                raw_quota is None
+                or raw_period is None
+                or not raw_quota.isdigit()
+                or not raw_period.isdigit()
+                or int(raw_quota) <= 0
+                or int(raw_period) <= 0
+            ):
+                verified = False
+                continue
+            quotas.append((int(raw_quota) / int(raw_period), depth))
+    limiting = min(quotas, default=None)
+    capacity = round(limiting[0], 6) if limiting is not None else None
+    return {
+        "verified": verified,
+        "cgroup_version": version,
+        "cgroup_path_persisted": False,
+        "quota_capacity_cores": capacity,
+        "quota_thread_ceiling": max(1, math.ceil(limiting[0])) if limiting is not None else None,
+        "levels_checked": levels_checked,
+        "limiting_ancestor_depth": limiting[1] if limiting is not None else None,
+    }
+
+
+def _memory_allocation_boundary(
+    host_available_bytes: int | None,
+    *,
+    proc_cgroup_path: Path = Path("/proc/self/cgroup"),
+    cgroup_root: Path = Path("/sys/fs/cgroup"),
+) -> dict[str, Any]:
+    try:
+        with proc_cgroup_path.open("r", encoding="utf-8", errors="strict") as handle:
+            cgroup_text = handle.read(4097)
+        lines = cgroup_text.splitlines() if len(cgroup_text) <= 4096 else []
+    except (OSError, UnicodeError):
+        lines = []
+    version: str | None = None
+    relative_path: str | None = None
+    for line in lines:
+        fields = line.split(":", 2)
+        if len(fields) != 3:
+            continue
+        hierarchy, controllers, candidate = fields
+        if hierarchy == "0" and controllers == "":
+            version, relative_path = "v2", candidate
+            break
+        if "memory" in controllers.split(","):
+            version, relative_path = "v1", candidate
+    safe_parts = [] if relative_path is None else [part for part in relative_path.split("/") if part]
+    if any(part in {".", ".."} for part in safe_parts):
+        version, relative_path, safe_parts = None, None, []
+    base_directory = cgroup_root / "memory" if version == "v1" else cgroup_root
+    directories = (
+        [base_directory.joinpath(*safe_parts[:depth]) for depth in range(len(safe_parts), -1, -1)]
+        if version is not None and len(safe_parts) <= 32
+        else []
+    )
+    finite_boundaries: list[tuple[int, int, int, int]] = []
+    finite_limit_detected = False
+    verified = version is None or len(safe_parts) <= 32
+    levels_checked = 0
+    limit_name = "memory.limit_in_bytes" if version == "v1" else "memory.max"
+    current_name = "memory.usage_in_bytes" if version == "v1" else "memory.current"
+    for depth, directory in enumerate(directories):
+        raw_limit = _bounded_control(directory / limit_name)
+        if raw_limit is None:
+            continue
+        levels_checked += 1
+        limit = _control_integer(raw_limit, v1_limit=version == "v1")
+        if limit is None:
+            if raw_limit != "max" and not (
+                version == "v1"
+                and (raw_limit == "-1" or (raw_limit.isdigit() and int(raw_limit) >= 2**60))
+            ):
+                verified = False
+            continue
+        finite_limit_detected = True
+        current = _control_integer(_bounded_control(directory / current_name))
+        if current is None:
+            verified = False
+            continue
+        finite_boundaries.append((max(0, limit - current), limit, current, depth))
+    limiting = min(finite_boundaries, default=None)
+    headroom = limiting[0] if limiting is not None else None
+    limit = limiting[1] if limiting is not None else None
+    current = limiting[2] if limiting is not None else None
+    limiting_depth = limiting[3] if limiting is not None else None
+    if finite_limit_detected and not finite_boundaries:
+        verified = False
+    candidates = [value for value in (host_available_bytes, headroom) if value is not None]
+    effective = min(candidates) if candidates and verified else None
+    return {
+        "status": "observed" if verified and effective is not None else "partial",
+        "host_available_bytes": host_available_bytes,
+        "cgroup_version": version,
+        "cgroup_path_persisted": False,
+        "cgroup_limit_bytes": limit,
+        "cgroup_current_bytes": current,
+        "cgroup_headroom_bytes": headroom,
+        "cgroup_levels_checked": levels_checked,
+        "cgroup_limiting_ancestor_depth": limiting_depth,
+        "finite_cgroup_limit_detected": finite_limit_detected,
+        "cgroup_headroom_verified": verified,
+        "effective_available_bytes": effective,
+        "read_only": True,
+    }
 
 
 def _compile_memory_tool(workspace: Path) -> dict[str, str]:
@@ -93,7 +319,10 @@ def system_preflight(suite: str, profile_name: str, workspace: Path) -> dict[str
     profile = profiles[profile_name]
     workspace = workspace.resolve()
     workspace.mkdir(parents=True, exist_ok=True)
-    logical_cores = max(1, os.cpu_count() or 1)
+    cpu_boundary = _logical_cpu_boundary()
+    if not cpu_boundary["cgroup_cpu_quota_verified"]:
+        raise ComputeError("The cgroup CPU quota boundary could not be verified safely.")
+    logical_cores = int(cpu_boundary["effective_logical_cores"])
     estimated_seconds = sum(int(job["runtime"]) + int(job.get("warmup", 0)) for job in profile["jobs"])
     result: dict[str, Any] = {
         "suite": suite,
@@ -102,6 +331,7 @@ def system_preflight(suite: str, profile_name: str, workspace: Path) -> dict[str
         "methodology_version": profile["methodology_version"],
         "workspace": str(workspace),
         "logical_cores": logical_cores,
+        "cpu_execution_boundary": cpu_boundary,
         "job_count": len(profile["jobs"]),
         "estimated_seconds": estimated_seconds,
         "default_timeout_seconds": max(180, estimated_seconds + 180),
@@ -118,13 +348,18 @@ def system_preflight(suite: str, profile_name: str, workspace: Path) -> dict[str
             raise ComputeError("The native memory benchmark currently supports Linux with GCC and OpenMP.")
         array_bytes = int(profile["array_size_mib"]) * 1024 * 1024
         allocated_bytes = array_bytes * 3
-        available = _memory_available_bytes()
+        host_available = _memory_available_bytes()
+        allocation_boundary = _memory_allocation_boundary(host_available)
+        available = allocation_boundary["effective_available_bytes"]
         reserve = 512 * 1024 * 1024
+        if not allocation_boundary["cgroup_headroom_verified"]:
+            raise ComputeError("The cgroup memory boundary could not be verified safely.")
         if available is not None and available - allocated_bytes < reserve:
             raise ComputeError(
                 f"Not enough available memory. Benchmark allocation: {allocated_bytes} bytes; safety reserve: {reserve} bytes."
             )
         native = _compile_memory_tool(workspace)
+        memory_environment = collect_memory_environment()
         result.update(
             {
                 "tool": native["binary"],
@@ -135,7 +370,10 @@ def system_preflight(suite: str, profile_name: str, workspace: Path) -> dict[str
                 "array_bytes": array_bytes,
                 "allocated_bytes": allocated_bytes,
                 "available_memory_bytes": available,
+                "host_available_memory_bytes": host_available,
+                "memory_allocation_boundary": allocation_boundary,
                 "safety_reserve_bytes": reserve,
+                "memory_environment": memory_environment,
             }
         )
     return result

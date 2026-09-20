@@ -42,8 +42,9 @@ so actual coverage remains auditable.
 
 Version `0.4.0` implements the integer single/all-core and sustained subset of
 domain 4, plus the native read/write/copy/triad bandwidth subset of domain 5.
-Floating-point, crypto, compilation, true memory latency, and NUMA penalty
-measurements remain missing; both domains therefore remain `Partial` and cannot
+Bounded guest-visible NUMA node/CPU/memory/distance topology is available.
+Floating-point, crypto, compilation, true memory latency, and measured NUMA
+penalty remain missing; both domains therefore remain `Partial` and cannot
 independently unlock a suitability label.
 
 Version `0.5.0` can execute those single-system subsets and filesystem-safe
@@ -65,6 +66,11 @@ write-cache, and zoned state where visible. Raw sources and serials are not
 persisted, and guest observations do not establish physical media. Provider
 comparison v5 requires this exact context and executor version before storage
 metrics can become comparable.
+
+`storage-campaign-v1` can anchor that exact contract to one completed baseline
+and acquire manually confirmed Runs across 3–30 distinct UTC completion days.
+It reveals temporal behavior on one target; independent same-contract instances
+are still required for provider consistency evidence.
 
 The current development head implements domain 10 through
 `database-postgresql-v2`: a durable ephemeral PostgreSQL service, built-in

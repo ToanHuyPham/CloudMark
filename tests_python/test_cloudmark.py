@@ -4,6 +4,7 @@ import ipaddress
 import json
 import os
 import sqlite3
+import subprocess
 import tempfile
 import sys
 import threading
@@ -58,9 +59,13 @@ from cloudmark.inventory import collect_inventory
 from cloudmark.network import (
     ALLOWED_UDP_RATE_MAX,
     NetworkError,
+    _bounded_resolver_queries,
     _iperf_metrics,
     _network_analysis,
     _queue_counter_delta,
+    _resolver_diagnostic_status,
+    _resolver_dnssec_summary,
+    _resolver_transport_comparison,
     _udp_metrics,
     network_total_steps,
     parse_ping_output,
@@ -86,7 +91,7 @@ from cloudmark.profiles import (
 )
 from cloudmark.provider import _declared_manifest
 from cloudmark.runner import CancellationToken, JobContext, ProcessResult, RunCancelled, RunTimedOut
-from cloudmark.redis_benchmark import parse_redis_benchmark_csv, redis_analysis, redis_total_steps, validate_redis_run
+from cloudmark.redis_benchmark import parse_redis_benchmark_csv, redis_analysis, redis_total_steps
 from cloudmark.server import CloudMarkController, Handler, Server, _dashboard_run_summaries, _json_bytes
 from cloudmark.suitability import SCENARIO_REQUIREMENTS, _run_valid, evaluate_suitability
 from cloudmark.topology import assess_pairing_topology
@@ -892,6 +897,8 @@ class CloudMarkTests(unittest.TestCase):
                 "request": {
                     "campaign_id": "campaign_test",
                     "campaign_contract_version": "network-campaign-v1",
+                    "confirm_network_load": True,
+                    "confirm_campaign_window": True,
                     "session_id": "session_campaign",
                     "profile": "network-peer-standard",
                     "campaign_window_day": day,
@@ -1025,6 +1032,7 @@ class CloudMarkTests(unittest.TestCase):
             request = submit.call_args.args[0]
             self.assertEqual(request["campaign_id"], campaign["id"])
             self.assertEqual(request["profile"], "network-peer-standard")
+            self.assertTrue(request["confirm_campaign_window"])
             self.assertEqual(request["campaign_window_number"], 1)
             self.assertRegex(request["campaign_window_day"], r"^\d{4}-\d{2}-\d{2}$")
 
@@ -1541,9 +1549,11 @@ class CloudMarkTests(unittest.TestCase):
     def test_agent_normalizes_fixed_dns_outcomes_without_answer_addresses(self) -> None:
         resolved = _parse_dig_response(
             ";; ->>HEADER<<- opcode: QUERY, status: NOERROR, id: 1\n"
+            ";; flags: qr rd ra ad; QUERY: 1, ANSWER: 1\n"
             "example.com. 300 IN A 192.0.2.10\n",
             "",
             record_type="A",
+            transport="udp",
             returncode=0,
             elapsed_ms=4.3219,
         )
@@ -1551,12 +1561,18 @@ class CloudMarkTests(unittest.TestCase):
             "",
             ";; no servers could be reached",
             record_type="AAAA",
+            transport="tcp",
             returncode=9,
             elapsed_ms=2001,
         )
         self.assertEqual(resolved["status"], "resolved")
         self.assertEqual(resolved["answer_count"], 1)
         self.assertEqual(resolved["answer_address_classes"], ["documentation"])
+        self.assertEqual(resolved["transport"], "udp")
+        self.assertFalse(resolved["response_truncated"])
+        self.assertTrue(resolved["dnssec_requested"])
+        self.assertTrue(resolved["authenticated_data"])
+        self.assertFalse(resolved["cloudmark_dnssec_validation_performed"])
         self.assertFalse(resolved["answer_addresses_persisted"])
         self.assertNotIn("192.0.2.10", json.dumps(resolved))
         self.assertEqual(timeout["status"], "timeout")
@@ -1567,7 +1583,7 @@ class CloudMarkTests(unittest.TestCase):
                 returncode=0,
                 stdout=(
                     ";; ->>HEADER<<- opcode: QUERY, status: NOERROR, id: 1\n"
-                    "example.com. 300 IN A 192.0.2.10\n"
+                    ";; flags: qr tc rd ra; QUERY: 1, ANSWER: 0\n"
                 ),
                 stderr="",
             ),
@@ -1575,6 +1591,25 @@ class CloudMarkTests(unittest.TestCase):
                 returncode=0,
                 stdout=(
                     ";; ->>HEADER<<- opcode: QUERY, status: NOERROR, id: 2\n"
+                    ";; flags: qr rd ra ad; QUERY: 1, ANSWER: 1\n"
+                    "example.com. 300 IN AAAA 2001:db8::10\n"
+                ),
+                stderr="",
+            ),
+            SimpleNamespace(
+                returncode=0,
+                stdout=(
+                    ";; ->>HEADER<<- opcode: QUERY, status: NOERROR, id: 3\n"
+                    ";; flags: qr rd ra ad; QUERY: 1, ANSWER: 1\n"
+                    "example.com. 300 IN A 192.0.2.10\n"
+                ),
+                stderr="",
+            ),
+            SimpleNamespace(
+                returncode=0,
+                stdout=(
+                    ";; ->>HEADER<<- opcode: QUERY, status: NOERROR, id: 4\n"
+                    ";; flags: qr rd ra ad; QUERY: 1, ANSWER: 1\n"
                     "example.com. 300 IN AAAA 2001:db8::10\n"
                 ),
                 stderr="",
@@ -1585,12 +1620,138 @@ class CloudMarkTests(unittest.TestCase):
         ), patch("cloudmark.agent.subprocess.run", side_effect=responses) as run:
             evidence = _resolver_evidence()
         self.assertEqual(evidence["status"], "complete")
-        self.assertEqual(len(evidence["queries"]), 2)
-        self.assertEqual(run.call_count, 2)
+        self.assertEqual(evidence["diagnostic_version"], "system-resolver-diagnostic-v3")
+        self.assertEqual(len(evidence["queries"]), 4)
+        self.assertEqual(run.call_count, 4)
         self.assertEqual(run.call_args_list[0].args[0][-2:], ["example.com.", "A"])
         self.assertEqual(run.call_args_list[1].args[0][-2:], ["example.com.", "AAAA"])
+        self.assertEqual(run.call_args_list[2].args[0][-2:], ["example.com.", "A"])
+        self.assertEqual(run.call_args_list[3].args[0][-2:], ["example.com.", "AAAA"])
+        self.assertTrue(all("+notcp" in call.args[0] and "+ignore" in call.args[0] for call in run.call_args_list[:2]))
+        self.assertTrue(all("+tcp" in call.args[0] for call in run.call_args_list[2:]))
+        self.assertTrue(all("+dnssec" in call.args[0] and "+adflag" in call.args[0] for call in run.call_args_list))
         self.assertTrue(all(call.kwargs["timeout"] == 5 for call in run.call_args_list))
         self.assertTrue(all(call.kwargs["shell"] is False for call in run.call_args_list))
+        a_transport = evidence["transport_comparison"][0]
+        self.assertTrue(a_transport["udp_truncated"])
+        self.assertTrue(a_transport["tcp_response_observed"])
+        self.assertTrue(a_transport["truncated_udp_recovered_over_tcp"])
+        self.assertFalse(evidence["queries"][0]["authenticated_data"])
+        self.assertTrue(all(query["dnssec_requested"] for query in evidence["queries"]))
+        self.assertFalse(any(query["cloudmark_dnssec_validation_performed"] for query in evidence["queries"]))
+
+    def test_agent_resolver_probe_records_transport_timeout_without_retrying(self) -> None:
+        no_data = SimpleNamespace(
+            returncode=0,
+            stdout=(
+                ";; ->>HEADER<<- opcode: QUERY, status: NOERROR, id: 1\n"
+                ";; flags: qr rd ra; QUERY: 1, ANSWER: 0\n"
+            ),
+            stderr="",
+        )
+        with patch("cloudmark.agent.Path.open", mock_open(read_data="nameserver 10.0.0.2\n")), patch(
+            "cloudmark.agent.shutil.which",
+            return_value="/usr/bin/dig",
+        ), patch(
+            "cloudmark.agent.subprocess.run",
+            side_effect=[subprocess.TimeoutExpired(["dig"], 5), no_data, no_data, no_data],
+        ) as run:
+            evidence = _resolver_evidence()
+
+        self.assertEqual(evidence["status"], "partial")
+        self.assertEqual(evidence["queries"][0]["record_type"], "A")
+        self.assertEqual(evidence["queries"][0]["transport"], "udp")
+        self.assertEqual(evidence["queries"][0]["status"], "timeout")
+        self.assertEqual(run.call_count, 4)
+
+    def test_controller_bounds_resolver_queries_and_rederives_transport_summary(self) -> None:
+        queries = _bounded_resolver_queries(
+            [
+                {
+                    "record_type": "A",
+                    "transport": "udp",
+                    "status": "resolved",
+                    "dns_status": "NOERROR",
+                    "elapsed_ms": 2.1239,
+                    "answer_count": 1,
+                    "answer_address_classes": ["documentation", "documentation", {"unsafe": True}],
+                    "answer_addresses": ["192.0.2.10"],
+                    "dnssec_requested": True,
+                    "authenticated_data": True,
+                    "cloudmark_dnssec_validation_performed": True,
+                },
+                {
+                    "record_type": "A",
+                    "transport": "tcp",
+                    "status": "resolved",
+                    "elapsed_ms": 2.5,
+                    "dnssec_requested": True,
+                    "authenticated_data": True,
+                },
+                {
+                    "record_type": "AAAA",
+                    "transport": "udp",
+                    "status": "truncated",
+                    "response_truncated": True,
+                    "elapsed_ms": 3.0,
+                    "dnssec_requested": True,
+                    "authenticated_data": False,
+                },
+                {
+                    "record_type": "AAAA",
+                    "transport": "tcp",
+                    "status": "resolved",
+                    "elapsed_ms": 3.5,
+                    "dnssec_requested": True,
+                    "authenticated_data": True,
+                },
+                {"record_type": "TXT", "transport": "udp", "status": "resolved"},
+            ]
+        )
+
+        self.assertEqual(len(queries), 4)
+        self.assertEqual(queries[0]["elapsed_ms"], 2.124)
+        self.assertEqual(queries[0]["answer_address_classes"], ["documentation"])
+        self.assertNotIn("answer_addresses", queries[0])
+        self.assertFalse(queries[0]["answer_addresses_persisted"])
+        self.assertTrue(queries[0]["authenticated_data"])
+        self.assertFalse(queries[0]["cloudmark_dnssec_validation_performed"])
+        rejected_ad = _bounded_resolver_queries(
+            [
+                {
+                    "record_type": "A",
+                    "transport": "udp",
+                    "status": "timeout",
+                    "dnssec_requested": True,
+                    "authenticated_data": True,
+                }
+            ]
+        )
+        self.assertFalse(rejected_ad[0]["authenticated_data"])
+        comparison = _resolver_transport_comparison(queries)
+        self.assertTrue(comparison[1]["udp_truncated"])
+        self.assertTrue(comparison[1]["truncated_udp_recovered_over_tcp"])
+        dnssec = _resolver_dnssec_summary(queries)
+        self.assertTrue(dnssec[0]["authenticated_data_consistent"])
+        self.assertTrue(dnssec[0]["resolver_asserted_authenticated_data"])
+        self.assertFalse(dnssec[1]["authenticated_data_consistent"])
+        self.assertFalse(any(item["cloudmark_dnssec_validation_performed"] for item in dnssec))
+        self.assertEqual(
+            _resolver_diagnostic_status("system-resolver-diagnostic-v3", "observed", queries, "complete"),
+            "complete",
+        )
+        incomplete = [dict(item) for item in queries]
+        incomplete[0]["transport"] = None
+        self.assertEqual(
+            _resolver_diagnostic_status("system-resolver-diagnostic-v3", "observed", incomplete, "complete"),
+            "partial",
+        )
+        missing_dnssec = [dict(item) for item in queries]
+        missing_dnssec[0]["dnssec_requested"] = False
+        self.assertEqual(
+            _resolver_diagnostic_status("system-resolver-diagnostic-v3", "observed", missing_dnssec, "complete"),
+            "partial",
+        )
 
     def test_agent_parses_bounded_ethtool_and_procfs_evidence(self) -> None:
         driver = _parse_ethtool_driver(
@@ -1681,7 +1842,7 @@ Rx Queue#: 0
         self.assertEqual(counters["rx_bytes"], 12000)
         self.assertEqual(counters["rx_errors"], 3)
         self.assertIn("vmxnet3-sectioned-queue", vmxnet3["normalization_families"])
-        self.assertEqual(vmxnet3["normalization_version"], "queue-counters-v2")
+        self.assertEqual(vmxnet3["normalization_version"], "queue-counters-v3")
 
         oversized = _parse_ethtool_queue_statistics(
             "rx_queue_0_bytes: 1000\nrx_queue_0_packets: 18446744073709551616\n"
@@ -1689,6 +1850,51 @@ Rx Queue#: 0
         self.assertEqual(oversized["status"], "partial")
         self.assertEqual(oversized["invalid_numeric_statistics"], 1)
         self.assertNotIn("rx_packets", oversized["queues"][0]["counters"])
+
+    def test_agent_normalizes_intel_and_broadcom_queue_counter_names(self) -> None:
+        intel = _parse_ethtool_queue_statistics(
+            "rx-0.packets: 120\nrx-0.bytes: 12000\ntx-0.packets: 80\ntx-0.bytes: 8000\n"
+        )
+        self.assertEqual(intel["status"], "observed")
+        self.assertEqual(intel["normalization_version"], "queue-counters-v3")
+        self.assertEqual(
+            intel["queues"][0]["counters"],
+            {"rx_bytes": 12000, "rx_packets": 120, "tx_bytes": 8000, "tx_packets": 80},
+        )
+        self.assertIn("intel-hyphen-dot-queue", intel["normalization_families"])
+
+        broadcom = _parse_ethtool_queue_statistics(
+            """
+[0]: rx_bytes: 12000
+[0]: rx_ucast_packets: 90
+[0]: rx_mcast_packets: 20
+[0]: rx_bcast_packets: 10
+[0]: rx_discards: 3
+[0]: tx_bytes: 8000
+[0]: tx_ucast_packets: 70
+[0]: tx_mcast_packets: 5
+[0]: tx_bcast_packets: 5
+[0]: rx_csum_offload_errors: 4
+[128]: rx_bytes: 99999
+"""
+        )
+        counters = broadcom["queues"][0]["counters"]
+        self.assertEqual(broadcom["status"], "observed")
+        self.assertEqual(counters["rx_packets"], 120)
+        self.assertEqual(counters["rx_bytes"], 12000)
+        self.assertEqual(counters["rx_dropped"], 3)
+        self.assertEqual(counters["tx_packets"], 80)
+        self.assertEqual(counters["tx_bytes"], 8000)
+        self.assertNotIn("rx_errors", counters)
+        self.assertIn("broadcom-bracketed-queue", broadcom["normalization_families"])
+        self.assertGreaterEqual(broadcom["unclassified_statistics"], 2)
+
+        ambiguous = _parse_ethtool_queue_statistics(
+            "[0]: rx_packets: 100\n[0]: rx_ucast_packets: 90\n"
+        )
+        self.assertEqual(ambiguous["status"], "partial")
+        self.assertEqual(ambiguous["duplicate_counters"], 1)
+        self.assertEqual(ambiguous["queues"][0]["counters"]["rx_packets"], 100)
 
     def test_agent_normalizes_rss_without_persisting_hash_key(self) -> None:
         evidence = _parse_ethtool_rss_indirection(
@@ -1839,7 +2045,7 @@ RSS hash function:
             return {
                 "queue_counters": {
                     "status": "observed",
-                    "normalization_version": "queue-counters-v2",
+                    "normalization_version": "queue-counters-v3",
                     "observed_at": stamp,
                     "queues": [
                         {"queue": 0, "counters": {"rx_packets": q0, "rx_bytes": q0 * 100, "rx_dropped": 2}},
@@ -1858,7 +2064,7 @@ RSS hash function:
         self.assertEqual(complete["rx_distribution"]["busiest_queue"], 0)
         self.assertEqual(complete["rx_distribution"]["busiest_queue_percent"], 80.0)
         self.assertEqual(complete["rx_byte_distribution"]["busiest_queue_percent"], 80.0)
-        self.assertEqual(complete["normalization_versions"], ["queue-counters-v2"])
+        self.assertEqual(complete["normalization_versions"], ["queue-counters-v3"])
         self.assertEqual(complete["total_dropped"], 0)
 
         reset = _queue_counter_delta(
@@ -2283,6 +2489,7 @@ RSS hash function:
                             if payload.get("resolver_probe") is True:
                                 result["resolver"] = {
                                     "status": "complete",
+                                    "diagnostic_version": "system-resolver-diagnostic-v3",
                                     "scope": "agent-system-resolver-diagnostic",
                                     "observed_at": "2026-08-13T00:00:00+00:00",
                                     "query_name": "example.com.",
@@ -2300,9 +2507,52 @@ RSS hash function:
                                         "options": {},
                                     },
                                     "queries": [
-                                        {"record_type": "A", "status": "resolved", "elapsed_ms": 2.0},
-                                        {"record_type": "AAAA", "status": "resolved", "elapsed_ms": 3.0},
+                                        {
+                                            "record_type": "A",
+                                            "transport": "udp",
+                                            "status": "resolved",
+                                            "elapsed_ms": 2.0,
+                                            "dnssec_requested": True,
+                                            "authenticated_data": True,
+                                        },
+                                        {
+                                            "record_type": "AAAA",
+                                            "transport": "udp",
+                                            "status": "resolved",
+                                            "elapsed_ms": 3.0,
+                                            "dnssec_requested": True,
+                                            "authenticated_data": True,
+                                        },
+                                        {
+                                            "record_type": "A",
+                                            "transport": "tcp",
+                                            "status": "resolved",
+                                            "elapsed_ms": 2.5,
+                                            "dnssec_requested": True,
+                                            "authenticated_data": True,
+                                        },
+                                        {
+                                            "record_type": "AAAA",
+                                            "transport": "tcp",
+                                            "status": "resolved",
+                                            "elapsed_ms": 3.5,
+                                            "dnssec_requested": True,
+                                            "authenticated_data": True,
+                                        },
                                     ],
+                                    "transport_comparison": [
+                                        {
+                                            "record_type": record_type,
+                                            "udp_status": "resolved",
+                                            "tcp_status": "resolved",
+                                            "udp_response_observed": True,
+                                            "tcp_response_observed": True,
+                                            "udp_truncated": False,
+                                            "truncated_udp_recovered_over_tcp": False,
+                                        }
+                                        for record_type in ("A", "AAAA")
+                                    ],
+                                    "transport_policy": "explicit-udp-without-tcp-retry-and-explicit-tcp",
                                     "cache_state": "unknown",
                                     "provider_dns_service_attributed": False,
                                 }
@@ -2468,6 +2718,20 @@ RSS hash function:
             self.assertEqual(result["analysis"]["validity"]["resolver_evidence_status"], "complete")
             self.assertFalse(result["analysis"]["validity"]["resolver_evidence_required"])
             self.assertEqual(len(result["analysis"]["resolver_observations"]), 2)
+            self.assertTrue(
+                all(
+                    item["diagnostic_version"] == "system-resolver-diagnostic-v3"
+                    and len(item["queries"]) == 4
+                    and len(item["transport_comparison"]) == 2
+                    and len(item["dnssec_summary"]) == 2
+                    and all(
+                        dnssec["resolver_asserted_authenticated_data"]
+                        and not dnssec["cloudmark_dnssec_validation_performed"]
+                        for dnssec in item["dnssec_summary"]
+                    )
+                    for item in result["analysis"]["resolver_observations"]
+                )
+            )
             self.assertEqual(result["analysis"]["validity"]["steering_evidence_status"], "complete")
             self.assertFalse(result["analysis"]["validity"]["steering_evidence_required"])
             self.assertEqual(len(result["analysis"]["steering_observations"]), 2)
@@ -5687,6 +5951,7 @@ max: 1.50
                 )
                 self.assertIn("sessions", dashboard)
                 self.assertEqual(dashboard["network_campaigns"], [])
+                self.assertEqual(dashboard["storage_campaigns"], [])
                 self.assertEqual(dashboard["suitability"]["engine_version"], "suitability-v1")
                 self.assertFalse(dashboard["suitability"]["policy"]["missing_evidence_is_zero"])
                 with urllib.request.urlopen(f"{base}/suitability", timeout=5) as response:
@@ -5704,6 +5969,9 @@ max: 1.50
                 with urllib.request.urlopen(f"{base}/network-campaigns", timeout=5) as response:
                     campaigns = json.load(response)
                 self.assertEqual(campaigns["items"], [])
+                with urllib.request.urlopen(f"{base}/storage-campaigns", timeout=5) as response:
+                    storage_campaigns = json.load(response)
+                self.assertEqual(storage_campaigns["items"], [])
                 controller.database.create_session(
                     "session_http_campaign",
                     "HTTP campaign pair",

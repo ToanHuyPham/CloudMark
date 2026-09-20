@@ -104,6 +104,11 @@ def create_plan(packs: list[str]) -> BootstrapPlan:
 
 
 def execute_plan(plan: BootstrapPlan) -> list[dict[str, Any]]:
+    if not plan.commands:
+        raise RuntimeError(
+            "Bootstrap plan has no executable package-manager commands. "
+            "Review the plan notes and install the required tools manually."
+        )
     if os.name != "nt" and hasattr(os, "geteuid") and os.geteuid() != 0:
         raise PermissionError("Bootstrap requires root. Re-run with sudo.")
     results: list[dict[str, Any]] = []
