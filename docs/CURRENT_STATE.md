@@ -335,7 +335,10 @@ baseline is still the repository head.
   hosted matrix run exposed and fixed Python 3.9 popcount compatibility, a
   test-only global `os.name` mutation that selected `WindowsPath` on Linux, and
   a Windows-runner temp path crossing the intentionally strict Linux MySQL
-  socket bound; production safety limits were preserved;
+  socket bound; production safety limits were preserved. An unsupported pnpm
+  setup input was also replaced with an explicit `pnpm install
+  --frozen-lockfile` step, removing CI warnings while retaining lockfile
+  enforcement;
 - repository-level Codex guidance, durable handoff documentation, consistent
   SQLite runtime snapshots, guarded secret backup, recoverable restore, and
   safe Windows local-process launch/stop scripts;

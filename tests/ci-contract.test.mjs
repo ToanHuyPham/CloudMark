@@ -28,13 +28,14 @@ test("keeps CI least-privilege, immutable, cross-platform, and non-load-bearing"
   assert.ok(actions.every((action) => /@[0-9a-f]{40}$/.test(action)));
   const pnpmSetup = steps.find((step) => step.name === "Set up pnpm and Node.js");
   assert.equal(pnpmSetup.with.runtime, "node@22.23.2");
-  assert.equal(pnpmSetup.with["require-lockfile"], true);
+  assert.equal(pnpmSetup.with.install, false);
 
   const commands = steps.map((step) => step.run || "").join("\n");
   assert.match(commands, /ruff check cloudmark tests_python scripts/);
   assert.match(commands, /coverage run -m unittest discover -s tests_python -v/);
   assert.match(commands, /coverage report/);
   assert.match(commands, /pnpm run lint/);
+  assert.match(commands, /pnpm install --frozen-lockfile/);
   assert.match(commands, /pnpm run typecheck/);
   assert.match(commands, /pnpm run validate:openapi/);
   assert.match(commands, /pnpm test/);
