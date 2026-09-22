@@ -3203,6 +3203,8 @@ Latency (ms):
                 return completed
 
             with patch("cloudmark.agent.os.name", "posix"), patch(
+                "cloudmark.agent.os.fsencode", return_value=b"/short/mysql.sock"
+            ), patch(
                 "cloudmark.agent.find_mysql_binary", side_effect=lambda name: tool_paths.get(name)
             ), patch("cloudmark.agent.mysql_tool_supports", return_value=True), patch.object(
                 worker, "_guarded_service_process", return_value=(0, "", "")

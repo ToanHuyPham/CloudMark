@@ -871,7 +871,7 @@ def _parse_cpu_mask(value: str) -> dict[str, Any] | None:
         return None
     return {
         "mask": normalized,
-        "cpu_count": int(compact, 16).bit_count(),
+        "cpu_count": bin(int(compact, 16)).count("1"),
     }
 
 

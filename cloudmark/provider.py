@@ -155,8 +155,8 @@ def _gcp() -> dict[str, Any] | None:
     }
 
 
-def _declared_manifest() -> dict[str, Any] | None:
-    candidates = []
+def _provider_manifest_candidates() -> list[Path]:
+    candidates: list[Path] = []
     if os.environ.get("CLOUDMARK_PROVIDER_MANIFEST"):
         candidates.append(Path(os.environ["CLOUDMARK_PROVIDER_MANIFEST"]))
     if os.name == "nt":
@@ -165,7 +165,11 @@ def _declared_manifest() -> dict[str, Any] | None:
             candidates.append(Path(program_data) / "CloudMark" / "provider.json")
     else:
         candidates.append(Path("/etc/cloudmark/provider.json"))
-    for path in candidates:
+    return candidates
+
+
+def _declared_manifest() -> dict[str, Any] | None:
+    for path in _provider_manifest_candidates():
         try:
             value = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):

@@ -153,9 +153,9 @@ class ProviderDetectionTests(unittest.TestCase):
                 encoding="utf-8",
             )
             with patch.dict(os.environ, {"CLOUDMARK_PROVIDER_MANIFEST": str(manifest)}, clear=True), patch.object(
-                provider.os,
-                "name",
-                "nt",
+                provider,
+                "_provider_manifest_candidates",
+                return_value=[manifest],
             ):
                 detected = provider._declared_manifest()
         self.assertEqual(detected["provider"], "Regional Cloud")
@@ -168,16 +168,16 @@ class ProviderDetectionTests(unittest.TestCase):
             manifest = Path(directory) / "provider.json"
             manifest.write_text("[]", encoding="utf-8")
             with patch.dict(os.environ, {"CLOUDMARK_PROVIDER_MANIFEST": str(manifest)}, clear=True), patch.object(
-                provider.os,
-                "name",
-                "nt",
+                provider,
+                "_provider_manifest_candidates",
+                return_value=[manifest],
             ):
                 self.assertIsNone(provider._declared_manifest())
             manifest.write_text(json.dumps({"provider": "x" * 161}), encoding="utf-8")
             with patch.dict(os.environ, {"CLOUDMARK_PROVIDER_MANIFEST": str(manifest)}, clear=True), patch.object(
-                provider.os,
-                "name",
-                "nt",
+                provider,
+                "_provider_manifest_candidates",
+                return_value=[manifest],
             ):
                 self.assertIsNone(provider._declared_manifest())
 

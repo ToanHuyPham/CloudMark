@@ -1,6 +1,6 @@
 # CloudMark current state
 
-Last updated: 2026-09-20
+Last updated: 2026-09-22
 
 ## Repository baseline
 
@@ -331,7 +331,11 @@ baseline is still the repository head.
   tests without starting load. A pinned
   optional Python quality environment adds Ruff 0.16.7 `E9`/`F` checks and
   coverage.py 7.10.7 branch measurement compatible with the Python 3.9 floor;
-  the clean local baseline is 75.5% and CI enforces a 70.0% minimum;
+  the clean local baseline is 75.5% and CI enforces a 70.0% minimum. The first
+  hosted matrix run exposed and fixed Python 3.9 popcount compatibility, a
+  test-only global `os.name` mutation that selected `WindowsPath` on Linux, and
+  a Windows-runner temp path crossing the intentionally strict Linux MySQL
+  socket bound; production safety limits were preserved;
 - repository-level Codex guidance, durable handoff documentation, consistent
   SQLite runtime snapshots, guarded secret backup, recoverable restore, and
   safe Windows local-process launch/stop scripts;
