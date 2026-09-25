@@ -76,7 +76,6 @@ from .mysql_benchmark import MYSQL_PORT, MySQLBenchmarkError, parse_sysbench_mys
 from .redis_benchmark import REDIS_PORT, RedisBenchmarkError, parse_redis_benchmark_csv
 from .web_benchmark import (
     H2LOAD_LOG_MAX_BYTES,
-    H2LOAD_LOG_MAX_ROWS,
     WEB_ALLOWED_CONCURRENCY,
     WEB_ALLOWED_PATHS,
     WEB_ALLOWED_PORTS,
@@ -99,7 +98,10 @@ SERVICE_CONTROLLER_CONTACT_TIMEOUT_SECONDS = 20
 PATH_PROBE_MAX_HOPS = 8
 DNS_PROBE_NAME = "example.com."
 DNS_PROBE_RECORD_TYPES = ("A", "AAAA")
+DNS_PROBE_TRANSPORTS = ("udp", "tcp")
 DNS_PROBE_TIMEOUT_SECONDS = 5
+DNS_DIAGNOSTIC_VERSION = "system-resolver-diagnostic-v3"
+DNS_OBSERVED_STATUSES = {"resolved", "no-data", "negative", "truncated"}
 RESOLVER_CONFIG_MAX_BYTES = 65_536
 NETWORK_INTERFACE_PATTERN = re.compile(r"^[A-Za-z0-9_.:@-]{1,64}$")
 NETWORK_QUEUE_MAX_INDEX = 127
@@ -109,7 +111,7 @@ NETWORK_STEERING_MAX_MASK_BYTES = 4096
 NETWORK_RSS_MAX_ENTRIES = 4096
 NETWORK_RSS_MAX_LINES = 4096
 NETWORK_COUNTER_MAX = 2**64 - 1
-NETWORK_QUEUE_NORMALIZATION_VERSION = "queue-counters-v2"
+NETWORK_QUEUE_NORMALIZATION_VERSION = "queue-counters-v3"
 NETWORK_QUEUE_METRIC_ALIASES = {
     "bytes": "bytes",
     "pkt": "packets",
@@ -145,12 +147,23 @@ NETWORK_QUEUE_STAT_PATTERNS = (
         re.compile(rf"^(?P<direction>rx|tx)(?P<queue>\d+)_(?P<metric>{NETWORK_QUEUE_METRIC_PATTERN})$"),
     ),
     (
+        "intel-hyphen-dot-queue",
+        re.compile(r"^(?P<direction>rx|tx)-(?P<queue>\d+)\.(?P<metric>packets|bytes)$"),
+    ),
+    (
         "mana-direction-queue",
         re.compile(rf"^(?P<direction>rx|tx)_(?P<queue>\d+)_(?P<metric>{NETWORK_QUEUE_METRIC_PATTERN})$"),
     ),
     (
         "gve-bracketed-queue",
         re.compile(rf"^(?P<direction>rx|tx)_(?P<metric>{NETWORK_QUEUE_METRIC_PATTERN})\[(?P<queue>\d+)\]$"),
+    ),
+    (
+        "broadcom-bracketed-queue",
+        re.compile(
+            r"^\[(?P<queue>\d+)\]: (?P<direction>rx|tx)_"
+            r"(?:(?P<component>ucast|mcast|bcast)_)?(?P<metric>packets|bytes|discards)$"
+        ),
     ),
 )
 VMXNET3_QUEUE_MARKER = re.compile(r"^(rx|tx) queue#$")
@@ -422,12 +435,17 @@ def _parse_dig_response(
     stderr: str,
     *,
     record_type: str,
+    transport: str,
     returncode: int,
     elapsed_ms: float,
 ) -> dict[str, Any]:
     """Normalize one fixed dig query without retaining returned addresses."""
     header = re.search(r"status:\s*([A-Z0-9_-]+)", stdout, re.IGNORECASE)
     dns_status = header.group(1).upper() if header else None
+    flags_match = re.search(r"flags:\s*([^;]*);", stdout, re.IGNORECASE)
+    response_flags = set(flags_match.group(1).lower().split()) if flags_match else set()
+    response_truncated = "tc" in response_flags
+    authenticated_data = "ad" in response_flags
     address_classes: list[str] = []
     answer_count = 0
     for line in stdout.splitlines():
@@ -451,6 +469,8 @@ def _parse_dig_response(
             if "timed out" in combined_error or "no servers could be reached" in combined_error
             else "error"
         )
+    elif response_truncated:
+        status = "truncated"
     elif dns_status == "NOERROR" and answer_count:
         status = "resolved"
     elif dns_status == "NOERROR":
@@ -463,8 +483,13 @@ def _parse_dig_response(
         status = "error"
     result: dict[str, Any] = {
         "record_type": record_type,
+        "transport": transport,
         "status": status,
         "dns_status": dns_status,
+        "response_truncated": response_truncated,
+        "dnssec_requested": True,
+        "authenticated_data": authenticated_data,
+        "cloudmark_dnssec_validation_performed": False,
         "elapsed_ms": round(elapsed_ms, 3),
         "answer_count": answer_count,
         "answer_address_classes": address_classes,
@@ -474,11 +499,39 @@ def _parse_dig_response(
         result["reason"] = (
             stderr.strip() or "The fixed resolver query did not return a successful DNS response."
         )[:256]
+    elif status == "truncated":
+        result["reason"] = "The fixed DNS response set the truncation flag."
     return result
 
 
+def _resolver_transport_comparison(queries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    comparisons: list[dict[str, Any]] = []
+    for record_type in DNS_PROBE_RECORD_TYPES:
+        by_transport = {
+            str(item.get("transport")): item
+            for item in queries
+            if item.get("record_type") == record_type and item.get("transport") in DNS_PROBE_TRANSPORTS
+        }
+        udp_status = str((by_transport.get("udp") or {}).get("status", "unavailable"))
+        tcp_status = str((by_transport.get("tcp") or {}).get("status", "unavailable"))
+        comparisons.append(
+            {
+                "record_type": record_type,
+                "udp_status": udp_status,
+                "tcp_status": tcp_status,
+                "udp_response_observed": udp_status in DNS_OBSERVED_STATUSES,
+                "tcp_response_observed": tcp_status in DNS_OBSERVED_STATUSES,
+                "udp_truncated": udp_status == "truncated",
+                "truncated_udp_recovered_over_tcp": (
+                    udp_status == "truncated" and tcp_status in DNS_OBSERVED_STATUSES - {"truncated"}
+                ),
+            }
+        )
+    return comparisons
+
+
 def _resolver_evidence() -> dict[str, Any]:
-    """Collect one bounded diagnostic observation through the system resolver."""
+    """Collect bounded fixed UDP and TCP diagnostics through the system resolver."""
     observed_at = datetime.now(timezone.utc).isoformat()
     try:
         with Path("/etc/resolv.conf").open("r", encoding="utf-8", errors="replace") as handle:
@@ -503,55 +556,67 @@ def _resolver_evidence() -> dict[str, Any]:
     if dig:
         environment = os.environ.copy()
         environment["LC_ALL"] = "C"
-        for record_type in DNS_PROBE_RECORD_TYPES:
-            command = [
-                dig,
-                "+tries=1",
-                "+time=2",
-                "+nocmd",
-                "+noquestion",
-                "+noauthority",
-                "+noadditional",
-                "+comments",
-                "+answer",
-                DNS_PROBE_NAME,
-                record_type,
-            ]
-            started = time.monotonic()
-            try:
-                result = subprocess.run(
-                    command,
-                    capture_output=True,
-                    text=True,
-                    timeout=DNS_PROBE_TIMEOUT_SECONDS,
-                    check=False,
-                    shell=False,
-                    env=environment,
-                )
-                queries.append(
-                    _parse_dig_response(
-                        result.stdout,
-                        result.stderr,
-                        record_type=record_type,
-                        returncode=result.returncode,
-                        elapsed_ms=(time.monotonic() - started) * 1000,
+        for transport in DNS_PROBE_TRANSPORTS:
+            transport_options = ["+notcp", "+ignore"] if transport == "udp" else ["+tcp"]
+            for record_type in DNS_PROBE_RECORD_TYPES:
+                command = [
+                    dig,
+                    "+tries=1",
+                    "+time=2",
+                    *transport_options,
+                    "+dnssec",
+                    "+adflag",
+                    "+nocmd",
+                    "+noquestion",
+                    "+noauthority",
+                    "+noadditional",
+                    "+comments",
+                    "+answer",
+                    DNS_PROBE_NAME,
+                    record_type,
+                ]
+                started = time.monotonic()
+                try:
+                    result = subprocess.run(
+                        command,
+                        capture_output=True,
+                        text=True,
+                        timeout=DNS_PROBE_TIMEOUT_SECONDS,
+                        check=False,
+                        shell=False,
+                        env=environment,
                     )
-                )
-            except subprocess.TimeoutExpired:
-                queries.append(
-                    {
-                        "record_type": record_type,
-                        "status": "timeout",
-                        "dns_status": None,
-                        "elapsed_ms": round((time.monotonic() - started) * 1000, 3),
-                        "answer_count": 0,
-                        "answer_address_classes": [],
-                        "answer_addresses_persisted": False,
-                        "reason": "The fixed resolver query exceeded its guarded timeout.",
-                    }
-                )
-    observed_queries = [item for item in queries if item["status"] in {"resolved", "no-data", "negative"}]
-    if configuration.get("status") == "observed" and len(observed_queries) == len(DNS_PROBE_RECORD_TYPES):
+                    queries.append(
+                        _parse_dig_response(
+                            result.stdout,
+                            result.stderr,
+                            record_type=record_type,
+                            transport=transport,
+                            returncode=result.returncode,
+                            elapsed_ms=(time.monotonic() - started) * 1000,
+                        )
+                    )
+                except subprocess.TimeoutExpired:
+                    queries.append(
+                        {
+                            "record_type": record_type,
+                            "transport": transport,
+                            "status": "timeout",
+                            "dns_status": None,
+                            "response_truncated": False,
+                            "dnssec_requested": True,
+                            "authenticated_data": False,
+                            "cloudmark_dnssec_validation_performed": False,
+                            "elapsed_ms": round((time.monotonic() - started) * 1000, 3),
+                            "answer_count": 0,
+                            "answer_address_classes": [],
+                            "answer_addresses_persisted": False,
+                            "reason": "The fixed resolver query exceeded its guarded timeout.",
+                        }
+                    )
+    observed_queries = [item for item in queries if item["status"] in DNS_OBSERVED_STATUSES]
+    expected_query_count = len(DNS_PROBE_RECORD_TYPES) * len(DNS_PROBE_TRANSPORTS)
+    if configuration.get("status") == "observed" and len(observed_queries) == expected_query_count:
         status = "complete"
     elif configuration.get("status") in {"observed", "partial"} or observed_queries:
         status = "partial"
@@ -559,18 +624,28 @@ def _resolver_evidence() -> dict[str, Any]:
         status = "unavailable"
     evidence: dict[str, Any] = {
         "status": status,
+        "diagnostic_version": DNS_DIAGNOSTIC_VERSION,
         "scope": "agent-system-resolver-diagnostic",
         "observed_at": observed_at,
         "query_name": DNS_PROBE_NAME,
         "query_name_policy": "fixed-iana-reserved-example-domain",
         "configuration": configuration,
         "queries": queries,
-        "tool": {"name": "dig" if dig else None, "timeout_seconds": DNS_PROBE_TIMEOUT_SECONDS},
+        "transport_comparison": _resolver_transport_comparison(queries),
+        "transport_policy": "explicit-udp-without-tcp-retry-and-explicit-tcp",
+        "dnssec_policy": "request-dnssec-and-observe-resolver-ad-without-local-validation",
+        "tool": {
+            "name": "dig" if dig else None,
+            "timeout_seconds": DNS_PROBE_TIMEOUT_SECONDS,
+            "maximum_query_count": expected_query_count,
+        },
         "cache_state": "unknown",
         "provider_dns_service_attributed": False,
         "limitations": [
             "The system resolver may use a local stub, cache, split DNS, or an upstream service not visible to CloudMark.",
-            "A single bounded lookup is diagnostic evidence, not a provider DNS latency or availability benchmark.",
+            "Explicit UDP and TCP queries are diagnostic evidence, not a provider DNS latency or availability benchmark.",
+            "TCP reachability does not prove that automatic fallback was triggered unless the UDP response was truncated.",
+            "The AD flag is asserted by the configured resolver; CloudMark does not independently validate DNSSEC signatures.",
         ],
     }
     if not dig:
@@ -621,7 +696,7 @@ def _parse_ethtool_features(stdout: str) -> dict[str, dict[str, bool]]:
     return features
 
 
-def _queue_stat_identity(name: str) -> tuple[int, str, str] | None:
+def _queue_stat_identity(name: str) -> tuple[int, str, str, bool] | None:
     for family, pattern in NETWORK_QUEUE_STAT_PATTERNS:
         match = pattern.fullmatch(name)
         if not match:
@@ -635,7 +710,12 @@ def _queue_stat_identity(name: str) -> tuple[int, str, str] | None:
         if queue > NETWORK_QUEUE_MAX_INDEX:
             return None
         metric = values["metric"]
-        return queue, f"{direction}_{NETWORK_QUEUE_METRIC_ALIASES[metric]}", family
+        return (
+            queue,
+            f"{direction}_{NETWORK_QUEUE_METRIC_ALIASES[metric]}",
+            family,
+            values.get("component") is not None,
+        )
     return None
 
 
@@ -648,10 +728,12 @@ def _parse_ethtool_queue_statistics(stdout: str) -> dict[str, Any]:
     duplicate_counters = 0
     invalid_numeric_statistics = 0
     invalid_normalized_fields: set[tuple[int, str]] = set()
+    additive_normalized_fields: set[tuple[int, str]] = set()
+    additive_sources: set[tuple[int, str, str]] = set()
     normalization_families: set[str] = set()
     vmxnet3_context: tuple[str, int] | None = None
     for line in lines[:NETWORK_QUEUE_MAX_STAT_LINES]:
-        key, separator, raw_value = line.partition(":")
+        key, separator, raw_value = line.rpartition(":")
         if not separator:
             continue
         normalized_key = re.sub(r"\s+", " ", key.strip().lower())
@@ -699,20 +781,28 @@ def _parse_ethtool_queue_statistics(stdout: str) -> dict[str, Any]:
             family = "vmxnet3-sectioned-queue"
             additive = normalized_key in VMXNET3_COMPONENT_COUNTERS
         else:
-            queue, field, family = identity
-            additive = False
+            queue, field, family, additive = identity
         counters = queues.setdefault(queue, {})
         normalization_families.add(family)
         if additive:
-            if (queue, field) in invalid_normalized_fields:
+            normalized_field = (queue, field)
+            source = (queue, field, normalized_key)
+            if normalized_field in invalid_normalized_fields:
                 continue
+            if source in additive_sources or (
+                field in counters and normalized_field not in additive_normalized_fields
+            ):
+                duplicate_counters += 1
+                continue
+            additive_sources.add(source)
             combined_value = counters.get(field, 0) + numeric_value
             if combined_value > NETWORK_COUNTER_MAX:
                 counters.pop(field, None)
-                invalid_normalized_fields.add((queue, field))
+                invalid_normalized_fields.add(normalized_field)
                 invalid_numeric_statistics += 1
                 continue
             counters[field] = combined_value
+            additive_normalized_fields.add(normalized_field)
             continue
         if field in counters:
             duplicate_counters += 1
@@ -781,7 +871,7 @@ def _parse_cpu_mask(value: str) -> dict[str, Any] | None:
         return None
     return {
         "mask": normalized,
-        "cpu_count": int(compact, 16).bit_count(),
+        "cpu_count": bin(int(compact, 16)).count("1"),
     }
 
 

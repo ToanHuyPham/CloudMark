@@ -10,8 +10,10 @@
     "dev": "vinext dev",
     "build": "vinext build",
     "start": "vinext start",
-    "test": "pnpm run build && node --test tests/rendered-html.test.mjs",
-    "lint": "eslint . --ignore-pattern dist --ignore-pattern .next"
+    "test": "pnpm run build && node --test tests/rendered-html.test.mjs tests/ci-contract.test.mjs",
+    "lint": "eslint . --ignore-pattern dist --ignore-pattern .next --ignore-pattern .tmp --ignore-pattern .venv --ignore-pattern htmlcov --max-warnings 0",
+    "typecheck": "tsc --noEmit",
+    "validate:openapi": "node scripts/validate-openapi.mjs"
   },
   "dependencies": {
     "next": "16.2.6",
@@ -28,6 +30,7 @@
     "@vitejs/plugin-rsc": "0.5.26",
     "eslint": "9.39.4",
     "eslint-config-next": "16.2.6",
+    "js-yaml": "4.3.1",
     "react-server-dom-webpack": "19.2.6",
     "tailwindcss": "4.2.1",
     "typescript": "5.9.3",

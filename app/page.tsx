@@ -33,11 +33,50 @@ type Disk = {
   health?: string;
 };
 
+type MemoryEnvironment = {
+  methodology_version: "memory-environment-v1" | "memory-environment-v2";
+  observed_at?: string;
+  platform: string;
+  evidence_status: "complete" | "partial" | "unavailable";
+  scope: "guest-visible-linux-numa-topology";
+  page_size_bytes?: number | null;
+  node_count: number;
+  online_node_ids: number[];
+  numa_exposed: boolean;
+  remote_node_penalty_measured: false;
+  paging?: {
+    status: "observed" | "partial" | "unavailable";
+    snapshot_only: true;
+    pressure_measured: false;
+    swap_total_bytes?: number | null;
+    swap_free_bytes?: number | null;
+    swap_used_bytes?: number | null;
+    swap_used_percent?: number | null;
+    anonymous_huge_pages_bytes?: number | null;
+    huge_page_size_bytes?: number | null;
+    huge_pages_total?: number | null;
+    huge_pages_free?: number | null;
+    transparent_hugepage?: { status: string; enabled_policy?: string | null; defrag_policy?: string | null };
+    zswap?: { status: string; enabled?: boolean | null };
+  };
+  nodes: {
+    node: number;
+    status: "observed" | "partial";
+    cpu_list?: string | null;
+    cpu_count?: number | null;
+    memory_total_bytes?: number | null;
+    memory_free_bytes?: number | null;
+    distances: { target_node: number; distance: number }[];
+    reason?: string;
+  }[];
+  reason?: string;
+};
+
 type Inventory = {
   hostname: string;
   os: { system: string; release: string; distribution: string; architecture: string };
   cpu: { model: string; logical_cores: number };
-  memory: { total_bytes?: number };
+  memory: { total_bytes?: number; environment?: MemoryEnvironment };
   virtualization: { type: string; technology?: string };
   disks: Disk[];
   network: { addresses: { family: string; address: string }[] };
@@ -158,6 +197,7 @@ type NetworkEndpoint = { id: string; name: string; role: string; address?: strin
 
 type NetworkResolverEvidence = {
   status: "complete" | "partial" | "unavailable";
+  diagnostic_version?: "system-resolver-diagnostic-v1" | "system-resolver-diagnostic-v2" | "system-resolver-diagnostic-v3";
   observed_at?: string;
   scope?: string;
   query_name?: string;
@@ -171,12 +211,37 @@ type NetworkResolverEvidence = {
   };
   queries: {
     record_type: "A" | "AAAA";
-    status: "resolved" | "no-data" | "negative" | "timeout" | "error" | "response-error";
+    transport?: "udp" | "tcp" | null;
+    status: "resolved" | "no-data" | "negative" | "truncated" | "timeout" | "error" | "response-error";
     dns_status?: string | null;
+    response_truncated?: boolean;
+    dnssec_requested?: boolean;
+    authenticated_data?: boolean;
+    cloudmark_dnssec_validation_performed?: false;
     elapsed_ms?: number;
     answer_count?: number;
     answer_address_classes?: string[];
+    answer_addresses_persisted?: false;
   }[];
+  transport_comparison?: {
+    record_type: "A" | "AAAA";
+    udp_status: string;
+    tcp_status: string;
+    udp_response_observed: boolean;
+    tcp_response_observed: boolean;
+    udp_truncated: boolean;
+    truncated_udp_recovered_over_tcp: boolean;
+  }[];
+  transport_policy?: "explicit-udp-without-tcp-retry-and-explicit-tcp" | null;
+  dnssec_summary?: {
+    record_type: "A" | "AAAA";
+    udp_authenticated_data: boolean;
+    tcp_authenticated_data: boolean;
+    authenticated_data_consistent: boolean;
+    resolver_asserted_authenticated_data: boolean;
+    cloudmark_dnssec_validation_performed: false;
+  }[];
+  dnssec_policy?: "request-dnssec-and-observe-resolver-ad-without-local-validation" | null;
   cache_state?: "unknown";
   provider_dns_service_attributed?: false;
   reason?: string;
@@ -531,6 +596,35 @@ type SecurityPosture = {
   };
 };
 
+type SystemPreflight = {
+  cpu_execution_boundary?: {
+    host_logical_cores: number;
+    affinity_logical_cores?: number | null;
+    effective_logical_cores: number;
+    affinity_respected: boolean;
+    cpu_ids_persisted: false;
+    cgroup_cpu_quota_applied: boolean;
+    cgroup_cpu_quota_verified: boolean;
+    cgroup_version?: "v1" | "v2" | null;
+    quota_capacity_cores?: number | null;
+    quota_thread_ceiling?: number | null;
+    quota_levels_checked: number;
+    quota_limiting_ancestor_depth?: number | null;
+  };
+  memory_allocation_boundary?: {
+    status: "observed" | "partial";
+    host_available_bytes?: number | null;
+    cgroup_version?: "v1" | "v2" | null;
+    cgroup_limit_bytes?: number | null;
+    cgroup_current_bytes?: number | null;
+    cgroup_headroom_bytes?: number | null;
+    cgroup_levels_checked: number;
+    cgroup_limiting_ancestor_depth?: number | null;
+    effective_available_bytes?: number | null;
+    cgroup_path_persisted: false;
+  };
+};
+
 type Run = {
   id: string;
   suite: string;
@@ -550,6 +644,7 @@ type Run = {
   tool_version?: string;
   request?: { agent_id?: string; execution?: "controller-host" | "remote-agent" };
   result?: {
+    preflight?: SystemPreflight;
     jobs?: StorageMetric[];
     filesystem_operations?: FilesystemMetric[];
     storage_environment?: StorageEnvironment;
@@ -905,6 +1000,61 @@ type NetworkCampaign = {
   claim: string;
 };
 
+type StorageCampaign = {
+  id: string;
+  label: string;
+  status: "active" | "completed" | "superseded" | "invalid";
+  contract_version: "storage-campaign-v1";
+  profile: string;
+  profile_version: string;
+  methodology_version: string;
+  target_id: string;
+  baseline_run_id: string;
+  storage_contract: string;
+  contract: {
+    target: {
+      id: string;
+      hostname: string;
+      provider: string;
+      provider_source: string;
+      instance_type: string;
+      region: string;
+      zone: string;
+      operating_system: string;
+      operating_system_release: string;
+      architecture: string;
+    };
+    baseline: { run_id: string; window_day: string };
+    window_policy: {
+      dispatch: "manual-confirmation-only";
+      calendar: "UTC-completion-day";
+      maximum_valid_windows_per_day: 1;
+      target_distinct_utc_days: number;
+    };
+  };
+  progress: {
+    valid_windows: number;
+    target_windows: number;
+    remaining_windows: number;
+    distinct_utc_days: string[];
+    valid_run_ids: string[];
+    attempts: number;
+    failed_attempts: number;
+    active_run_id?: string | null;
+  };
+  next_window: {
+    eligible: boolean;
+    reason_code: string;
+    earliest_at?: string | null;
+    window_number: number;
+    attempt_number: number;
+    window_day: string;
+  };
+  baseline: { run_id: string; window_day?: string | null; valid: boolean; reason_code: string };
+  evidence_status: "partial" | "complete";
+  claim: string;
+};
+
 type Scenario = { id: string; label: string; status: "available" | "partial" | "roadmap"; primary: string; coverage: string };
 type AssessmentDomain = { id: string; label: string; status: "available" | "partial" | "roadmap"; summary: string };
 
@@ -1053,6 +1203,7 @@ type Dashboard = {
   runs: Run[];
   sessions: Session[];
   network_campaigns: NetworkCampaign[];
+  storage_campaigns: StorageCampaign[];
   suitability?: SuitabilityReport;
   profiles: {
     compute: Record<string, { label: string; description: string; estimated_minutes: number; profile_version: string; methodology_version: string; jobs: { name: string }[] }>;
@@ -1191,6 +1342,14 @@ function campaignReasonLabel(reason: string) {
     "campaign-session-unavailable": "Pairing session is unavailable",
     "campaign-session-contract-mismatch": "Pair identity or topology changed",
     "campaign-agents-not-ready": "Both contracted Agents must be online",
+    "campaign-target-contract-mismatch": "Target identity changed from the baseline",
+    "campaign-target-offline": "The contracted target Agent is offline",
+    "baseline-run-unavailable": "The immutable baseline Run is unavailable",
+    "baseline-window-mismatch": "The baseline completion window changed",
+    "storage-contract-mismatch": "Filesystem, block policy, or executor changed",
+    "storage-contract-unverified": "Storage environment or executor evidence is incomplete",
+    "completion-window-mismatch": "The Run completed in another UTC-day window",
+    "duplicate-utc-window": "A valid Run already represents this UTC day",
   }[reason] || reason.replaceAll("-", " ");
 }
 
@@ -1281,6 +1440,7 @@ export default function Home() {
   const allAgents = dashboard?.sessions.flatMap((session) => session.agents) || [];
   const selectedExecutionAgent = allAgents.find((agent) => agent.id === selectedExecutionTarget);
   const executionInventory = selectedExecutionAgent?.system.inventory || (selectedExecutionTarget === "local" ? inventory : undefined);
+  const memoryEnvironment = executionInventory?.memory?.environment;
   const executionTargetLabel = selectedExecutionAgent?.name || "Controller host";
   const executionTargetOnline = selectedExecutionTarget === "local" || selectedExecutionAgent?.status === "online";
   const memoryReady = executionInventory?.os?.system === "Linux" && Boolean(executionInventory.capabilities?.gcc);
@@ -1319,6 +1479,9 @@ export default function Home() {
   );
   const computeJobs = latestCompute?.result?.compute_jobs || [];
   const memoryJobs = latestMemory?.result?.memory_jobs || [];
+  const latestSystemBoundaryRun = dashboard?.runs.find((run) => ["compute", "memory"].includes(run.suite) && run.status === "completed" && run.result?.preflight?.cpu_execution_boundary);
+  const latestCpuBoundary = latestSystemBoundaryRun?.result?.preflight?.cpu_execution_boundary;
+  const latestMemoryBoundary = latestSystemBoundaryRun?.result?.preflight?.memory_allocation_boundary;
   const maxComputeRate = Math.max(1, ...computeJobs.map((job) => job.metrics.events_per_second || 0));
   const maxMemoryRate = Math.max(1, ...memoryJobs.map((job) => job.metrics.bandwidth_bytes_per_second || 0));
   const activeNetwork = dashboard?.runs.find(
@@ -1462,6 +1625,15 @@ export default function Home() {
   const storageEnvironment = latestStorage?.result?.storage_environment;
   const storageMount = storageEnvironment?.mount;
   const storageBlockDevice = storageEnvironment?.block_device;
+  const storageCampaigns = dashboard?.storage_campaigns || [];
+  const selectedStorageCampaign = storageCampaigns.find(
+    (campaign) => campaign.status === "active"
+      && campaign.target_id === (selectedExecutionAgent?.id || "controller")
+      && campaign.profile === selectedStorageProfile,
+  ) || storageCampaigns.find(
+    (campaign) => campaign.target_id === (selectedExecutionAgent?.id || "controller")
+      && campaign.profile === selectedStorageProfile,
+  );
   const bandwidthTimeline = useMemo(() => {
     const job = storageJobs[storageJobs.length - 1];
     const points = job?.time_series?.bandwidth || [];
@@ -1593,6 +1765,56 @@ export default function Home() {
       await loadDashboard();
     } catch (error) {
       setNotice(error instanceof Error ? error.message : "Unable to cancel the benchmark");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function createStorageCampaign() {
+    if (!requireToken()) return;
+    if (!latestStorage) {
+      setNotice("Complete the selected storage profile on this exact target before creating a campaign.");
+      return;
+    }
+    if (storageEnvironment?.evidence_status !== "complete") {
+      setNotice("The baseline requires complete Linux filesystem, block-policy, and executor evidence.");
+      return;
+    }
+    setBusy(true);
+    setNotice(null);
+    try {
+      const response = await fetch(`${API}/storage-campaigns`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-CloudMark-Token": token },
+        body: JSON.stringify({ baseline_run_id: latestStorage.id, target_windows: 3 }),
+      });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || "Unable to create the storage campaign");
+      setNotice(`Created ${payload.id}. The baseline counts as the first of three distinct UTC-day windows; no benchmark was started.`);
+      await loadDashboard();
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Unable to create the storage campaign");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function startStorageCampaignWindow() {
+    if (!selectedStorageCampaign || !requireToken()) return;
+    setBusy(true);
+    setNotice(null);
+    try {
+      const response = await fetch(`${API}/storage-campaigns/${selectedStorageCampaign.id}/runs`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-CloudMark-Token": token },
+        body: JSON.stringify({ confirm_write: true, confirm_campaign_window: true }),
+      });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || "Unable to start the storage campaign window");
+      setNotice(`Created ${payload.run.id} for UTC window ${selectedStorageCampaign.next_window.window_day}.`);
+      await loadDashboard();
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Unable to start the storage campaign window");
     } finally {
       setBusy(false);
     }
@@ -1888,14 +2110,14 @@ export default function Home() {
     }
     }
     if (dashboard?.profiles.database?.[selectedDatabaseProfile]?.methodology_version === "database-postgresql-v2") {
-      const generatorCapabilities = generator.system.inventory?.capabilities || {};
+      const generatorCapabilities = generator?.system.inventory?.capabilities || {};
       if (!generatorCapabilities.pgbench_latency_log || !generatorCapabilities.procfs_process_cpu) {
         setNotice("Database v2 requires pgbench transaction logging and Linux procfs CPU accounting on the Generator.");
         return;
       }
     }
     if (dashboard?.profiles.database?.[selectedDatabaseProfile]?.methodology_version === "database-postgresql-checkpoint-v1") {
-      const generatorCapabilities = generator.system.inventory?.capabilities || {};
+      const generatorCapabilities = generator?.system.inventory?.capabilities || {};
       if (!targetCapabilities.psql || !generatorCapabilities.procfs_process_cpu) {
         setNotice("PostgreSQL checkpoint isolation requires psql on Target and Linux process CPU accounting on Generator.");
         return;
@@ -2228,6 +2450,13 @@ export default function Home() {
                 <button className="button primary" onClick={() => startSystemBenchmark("memory")} disabled={busy || Boolean(activeLocal) || !memoryReady}>Run memory profile</button>
               </article>
             </section>
+            <section className="panel validity-panel">
+              <div className="panel-head"><div><span className="section-kicker">GUEST NUMA TOPOLOGY</span><h3>Memory placement evidence</h3></div><span className="run-id">{memoryEnvironment?.evidence_status?.toUpperCase() || "UNAVAILABLE"}</span></div>
+              {memoryEnvironment?.nodes?.length ? <div className="evidence-rows">{memoryEnvironment.nodes.map((node) => <div key={node.node}><span>NUMA node {node.node} · CPUs {node.cpu_list || "not exposed"}</span><strong>{node.memory_total_bytes ? `${formatBytes(node.memory_total_bytes, true)} visible · ${node.cpu_count ?? "—"} CPUs` : "Node memory unavailable"}</strong><small>{node.distances.length ? `Relative distances: ${node.distances.map((entry) => `N${entry.target_node}=${entry.distance}`).join(" · ")}` : node.reason || "Distance matrix unavailable"}</small></div>)}</div> : <div className="empty-row">{memoryEnvironment?.reason || "The selected target has not reported bounded Linux NUMA evidence."}</div>}
+              {memoryEnvironment?.paging && <div className="evidence-rows"><div><span>PAGING / HUGE PAGES · {memoryEnvironment.paging.status.toUpperCase()}</span><strong>{memoryEnvironment.paging.swap_total_bytes ? `${memoryEnvironment.paging.swap_used_percent?.toFixed(1) ?? "—"}% swap used · THP ${memoryEnvironment.paging.transparent_hugepage?.enabled_policy || "unknown"}` : `No configured swap · THP ${memoryEnvironment.paging.transparent_hugepage?.enabled_policy || "unknown"}`}</strong><small>{formatBytes(memoryEnvironment.paging.anonymous_huge_pages_bytes ?? undefined, true)} anonymous huge pages · zswap {memoryEnvironment.paging.zswap?.enabled == null ? "unknown" : memoryEnvironment.paging.zswap.enabled ? "enabled" : "disabled"} · snapshot only</small></div></div>}
+              <p className="method-note"><code>memory-environment-v2</code> is read-only guest-visible topology and paging configuration. Relative Linux distances are not latency measurements; swap usage is a point-in-time snapshot, not pressure; CloudMark does not infer physical-host placement or remote-node performance.</p>
+            </section>
+            <section className="validity-panel panel"><span>SYSTEM EXECUTION BOUNDARY</span><p>{latestCpuBoundary ? `Latest ${latestSystemBoundaryRun?.suite || "system"} Run used ${latestCpuBoundary.effective_logical_cores} effective threads from ${latestCpuBoundary.host_logical_cores} host logical CPUs${latestCpuBoundary.affinity_logical_cores != null ? `, ${latestCpuBoundary.affinity_logical_cores} affinity CPUs` : ""}${latestCpuBoundary.quota_capacity_cores != null ? `, and a ${latestCpuBoundary.quota_capacity_cores.toFixed(2)}-core cgroup quota with a ${latestCpuBoundary.quota_thread_ceiling} thread ceiling` : ""}. CPU IDs and cgroup paths were not persisted.${latestMemoryBoundary?.effective_available_bytes != null ? ` Memory allocation was bounded to ${formatBytes(latestMemoryBoundary.effective_available_bytes, true)} effective headroom.` : ""}` : "Completed Compute/Memory Runs will show host, affinity, cgroup quota, effective thread count, and verified memory headroom here. Fractional quota capacity is never labelled as physical cores."}</p></section>
             {activeSystem && <section className="panel run-progress" aria-live="polite"><div><span className="section-kicker">ACTIVE {activeSystem.suite.toUpperCase()} RUN / {activeSystem.id}</span><strong>{activeSystem.current_job || activeSystem.phase || "Starting"}</strong><small>{activeSystem.completed_steps || 0} of {activeSystem.total_steps || 1} jobs · {Math.round((activeSystem.progress || 0) * 100)}%</small></div><div className="progress-track"><i style={{ width: `${Math.max(2, (activeSystem.progress || 0) * 100)}%` }} /></div><button className="button danger" onClick={cancelSystemBenchmark} disabled={busy || activeSystem.cancel_requested}>{activeSystem.cancel_requested ? "Cancelling" : "Cancel run"}</button></section>}
             <section className="system-results-grid">
               <article className="panel system-result-panel">
@@ -2325,6 +2554,18 @@ export default function Home() {
               </div>
               <p className="method-note">{storageEnvironment?.evidence_status === "unavailable" ? storageMount?.reason || "Storage context has not been collected for this profile and target." : `Mount flags: ${storageMount?.mount_options?.join(", ") || "none observed"}. Evidence is guest-visible and read-only; raw mount sources, serial numbers, and physical-device claims are not persisted.`}</p>
             </section>
+            <section className="panel campaign-panel storage-campaign-panel">
+              <div className="panel-head"><div><span className="section-kicker">REPEATED UTC-DAY STORAGE EVIDENCE</span><h3>{selectedStorageCampaign?.label || "Create a campaign from the latest exact baseline"}</h3></div><span className="run-id">{selectedStorageCampaign?.contract_version?.toUpperCase() || "3 DISTINCT DAYS"}</span></div>
+              {selectedStorageCampaign ? <>
+                <div className="campaign-progress">
+                  <div><span>VALID WINDOWS</span><strong>{selectedStorageCampaign.progress.valid_windows} / {selectedStorageCampaign.progress.target_windows}</strong><small>At most one completed exact-contract Run per UTC day</small></div>
+                  <div><span>BASELINE</span><strong>{selectedStorageCampaign.baseline.valid ? "Locked" : "Invalid"}</strong><small>{selectedStorageCampaign.baseline_run_id} · {selectedStorageCampaign.baseline.window_day || "unknown day"}</small></div>
+                  <div><span>TARGET</span><strong>{selectedStorageCampaign.contract.target.hostname}</strong><small>{selectedStorageCampaign.contract.target.provider} · {selectedStorageCampaign.contract.target.instance_type}</small></div>
+                  <div><span>NEXT WINDOW</span><strong>{selectedStorageCampaign.next_window.window_day} UTC</strong><small>{campaignReasonLabel(selectedStorageCampaign.next_window.reason_code)}</small></div>
+                </div>
+                <div className="campaign-actions"><p><strong>{selectedStorageCampaign.status === "completed" ? "Temporal sample complete" : selectedStorageCampaign.status === "superseded" ? "Profile contract superseded" : selectedStorageCampaign.status === "invalid" ? "Baseline contract invalid" : `Window ${selectedStorageCampaign.next_window.window_number} awaits operator action`}</strong><small>{selectedStorageCampaign.claim} Every dispatch requires an explicit write and campaign-window confirmation.</small></p>{selectedStorageCampaign.status === "active" ? <button className="button primary" onClick={startStorageCampaignWindow} disabled={busy || Boolean(activeLocal) || !selectedStorageCampaign.next_window.eligible}>Run next campaign window</button> : <button className="button secondary" onClick={createStorageCampaign} disabled={busy || Boolean(activeLocal) || !latestStorage || storageEnvironment?.evidence_status !== "complete"}>Create replacement campaign</button>}</div>
+              </> : <div className="campaign-empty"><div><strong>{latestStorage && storageEnvironment?.evidence_status === "complete" ? "Lock this completed Run as window one of a three-day campaign." : "A completed Linux storage Run with complete context is required."}</strong><small>The campaign fixes target identity, profile and methodology, filesystem/mount semantics, block policy, and executor version. Creation starts no load.</small></div><button className="button secondary" onClick={createStorageCampaign} disabled={busy || Boolean(activeLocal) || !latestStorage || storageEnvironment?.evidence_status !== "complete"}>Create 3-day campaign</button></div>}
+            </section>
             <section className="validity-panel panel"><span>FILESYSTEM COMPARISON CONTRACT</span><p>Compare only identical profile, methodology, operating system, filesystem, mount options, storage allocation, Python version, background load, and cache conditions. Filesystem operation rates are not interchangeable with fio block-I/O results.</p></section>
           </div>
         )}
@@ -2395,8 +2636,8 @@ export default function Home() {
                 </article>}
                 {networkResolverObservations.length > 0 && <article className="panel network-evidence-card">
                   <div className="panel-head"><div><span className="section-kicker">SYSTEM RESOLVER</span><h3>Bounded DNS diagnostic</h3></div><span className="run-id">{networkValidity?.resolver_evidence_status?.toUpperCase() || "UNKNOWN"}</span></div>
-                  <div className="evidence-rows">{networkResolverObservations.map((item) => { const serverClasses = [...new Set(item.configuration.nameservers.map((server) => server.address_class).filter(Boolean))]; const queries = item.queries.map((query) => `${query.record_type} ${query.status}${typeof query.elapsed_ms === "number" ? ` ${query.elapsed_ms.toFixed(1)} ms` : ""}`).join(" · "); return <div key={item.direction}><span>{item.agent?.name || item.direction} · {item.configuration.nameserver_count} configured resolver{item.configuration.nameserver_count === 1 ? "" : "s"}</span><strong>{queries || "Active DNS query unavailable"}</strong><small>{serverClasses.length ? `Resolver address classes: ${serverClasses.join(", ")}` : item.reason || "Resolver identity unavailable"}</small></div>; })}</div>
-                  <p className="method-note">CloudMark queries only the fixed IANA example domain once for A and AAAA through each Agent&apos;s configured resolver. Cache state, split-DNS behavior, upstream ownership, and provider DNS attribution remain unknown; this evidence is diagnostic and never a comparison gate.</p>
+                  <div className="evidence-rows">{networkResolverObservations.map((item) => { const serverClasses = [...new Set(item.configuration.nameservers.map((server) => server.address_class).filter(Boolean))]; const queries = item.queries.map((query) => `${query.record_type} ${query.transport?.toUpperCase() || "LEGACY"} ${query.status}${query.dnssec_requested ? query.authenticated_data ? " · resolver AD" : " · AD not asserted" : ""}${typeof query.elapsed_ms === "number" ? ` ${query.elapsed_ms.toFixed(1)} ms` : ""}`).join(" · "); const comparisons = item.transport_comparison || []; const recovered = comparisons.filter((entry) => entry.truncated_udp_recovered_over_tcp).map((entry) => entry.record_type); const tcpMissing = comparisons.filter((entry) => !entry.tcp_response_observed).map((entry) => entry.record_type); const transportSummary = recovered.length ? `Truncated UDP recovered over explicit TCP: ${recovered.join(", ")}` : tcpMissing.length ? `No bounded TCP response: ${tcpMissing.join(", ")}` : comparisons.length ? "Explicit UDP and TCP responses observed; automatic fallback not claimed" : "Legacy resolver evidence without transport comparison"; const dnssec = item.dnssec_summary || []; const asserted = dnssec.filter((entry) => entry.resolver_asserted_authenticated_data).map((entry) => entry.record_type); const inconsistent = dnssec.filter((entry) => !entry.authenticated_data_consistent).map((entry) => entry.record_type); const dnssecSummary = inconsistent.length ? `Resolver AD differs by transport: ${inconsistent.join(", ")}` : asserted.length ? `Resolver asserted AD: ${asserted.join(", ")}; CloudMark did not validate signatures` : dnssec.length ? "Resolver did not assert AD; CloudMark did not validate signatures" : "Legacy evidence without DNSSEC observation"; const resolverSummary = serverClasses.length ? `Resolver address classes: ${serverClasses.join(", ")}` : item.reason || "Resolver identity unavailable"; return <div key={item.direction}><span>{item.agent?.name || item.direction} · {item.configuration.nameserver_count} configured resolver{item.configuration.nameserver_count === 1 ? "" : "s"} · {item.diagnostic_version || "legacy diagnostic"}</span><strong>{queries || "Active DNS query unavailable"}</strong><small>{resolverSummary} · {transportSummary} · {dnssecSummary}</small></div>; })}</div>
+                  <p className="method-note">CloudMark issues only four fixed checks for the IANA example domain: A and AAAA over UDP without hidden TCP retry, then A and AAAA over explicit TCP. DNSSEC records and resolver AD reporting are requested, but CloudMark does not independently validate signatures. Cache state, automatic application fallback, split-DNS behavior, upstream ownership, and provider DNS attribution remain unknown; this evidence is diagnostic and never a comparison gate.</p>
                 </article>}
                 {pathMeasurements.length > 0 && <article className="panel network-evidence-card">
                   <div className="panel-head"><div><span className="section-kicker">NIC AND TCP CONTROL</span><h3>Driver and offload evidence</h3></div><span className="run-id">{networkValidity?.nic_evidence_status?.toUpperCase() || "UNKNOWN"}</span></div>
@@ -2424,7 +2665,7 @@ export default function Home() {
               </section>
             )}
             <section className="network-checks">
-              {[["TCP", "1 / 4 / 8 / 16 streams", "AVAILABLE"], ["UDP", "25 / 50 / 90% adaptive sweep", "AVAILABLE IN STANDARD"], ["TRACE", "address class · ≤8 numeric hops", "READ-ONLY IN NETWORK-V9"], ["NIC", "driver · offloads · congestion control", "READ-ONLY IN STANDARD"], ["QUEUES", "driver RX/TX queue distribution", "OBSERVATIONAL IN NETWORK-V9"], ["STEERING", "RSS · RPS · XPS · MSI IRQ affinity", "OBSERVATIONAL IN NETWORK-V9"], ["COUNTERS", "pre/post bytes · packets · drops · errors", "READ-ONLY IN NETWORK-V9"], ["DNS", "fixed A/AAAA system-resolver diagnostic", "OBSERVATIONAL IN NETWORK-V9"], ["VALIDITY", "Route · trace · NIC · counters · Generator", "ENFORCED IN NETWORK-V9"]].map(([name, detail, state]) => <article key={name}><span>{name}</span><strong>{detail}</strong><small>{state}</small></article>)}
+              {[["TCP", "1 / 4 / 8 / 16 streams", "AVAILABLE"], ["UDP", "25 / 50 / 90% adaptive sweep", "AVAILABLE IN STANDARD"], ["TRACE", "address class · ≤8 numeric hops", "READ-ONLY IN NETWORK-V9"], ["NIC", "driver · offloads · congestion control", "READ-ONLY IN STANDARD"], ["QUEUES", "driver RX/TX queue distribution", "OBSERVATIONAL IN NETWORK-V9"], ["STEERING", "RSS · RPS · XPS · MSI IRQ affinity", "OBSERVATIONAL IN NETWORK-V9"], ["COUNTERS", "pre/post bytes · packets · drops · errors", "READ-ONLY IN NETWORK-V9"], ["DNS", "fixed UDP/TCP A/AAAA + resolver AD", "OBSERVATIONAL IN NETWORK-V9"], ["VALIDITY", "Route · trace · NIC · counters · Generator", "ENFORCED IN NETWORK-V9"]].map(([name, detail, state]) => <article key={name}><span>{name}</span><strong>{detail}</strong><small>{state}</small></article>)}
             </section>
           </div>
         )}

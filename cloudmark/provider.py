@@ -8,6 +8,20 @@ from pathlib import Path
 from typing import Any
 
 
+METADATA_MAX_BYTES = 64 * 1024
+METADATA_TEXT_MAX_CHARS = 160
+AWS_TOKEN_MAX_CHARS = 4096
+
+
+def _bounded_text(value: Any, maximum: int = METADATA_TEXT_MAX_CHARS) -> str | None:
+    if not isinstance(value, str):
+        return None
+    normalized = " ".join(value.split())
+    if not normalized or len(normalized) > maximum:
+        return None
+    return normalized
+
+
 def _opener() -> urllib.request.OpenerDirector:
     return urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
@@ -22,8 +36,11 @@ def _request(
     try:
         request = urllib.request.Request(url, method=method, headers=headers or {})
         with _opener().open(request, timeout=timeout) as response:
-            return response.read(64 * 1024), dict(response.headers.items())
-    except (urllib.error.URLError, TimeoutError, OSError):
+            payload = response.read(METADATA_MAX_BYTES + 1)
+            if len(payload) > METADATA_MAX_BYTES:
+                return None
+            return payload, dict(response.headers.items())
+    except (urllib.error.URLError, TimeoutError, OSError, ValueError):
         return None
 
 
@@ -35,7 +52,15 @@ def _aws() -> dict[str, Any] | None:
     )
     if not token_response:
         return None
-    token = token_response[0].decode(errors="replace")
+    try:
+        token = token_response[0].decode("ascii").strip()
+    except UnicodeDecodeError:
+        return None
+    if (
+        not 1 <= len(token) <= AWS_TOKEN_MAX_CHARS
+        or any(ord(character) < 33 or ord(character) > 126 for character in token)
+    ):
+        return None
     identity = _request(
         "http://169.254.169.254/latest/dynamic/instance-identity/document",
         headers={"X-aws-ec2-metadata-token": token},
@@ -46,13 +71,20 @@ def _aws() -> dict[str, Any] | None:
         value = json.loads(identity[0])
     except json.JSONDecodeError:
         return None
+    if not isinstance(value, dict):
+        return None
+    region = _bounded_text(value.get("region"))
+    zone = _bounded_text(value.get("availabilityZone"))
+    instance_type = _bounded_text(value.get("instanceType"))
+    if not region or not zone or not instance_type:
+        return None
     return {
         "provider": "AWS",
         "confidence": 0.99,
         "source": "IMDSv2",
-        "region": value.get("region"),
-        "zone": value.get("availabilityZone"),
-        "instance_type": value.get("instanceType"),
+        "region": region,
+        "zone": zone,
+        "instance_type": instance_type,
         "evidence": ["AWS IMDSv2 identity document"],
     }
 
@@ -65,16 +97,24 @@ def _azure() -> dict[str, Any] | None:
     if not result:
         return None
     try:
-        value = json.loads(result[0]).get("compute", {})
+        document = json.loads(result[0])
     except json.JSONDecodeError:
+        return None
+    if not isinstance(document, dict) or not isinstance(document.get("compute"), dict):
+        return None
+    value = document["compute"]
+    region = _bounded_text(value.get("location"))
+    zone = _bounded_text(value.get("zone"))
+    instance_type = _bounded_text(value.get("vmSize"))
+    if not region or not instance_type:
         return None
     return {
         "provider": "Microsoft Azure",
         "confidence": 0.99,
         "source": "Azure IMDS",
-        "region": value.get("location"),
-        "zone": value.get("zone"),
-        "instance_type": value.get("vmSize"),
+        "region": region,
+        "zone": zone,
+        "instance_type": instance_type,
         "evidence": ["Azure Instance Metadata Service"],
     }
 
@@ -93,8 +133,16 @@ def _gcp() -> dict[str, Any] | None:
         value = json.loads(result[0])
     except json.JSONDecodeError:
         return None
-    zone = str(value.get("zone", "")).rsplit("/", 1)[-1] or None
-    machine_type = str(value.get("machineType", "")).rsplit("/", 1)[-1] or None
+    if not isinstance(value, dict):
+        return None
+    zone_path = _bounded_text(value.get("zone"), 512)
+    machine_type_path = _bounded_text(value.get("machineType"), 512)
+    if not zone_path or not machine_type_path:
+        return None
+    zone = _bounded_text(zone_path.rsplit("/", 1)[-1])
+    machine_type = _bounded_text(machine_type_path.rsplit("/", 1)[-1])
+    if not zone or not machine_type:
+        return None
     region = zone.rsplit("-", 1)[0] if zone and "-" in zone else None
     return {
         "provider": "Google Cloud",
@@ -107,8 +155,8 @@ def _gcp() -> dict[str, Any] | None:
     }
 
 
-def _declared_manifest() -> dict[str, Any] | None:
-    candidates = []
+def _provider_manifest_candidates() -> list[Path]:
+    candidates: list[Path] = []
     if os.environ.get("CLOUDMARK_PROVIDER_MANIFEST"):
         candidates.append(Path(os.environ["CLOUDMARK_PROVIDER_MANIFEST"]))
     if os.name == "nt":
@@ -117,24 +165,30 @@ def _declared_manifest() -> dict[str, Any] | None:
             candidates.append(Path(program_data) / "CloudMark" / "provider.json")
     else:
         candidates.append(Path("/etc/cloudmark/provider.json"))
-    for path in candidates:
+    return candidates
+
+
+def _declared_manifest() -> dict[str, Any] | None:
+    for path in _provider_manifest_candidates():
         try:
             value = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             continue
-        provider = str(value.get("provider", "")).strip()
+        if not isinstance(value, dict):
+            continue
+        provider = _bounded_text(value.get("provider"))
         if not provider:
             continue
         return {
             "provider": provider,
-            "operator": value.get("operator"),
+            "operator": _bounded_text(value.get("operator")),
             "confidence": 0.70,
             "source": "Declared provider manifest (unverified)",
-            "region": value.get("region"),
-            "zone": value.get("zone"),
-            "instance_type": value.get("instance_type"),
-            "cloud_stack": value.get("cloud_stack"),
-            "evidence": [f"Local manifest: {path}"],
+            "region": _bounded_text(value.get("region")),
+            "zone": _bounded_text(value.get("zone")),
+            "instance_type": _bounded_text(value.get("instance_type")),
+            "cloud_stack": _bounded_text(value.get("cloud_stack")),
+            "evidence": ["Local declared provider manifest"],
         }
     return None
 

@@ -1,6 +1,6 @@
 # CloudMark current state
 
-Last updated: 2026-09-12
+Last updated: 2026-09-22
 
 ## Repository baseline
 
@@ -15,10 +15,52 @@ baseline is still the repository head.
 ## Implemented and verified
 
 - detailed local and Agent inventory;
-- AWS, Azure, and Google Cloud metadata detection with evidence provenance;
-- bootstrap planning for supported Linux package managers;
-- versioned compute quick and standard profiles using sysbench;
+- fail-closed AWS, Azure, and Google Cloud metadata detection with evidence
+  provenance. Metadata access bypasses environment proxies, uses fixed endpoints
+  and headers, caps responses at 64 KiB, and requires complete bounded identity
+  fields before assigning 0.99 confidence. AWS tokens reject non-ASCII/control
+  characters and oversized values; GCP requires the metadata-flavor response.
+  Declared manifests remain visibly unverified, accept only bounded strings,
+  and do not persist their local path. Six dedicated no-network tests cover the
+  three providers, ordering/fallback, malformed/oversized responses, unsafe
+  tokens, and manifests; `provider.py` branch coverage is 86.4%;
+- bootstrap planning for apt, dnf/yum, and zypper with preview-by-default
+  execution. Confirmed bootstrap now fails closed when detection produces no
+  executable package-manager commands instead of reporting an empty success.
+  Six dedicated no-install tests cover Windows and Linux manager selection,
+  package/pack deduplication, exact argument-array commands, unknown packs,
+  root enforcement, first-command failure, and successful result evidence;
+  `bootstrap.py` branch coverage is 100.0%;
+- versioned compute quick and standard profiles using sysbench. Compute and
+  memory preflight cap `all`/`half` thread resolution by the current process CPU
+  affinity when the OS exposes it, rather than blindly using host CPU count.
+  Preflight retains host, affinity, and effective logical-core counts without
+  persisting CPU IDs. Cgroup v2 `cpu.max` and v1 CFS quota are checked across
+  the current group and up to 32 ancestors; the smallest capacity is retained
+  as a float and its ceiling caps threads. Malformed quota fails closed. The
+  dashboard presents the latest Run's thread/quota and memory-headroom boundary
+  while explicitly separating fractional capacity from physical cores;
 - versioned native memory-bandwidth quick and standard profiles;
+- bounded read-only `memory-environment-v2` guest NUMA and paging evidence in inventory
+  and every memory preflight/result. Linux sysfs collection retains at most 64
+  online nodes, node CPU lists/counts, MemTotal/MemFree, relative distance
+  matrices, and page size with a 4 KiB cap per source file and CPU indexes
+  limited to 0-8191. Missing, malformed, oversized, non-Linux, and hidden
+  topology remains partial or unavailable. Relative distance is explicitly not
+  latency; physical-host placement and remote-node performance are never
+  claimed. Version 2 adds a 64 KiB-capped `/proc/meminfo` snapshot for swap,
+  anonymous huge pages, HugeTLB, and zswap usage plus 4 KiB-capped read-only
+  THP enabled/defrag and zswap-enabled policy. Swap usage is explicitly a
+  point-in-time snapshot with `pressure_measured=false`, not performance or
+  pressure evidence. Memory preflight also resolves cgroup v2
+  `memory.max`/`memory.current` or cgroup v1 limit/usage and applies the smaller
+  verified headroom across the current cgroup and up to 32 ancestors versus
+  host MemAvailable before preserving the 512 MiB reserve. A finite or malformed
+  governing boundary with unreadable usage fails closed
+  before compilation. Seven fixture-only tests cover sparse topology, bounds, malformed
+  evidence, unsupported systems, inventory, and preflight attachment without
+  starting memory load. The dashboard presents the selected target's current
+  topology and limitations;
 - filesystem-safe fio quick, standard, database, throughput, and sustained
   profiles;
 - native `storage-filesystem-v1` small-file create/stat/read-and-SHA-256-
@@ -45,6 +87,21 @@ baseline is still the repository head.
   complete development head passes 173 Python tests, 3 rendered-dashboard
   tests, dashboard lint, and the production build without starting a storage
   benchmark;
+- `storage-campaign-v1` immutable, baseline-anchored storage acquisition for
+  3–30 distinct UTC completion days. Campaign creation is side-effect free and
+  counts the complete Linux baseline as window one; every later dispatch
+  requires separate write and campaign-window confirmation. Target/provider/
+  SKU/region/OS, profile/methodology, run-time Target evidence, full fio or
+  native-filesystem measurement payloads, cleanup, and exact filesystem/mount/
+  block/tool contracts are enforced. A generic Run submission cannot inject
+  campaign metadata, and both confirmations remain in the durable Run request.
+  Timezone-naive, reversed, duplicate-day, failed, cancelled, cross-midnight,
+  drifted, offline-target, and superseded attempts cannot advance the campaign.
+  Completion remains temporal evidence for one target rather than a provider
+  rating. Ten dedicated contract, projection, drift, refusal, lifecycle, native
+  executor, and Controller-dispatch tests exercise the workflow without
+  starting load. The complete development head passes 216 Python tests and 4
+  Node tests, plus dashboard lint and the production build;
 - progress, heartbeat, timeout, cancellation, cleanup, and partial-result
   preservation;
 - local Controller API, authenticated mutations, SQLite history, and dashboard;
@@ -102,16 +159,23 @@ baseline is still the repository head.
   limitations; queue evidence is observational rather than a comparison gate,
   while unfinished campaigns locked to an older standard profile are preserved
   as `superseded`;
-- simulation-verified `network-v8` standard orchestration with a bounded
-  pre-load Linux system-resolver diagnostic on both Agents: at most 64 KiB of
-  resolver configuration, redacted search-domain names, and—when `dig` is
-  present—one fixed A and AAAA query for `example.com.` with strict retries and
-  deadlines. Query answers are reduced to count and address class; cache state
-  and upstream/provider attribution remain explicitly unknown. Resolver
-  evidence is observational and does not alter comparison validity. The
-  complete development head passes 98 Python tests, 3 rendered-dashboard
-  tests, dashboard lint, and the production build without starting provider
-  load;
+- simulation-verified `system-resolver-diagnostic-v3` evidence within Network
+  v9 on both Agents: at most 64 KiB of Linux resolver configuration, redacted
+  search-domain names, and—when `dig` is present—four fixed queries covering
+  UDP/TCP × A/AAAA for `example.com.`. UDP uses `+notcp +ignore` so truncation
+  is observed without a hidden TCP retry; TCP is queried separately. Results
+  retain transport, TC state, bounded outcome/address classes, and an explicit
+  recovery observation when a truncated UDP answer is followed by a valid TCP
+  answer. The same four commands request DNSSEC records and AD reporting;
+  CloudMark stores only whether the configured resolver asserted AD and always
+  states that it did not independently validate signatures. Cache state and
+  upstream/provider attribution remain unknown, and the diagnostic never gates
+  network comparison validity. The dashboard shows
+  every record type, transport, outcome, elapsed time, version, and bounded
+  transport summary while explicitly refusing to infer automatic fallback.
+  The complete
+  development head passes 216 Python tests and 4 Node tests without starting
+  provider load or making a real DNS query during verification;
 - simulation-verified `network-v9` standard orchestration with bounded,
   read-only guest-visible queue-placement evidence on the route-derived Linux
   interface: at most 4,096 RSS indirection entries across queue indexes 0-127,
@@ -123,18 +187,19 @@ baseline is still the repository head.
   configuration or alter comparison validity. The complete development head
   passes 102 Python tests, 3 rendered-dashboard tests, dashboard lint, and the
   production build without starting provider load;
-- simulation-verified observational `queue-counters-v2` normalization within
-  Network v9. The bounded parser now covers common ENA/virtio/netvsc/mlx5
+- simulation-verified observational `queue-counters-v3` normalization within
+  Network v9. The bounded parser covers common ENA/virtio/netvsc/mlx5
   direction/queue names, Azure MANA indexed names, Google gVNIC bracketed
-  byte/drop names, and VMware vmxnet3 sectioned packet/byte/error/drop fields.
-  Component counters are combined only for exact vmxnet3 unicast/multicast/
-  broadcast names; TSO/LRO/XDP/descriptor counters remain unclassified. Queue
-  deltas retain the normalization version and expose byte distribution when a
-  driver does not provide packet-per-queue counters. The evidence remains
-  observational and does not alter Network v9 comparison validity. The
-  complete development head passes 146 Python tests, 3 rendered-dashboard
-  tests, dashboard lint, and the production build without starting provider
-  load;
+  byte/drop names, VMware vmxnet3 sectioned packet/byte/error/drop fields,
+  Intel i40e hyphen/dot packet and byte names, and Broadcom bnx2x bracketed
+  queue names. Component counters are combined only for exact vmxnet3 or
+  Broadcom unicast/multicast/broadcast names; conflicting direct/component
+  fields become partial, while TSO/LRO/XDP/checksum/descriptor counters remain
+  unclassified. Queue deltas retain the normalization version and expose byte
+  distribution when a driver does not provide packet-per-queue counters. The
+  evidence remains observational and does not alter Network v9 comparison
+  validity. The complete development head passes 216 Python tests and 4 Node
+  tests without starting provider load;
 - simulation-verified `database-postgresql-v1` paired executor with isolated
   Target clusters, Generator-side built-in pgbench workloads, durable settings,
   progress/control heartbeat, fixed safety limits, and verified cleanup; the
@@ -190,6 +255,12 @@ baseline is still the repository head.
   complete development head passes 111 Python tests, 3 rendered-dashboard
   tests, dashboard lint, and the production build without starting provider
   load;
+- packaged Web v2 Python fixture contract tests exercise `/ready`, the exact
+  `/api/v2/dynamic` route, deterministic valid 1 KiB JSON, content length/type,
+  `no-store`, fixture identity, 404 query rejection, unsupported-method 501,
+  fixed loopback bind/port refusal, daemon-thread configuration, interrupt
+  shutdown, and server close entirely through fake sockets/server objects. No
+  listener or HTTP load is created; `web_fixture.py` branch coverage is 94.0%;
 - responsive dashboard navigation and execution-target selection; the mobile
   navigation uses stable 12 px labels in a contained horizontal scroller and
   was browser-verified at 390 px and 1,280 px without page-level horizontal
@@ -242,6 +313,32 @@ baseline is still the repository head.
   passes 155 Python tests, 3 rendered-dashboard tests, dashboard lint, and the
   production build. Provider security controls remain unavailable, so the
   Security domain is Partial;
+- least-privilege GitHub Actions CI in `.github/workflows/ci.yml`, with every
+  third-party action pinned to an immutable commit SHA. The Python matrix covers
+  the supported 3.9 floor and 3.13 on Linux plus 3.13 on Windows. The dashboard
+  job uses pinned Node 22.23.2 and the manifest-pinned pnpm 11.16.0, requires the
+  lockfile, then runs ESLint, strict TypeScript checking, OpenAPI parsing/local-
+  reference validation, the production build, three rendered-dashboard tests,
+  and a CI policy test that rejects mutable action references or benchmark
+  commands. Adding the type-check gate exposed and fixed two nullable Generator
+  accesses and missing Worker binding types. Five dedicated CLI tests now cover
+  version/inventory JSON, dependency preview versus confirmed bootstrap,
+  serve/join/Agent argument dispatch, confirmation gates, progress, and mocked
+  compute/storage/read-only-security dispatch without starting work. The tests
+  exposed and fixed `--timeout-seconds 0` silently selecting the default instead
+  of failing its documented bound; `cloudmark/__main__.py` now has 97.6% branch
+  coverage. The complete development head passes 216 Python tests and 4 Node
+  tests without starting load. A pinned
+  optional Python quality environment adds Ruff 0.16.7 `E9`/`F` checks and
+  coverage.py 7.10.7 branch measurement compatible with the Python 3.9 floor;
+  the clean local baseline is 75.5% and CI enforces a 70.0% minimum. The first
+  hosted matrix run exposed and fixed Python 3.9 popcount compatibility, a
+  test-only global `os.name` mutation that selected `WindowsPath` on Linux, and
+  a Windows-runner temp path crossing the intentionally strict Linux MySQL
+  socket bound; production safety limits were preserved. An unsupported pnpm
+  setup input was also replaced with an explicit `pnpm install
+  --frozen-lockfile` step, removing CI warnings while retaining lockfile
+  enforcement;
 - repository-level Codex guidance, durable handoff documentation, consistent
   SQLite runtime snapshots, guarded secret backup, recoverable restore, and
   safe Windows local-process launch/stop scripts;
@@ -326,9 +423,10 @@ Controller run: `run_1c572100e8704843`.
   fabric cannot yet be proven; bounded common driver per-queue counters are
   observational but are not normalized across every NIC family; guest-visible
   RSS/RPS/XPS and MSI IRQ affinity is now bounded and observational but does not
-  verify physical-host NIC/interrupt placement; fixed system-resolver configuration
-  and A/AAAA diagnostics are observational, with no controlled authoritative
-  server, cache-cold repetition, DNSSEC, TCP fallback, or Windows parity;
+  verify physical-host NIC/interrupt placement; fixed system-resolver
+  configuration and explicit UDP/TCP A/AAAA diagnostics are observational,
+  with no controlled authoritative server, cache-cold repetition, independent
+  DNSSEC validation, proof of automatic resolver fallback, or Windows parity;
   manual fixed-pair repeated UTC-day campaigns are implemented, while
   unattended scheduling, cross-pair
   orchestration, Windows route parity, and mTLS remain unimplemented;

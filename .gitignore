@@ -2,6 +2,7 @@
 
 # dependencies
 /node_modules
+*.egg-info/
 /.pnp
 .pnp.*
 .yarn/*
@@ -12,6 +13,9 @@
 
 # testing
 /coverage
+/.coverage
+/coverage.xml
+/htmlcov/
 
 # next.js
 /.next/

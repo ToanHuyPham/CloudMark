@@ -23,6 +23,7 @@ components:
         error: { type: string }
     RunRequest:
       type: object
+      description: Generic Run submission. Campaign metadata is intentionally excluded and is rejected by this endpoint; use a guarded campaign-window endpoint.
       required: [suite]
       properties:
         suite: { type: string, enum: [inventory, compute, memory, storage, security, network, database, web] }
@@ -172,6 +173,57 @@ components:
         claim:
           type: string
           description: Explicitly limits the result to temporal evidence for one fixed Agent pair.
+    StorageCampaignCreateRequest:
+      type: object
+      required: [baseline_run_id, target_windows]
+      properties:
+        label: { type: string, maxLength: 120 }
+        baseline_run_id: { type: string }
+        target_windows: { type: integer, minimum: 3, maximum: 30 }
+    StorageCampaignDispatchRequest:
+      type: object
+      required: [confirm_write, confirm_campaign_window]
+      properties:
+        confirm_write: { type: boolean, const: true }
+        confirm_campaign_window: { type: boolean, const: true }
+    StorageCampaign:
+      type: object
+      required: [id, label, status, contract, progress, next_window, baseline, evidence_status, claim]
+      properties:
+        id: { type: string }
+        label: { type: string }
+        status: { type: string, enum: [active, completed, superseded, invalid] }
+        created_at: { type: string, format: date-time }
+        contract_version: { type: string, const: storage-campaign-v1 }
+        profile: { type: string }
+        profile_version: { type: string }
+        methodology_version: { type: string }
+        target_id: { type: string }
+        baseline_run_id: { type: string }
+        storage_contract: { type: string }
+        contract:
+          type: object
+          description: Immutable target, baseline, profile, filesystem, block policy, executor, and UTC-window identity.
+          additionalProperties: true
+        progress:
+          type: object
+          required: [valid_windows, target_windows, remaining_windows, attempts, failed_attempts]
+          additionalProperties: true
+        next_window:
+          type: object
+          required: [eligible, reason_code, window_number, attempt_number, window_day]
+          additionalProperties: true
+        baseline:
+          type: object
+          required: [run_id, valid, reason_code]
+          additionalProperties: true
+        attempts:
+          type: array
+          items: { type: object, additionalProperties: true }
+        evidence_status: { type: string, enum: [partial, complete] }
+        claim:
+          type: string
+          description: Explicitly limits the result to temporal evidence for one fixed storage target.
 paths:
   /health:
     get:
@@ -202,7 +254,7 @@ paths:
   /provider-comparisons:
     get:
       summary: Same-cohort repeated-window provider observations
-      description: Returns provider-observations-v4 descriptive median, P10, P90, worst-value, and stability statistics only for exact provider, SKU, region, operating-system, profile, methodology, topology, topology-evidence, and database implementation/server-version cohorts. Provider ratings remain disabled.
+      description: Returns provider-observations-v5 descriptive median, P10, P90, worst-value, and stability statistics only for exact provider, SKU, region, operating-system, profile, methodology, topology, topology-evidence, database implementation/server-version, and storage environment/tool cohorts. Provider ratings remain disabled.
       responses:
         "200": { description: Versioned provider observation report }
   /profiles:
@@ -267,6 +319,64 @@ paths:
         "400": { description: Confirmation missing, UTC window closed, active Run present, or contract changed }
         "401": { description: Missing controller token }
         "404": { description: Network campaign not found }
+  /storage-campaigns:
+    get:
+      summary: List repeated storage evidence campaigns
+      responses:
+        "200": { description: Storage campaign collection }
+    post:
+      summary: Create an immutable repeated storage evidence contract
+      description: Requires a completed comparison-contract-eligible storage baseline. The baseline counts as the first UTC-day window and creation starts no load.
+      security: [{ controllerToken: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/StorageCampaignCreateRequest" }
+      responses:
+        "201":
+          description: Campaign created without dispatching a Run
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StorageCampaign" }
+        "400": { description: Invalid baseline or immutable contract }
+        "401": { description: Missing controller token }
+        "404": { description: Baseline Run not found }
+  /storage-campaigns/{campaignId}:
+    get:
+      summary: Read one projected storage campaign
+      parameters:
+        - in: path
+          name: campaignId
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Campaign state and validated UTC-completion-day progress
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StorageCampaign" }
+        "404": { description: Storage campaign not found }
+  /storage-campaigns/{campaignId}/runs:
+    post:
+      summary: Manually dispatch the next eligible storage campaign window
+      description: Never scheduled automatically. Every dispatch requires write and campaign-window confirmation; profile, target, filesystem, block policy, and executor drift invalidate the window.
+      security: [{ controllerToken: [] }]
+      parameters:
+        - in: path
+          name: campaignId
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/StorageCampaignDispatchRequest" }
+      responses:
+        "202": { description: Guarded storage Run accepted and campaign projection returned }
+        "400": { description: Confirmation missing, UTC window closed, active Run present, target offline, or contract changed }
+        "401": { description: Missing controller token }
+        "404": { description: Storage campaign not found }
   /runs:
     get:
       summary: List recent benchmark runs

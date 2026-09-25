@@ -23,6 +23,10 @@ X-CloudMark-Token: <token printed by cloudmark serve>
 | POST | `/network-campaigns` | Create an immutable fixed-pair campaign without starting traffic |
 | GET | `/network-campaigns/{id}` | One campaign, attempts, and UTC-day progress |
 | POST | `/network-campaigns/{id}/runs` | Manually dispatch the next eligible campaign window |
+| GET | `/storage-campaigns` | Repeated storage campaign projections |
+| POST | `/storage-campaigns` | Create an exact-contract campaign from a completed baseline without starting load |
+| GET | `/storage-campaigns/{id}` | One storage campaign, attempts, and UTC completion-day progress |
+| POST | `/storage-campaigns/{id}/runs` | Manually dispatch the next eligible storage window |
 | GET | `/runs` | Run history |
 | GET | `/runs/{id}` | One run and its complete raw evidence |
 | POST | `/runs` | Submit an asynchronous run |
@@ -47,6 +51,34 @@ X-CloudMark-Token: ...
 
 The response is `202 Accepted`. Poll `/runs/{id}` until the state is
 `completed`, `failed`, or `cancelled`.
+
+Provider detection behind `/system` uses only fixed identity endpoints with
+proxies disabled, sub-second timeouts, and a 64 KiB response cap. AWS requires
+an ASCII/control-free bounded IMDSv2 token and complete identity document;
+Azure requires a complete compute identity; Google Cloud additionally requires
+the metadata-flavor response. Malformed or incomplete evidence returns
+`Unknown`. Declared manifests remain bounded and explicitly unverified, and
+their local path is not returned.
+
+System and Agent inventory include `memory.environment` using the
+`memory-environment-v2` contract. Memory Run results retain the same observation
+under `result.preflight.memory_environment`. It contains bounded guest-visible
+Linux NUMA nodes, CPU lists/counts, node memory, relative distance values, page
+size, evidence status, and explicit no-host-placement/no-performance policy.
+Relative distances are not latency measurements.
+The nested `paging` object adds bounded swap, anonymous huge-page, HugeTLB,
+THP-policy, and zswap snapshot fields. `snapshot_only=true` and
+`pressure_measured=false` prevent instantaneous usage from being interpreted as
+a pressure or performance measurement.
+Memory preflight also returns `memory_allocation_boundary`, including redacted
+cgroup version, limit/current/headroom, host availability, effective
+availability, levels checked, limiting ancestor depth, and verification status.
+The cgroup path is never persisted.
+Compute and memory preflight return `cpu_execution_boundary` with host,
+affinity, and effective logical-core counts. CPU IDs are never returned, and
+verified cgroup quota adds fractional `quota_capacity_cores`, a
+`quota_thread_ceiling`, levels checked, and limiting ancestor depth. Cgroup
+paths are never returned.
 
 `/dashboard` is a presentation endpoint polled by the local UI. It retains the
 latest completed result for each system suite/target and each paired suite,
@@ -168,7 +200,8 @@ Supported profiles are `network-peer-quick` (`network-v1`) and
 Standard executes 21 bounded peer evidence steps: two pre-load and two
 post-load route/interface/MTU and numeric path-trace, read-only NIC driver/offload,
 TCP congestion-control, structured aggregate interface counters, and bounded
-driver-exposed per-queue counters, one fixed A/AAAA system-resolver diagnostic,
+driver-exposed per-queue counters, one versioned fixed UDP/TCP A/AAAA
+system-resolver diagnostic,
 and bounded guest RSS/RPS/XPS/MSI IRQ-affinity observations per Agent; idle latency;
 directional TCP scaling; UDP rate sweeps derived from each direction's TCP
 baseline; and one simultaneous bidirectional TCP measurement. Its result
@@ -180,6 +213,15 @@ stable pre/post routes, destination-reaching bounded traces, a complete
 NIC/TCP-control/counter window, and Generator CPU/scaling headroom. Address
 class and observed hops never prove public-Internet transit. No performance
 traffic is sent to the Controller.
+
+Resolver observations expose `diagnostic_version`, at most four bounded query
+records, and a Controller-rederived `transport_comparison` for A/AAAA over UDP
+and TCP. Returned answer addresses are never included. A TCP response is marked
+as recovery only when the matching UDP response carried TC; otherwise the API
+does not claim automatic fallback. Version 3 also exposes a Controller-rederived
+`dnssec_summary`. `resolver_asserted_authenticated_data` records the configured
+resolver's AD response only; `cloudmark_dnssec_validation_performed` is always
+false, and signatures are never returned.
 
 ## Create and run a repeated network campaign
 
@@ -222,6 +264,47 @@ fixed pair only; it does not rate a provider. When the installed standard
 profile or methodology changes, an unfinished older campaign is returned as
 `superseded`; its Runs remain readable, but the dispatch endpoint refuses to
 continue it under the new contract.
+
+## Create and run a repeated storage campaign
+
+Create the contract from a completed storage Run with full measurement,
+cleanup, and `storage-environment-v1` evidence:
+
+```http
+POST /api/v1/storage-campaigns
+Content-Type: application/json
+X-CloudMark-Token: ...
+
+{
+  "label": "Provider storage repeated evidence",
+  "baseline_run_id": "run_123",
+  "target_windows": 3
+}
+```
+
+Creation returns `201`, starts no load, and counts the immutable baseline as
+window one. The `storage-campaign-v1` contract locks target/provider/SKU/region/
+OS identity, profile and methodology, filesystem/mount semantics, applicable
+guest block policy, and exact executor version.
+
+Dispatch a later window explicitly:
+
+```http
+POST /api/v1/storage-campaigns/storage_campaign_123/runs
+Content-Type: application/json
+X-CloudMark-Token: ...
+
+{"confirm_write":true,"confirm_campaign_window":true}
+```
+
+The response is `202`. The target must still be online and match the immutable
+identity. Both confirmations are retained in the Run request; `/runs` rejects
+caller-supplied campaign fields. A Run counts only when every executor-specific
+measurement and cleanup gate is complete, its persisted run-time Target and
+exact storage contract match, and its timezone-aware start and completion stay
+within the dispatched UTC day. Duplicate-day, failed, cancelled, drifted, and
+cross-midnight attempts remain visible but do not consume a window. Completion
+is temporal evidence for one target, not a provider rating.
 
 ## Create a database or cache peer run
 

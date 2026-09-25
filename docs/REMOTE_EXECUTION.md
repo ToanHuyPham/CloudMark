@@ -88,6 +88,15 @@ admission requirement: an older Agent or unsupported operating system may run
 the benchmark, but its storage metrics remain observational rather than
 comparison-eligible under `provider-observations-v5`.
 
+A completed remote storage Run with full context can become a
+`storage-campaign-v1` baseline. The campaign remains bound to that exact Agent
+identity and rejects dispatch while the Agent is offline or when its current
+provider/SKU/region/OS identity differs from the baseline. Every completed
+window must also retain matching Agent inventory/provider evidence. Each later
+window is still an ordinary authenticated `benchmark-storage` task with Agent-
+side load confirmation; the durable Run request separately retains the explicit
+campaign-window and write confirmations enforced by the Controller.
+
 ## Control and safety contract
 
 - Remote kinds are fixed to `benchmark-compute`, `benchmark-memory`,

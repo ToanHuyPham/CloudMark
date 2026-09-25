@@ -110,12 +110,15 @@ Network v9 also executes fixed read-only `ethtool -S` against that same
 route-derived interface at both boundaries. Because driver statistic names are
 not standardized, CloudMark recognizes only a bounded set of common queue
 counter shapes, limits queue indexes to 0-127, and examines at most 4,096 lines
-per snapshot. The observational `queue-counters-v2` normalizer recognizes the
+per snapshot. The observational `queue-counters-v3` normalizer recognizes the
 common direction/queue forms used by ENA, virtio, Hyper-V netvsc, and mlx5;
 MANA's `rx_0_*`/`tx_0_*` form; gVNIC's bracketed byte/drop fields; and
-vmxnet3's sectioned queue counters. For vmxnet3, only unicast/multicast/
-broadcast packet and byte components plus exact error/drop totals are combined;
-TSO, LRO, XDP, descriptor, and other vendor fields are not relabelled as packet
+vmxnet3's sectioned queue counters. Version 3 also recognizes the exact Intel
+i40e `rx-<queue>.packets/bytes` and `tx-<queue>.packets/bytes` forms plus
+Broadcom bnx2x `[<queue>]:` packet, byte, and discard fields. Only exact
+unicast/multicast/broadcast packet and byte components are combined; a direct
+counter that conflicts with components makes the snapshot partial. TSO, LRO,
+XDP, checksum, descriptor, and other vendor fields are not relabelled as packet
 traffic. It reports active RX/TX packet queues, packet and byte busiest-queue
 shares when exposed, and driver queue drop/error deltas. Unknown vendor
 counters remain unclassified, queue-set, normalization-version, or counter
@@ -127,20 +130,32 @@ NICs and clouds.
 At the pre-load boundary, Network v9 reads at most 64 KiB of Linux
 `/etc/resolv.conf`, persists configured nameserver address/family/class,
 redacts search-domain names while retaining their count, and accepts only a
-small allow-list of resolver options. When `dig` is installed, each Agent makes
-exactly one A and one AAAA query for the fixed IANA-reserved `example.com.`
-name, with one try, a two-second DNS timeout, and a five-second process
-watchdog. CloudMark retains the response status, elapsed wall time, answer
-count, and answer address classes but not returned addresses. The Controller
-cannot supply a query name or record type.
+small allow-list of resolver options. `system-resolver-diagnostic-v3` makes
+exactly four queries when `dig` is installed: A and AAAA over explicit UDP,
+then A and AAAA over explicit TCP, all for the fixed IANA-reserved
+`example.com.` name. UDP uses `+notcp +ignore`, so a TC response is retained as
+truncated instead of silently retried over TCP. The separate TCP result shows
+whether the same system-resolver path returns a bounded response over TCP; a
+truncated UDP result followed by a successful TCP result is labelled as an
+observed recovery path. Every query has one try, a two-second DNS timeout, and
+a five-second process watchdog. CloudMark retains transport, response status,
+TC state, elapsed wall time, answer count, and answer address classes but not
+returned addresses. The Controller cannot supply a query name, record type, or
+transport. Every command also uses `+dnssec +adflag`. CloudMark retains whether
+the configured resolver set AD for each response, but never stores signatures
+and does not perform local chain or signature validation. AD therefore remains
+a resolver assertion, not an independent CloudMark security claim.
 
 This resolver evidence is diagnostic and observational. A system resolver may
 be a local stub backed by a cache, split-DNS policy, or an upstream resolver
-that CloudMark cannot identify. Therefore a single lookup never becomes a
-provider DNS latency or availability claim, never attributes the upstream
-service to the provider, and never gates network comparison eligibility.
-Missing `dig` produces configuration-only partial evidence rather than a zero
-or a rejected throughput Run. Windows resolver parity is not implemented.
+that CloudMark cannot identify. Therefore these fixed transport checks never
+become a provider DNS latency or availability claim, never attribute the
+upstream service to the provider, and never gate network comparison
+eligibility. A successful explicit TCP query does not prove that an application
+or resolver automatically falls back after truncation unless that Run also
+observed the matching UDP TC response. Missing `dig` produces
+configuration-only partial evidence rather than a zero or a rejected
+throughput Run. Windows resolver parity is not implemented.
 
 At that same pre-load boundary, Network v9 reads guest-visible queue placement
 only for the route-derived Linux interface. A fixed read-only `ethtool -x`
@@ -170,8 +185,9 @@ not run `ethtool -X`, write a sysfs/procfs file, or change NIC/kernel settings.
 - iperf3 servers are one-shot and have watchdog deadlines;
 - route, MTU, bounded path-trace, NIC, aggregate/per-queue counter, and TCP-control probes use only the paired peer IP, the
   route-derived egress interface, fixed arguments, and read-only kernel state;
-- resolver queries use only the fixed `example.com.` name and A/AAAA record types,
-  and search-domain names and returned answer addresses are not persisted;
+- resolver queries use only the fixed `example.com.` name, A/AAAA record types,
+  and explicit UDP-without-retry or TCP transports; search-domain names and
+  returned answer addresses are not persisted;
 - guest queue placement is bounded to 128 queues, 4,096 RSS entries, and 256
   MSI IRQs; the RSS hash key is not persisted and no steering or affinity value
   is written;
@@ -213,7 +229,9 @@ The network domain remains `Partial`. Driver-exposed per-queue NIC counters are
 observational and not yet normalized across every NIC family. Guest-visible
 steering and IRQ affinity do not verify physical-host placement. System-resolver
 diagnostics do not yet cover controlled authoritative DNS, repeated cache-cold
-resolution, DNSSEC, TCP fallback, or Windows. CloudMark does not yet provide
+resolution, independent DNSSEC validation, automatic application-fallback
+verification, or Windows.
+CloudMark does not yet provide
 administrative route-ownership verification,
 unattended campaign scheduling, cross-pair orchestration, physical-fabric
 verification, or mTLS Agent identity. Windows

@@ -23,6 +23,11 @@ model never destroys or rewrites the original benchmark result.
    partial, or roadmap.
 7. **Suitability engine** consumes only valid catalog evidence and maps it to
    workload-specific gates. Missing evidence remains unknown rather than zero.
+8. **Continuous integration** uses a read-only GitHub Actions token, immutable
+   action SHAs, Python 3.9/3.13 Linux coverage, Python 3.13 Windows coverage,
+   and a pinned Node 22 dashboard job. CI runs only compile, unit, contract,
+   high-signal Python lint, branch-coverage, TypeScript lint/type-check,
+   OpenAPI, render, and production-build checks; it never starts a benchmark.
 
 ## Run lifecycle
 
@@ -35,6 +40,9 @@ queued → running → completed
 SQLite stores phase, current job, completed/total steps, normalized progress,
 heartbeat, cancellation request, and runner/methodology/tool versions. Compute,
 memory, and storage persist completed jobs as partial results during execution.
+Inventory and every memory preflight attach bounded read-only
+`memory-environment-v2` guest NUMA and snapshot-only paging context; collection failure remains explicit
+unavailable evidence and does not prevent the memory executor from running.
 A native storage operation profile persists `filesystem_operations` under the
 same Run lifecycle while retaining a methodology distinct from fio jobs.
 All storage executors attach a bounded read-only `storage_environment`
@@ -112,6 +120,19 @@ operator-confirmed API action. A completed fixed-pair campaign is temporal
 evidence only; it does not satisfy the independent-target requirement for a
 provider rating. An unfinished campaign is projected as `superseded` when its
 locked profile or methodology no longer matches the installed standard contract.
+
+`storage-campaign-v1` begins from one immutable completed baseline with full
+measurement, cleanup, storage-environment, and executor evidence. The baseline
+counts as the first window. The contract locks one target identity, profile,
+methodology, and `provider-observations-v5` storage contract for 3–30 distinct
+UTC completion days. Every later Run requires explicit write and window
+confirmation through the campaign endpoint; the generic Run endpoint rejects
+campaign fields. Each counted Run must retain matching run-time Target evidence,
+the complete executor-specific measurement payload, and timezone-aware start
+and completion on one UTC day. Duplicate-day, failed, cancelled, cross-midnight,
+or drifted Runs remain attempts but do not advance the campaign. Completion is
+temporal evidence for one target and never satisfies independent-target
+provider gates.
 
 ## Local saturation executors
 
@@ -233,7 +254,8 @@ path-trace, structured aggregate interface counters, bounded driver per-queue
 counter snapshots with an independently versioned observational normalizer,
 route/interface/MTU probes, read-only NIC
 driver/offload and TCP congestion-control capture, fixed system-resolver
-configuration and A/AAAA diagnostics, bounded guest-visible RSS/RPS/XPS/MSI
+configuration and explicit UDP/TCP A/AAAA plus resolver-asserted AD diagnostics,
+bounded guest-visible RSS/RPS/XPS/MSI
 IRQ-affinity evidence, bounded idle ICMP,
 directional TCP scaling, capped UDP sweeps derived from each direction's
 measured TCP peak, simultaneous bidirectional TCP, and Generator headroom
@@ -250,7 +272,8 @@ SQLite tables:
 - `sessions`: short-lived distributed assessment sessions;
 - `agents`: participants and their inventory evidence.
 - `agent_tasks`: durable per-agent task lifecycle, payload, result, and error.
-- `campaigns`: immutable repeated-network contracts and target window counts;
+- `campaigns`: version-discriminated immutable repeated-network and storage
+  contracts with target window counts;
   progress is derived from linked immutable Runs rather than duplicated state.
 
 WAL mode permits dashboard reads while a benchmark updates its job state.
@@ -279,7 +302,10 @@ session, Agent task claims, and campaign creation order.
 - Version 0.5 does not yet provide mTLS enrollment. HTTPS/VPN termination and
   access control remain operator responsibilities for remote deployments.
 - Provider metadata probes use fixed link-local endpoints, ignore proxies, have
-  short timeouts, and never retrieve user-data or credentials.
+  short timeouts, cap responses at 64 KiB, and never retrieve user-data or
+  credentials. A provider is detected only when its required bounded identity
+  fields and provider-specific handshake evidence are complete. Declared local
+  manifests remain unverified, bounded, and path-redacted.
 
 ## Versioning
 

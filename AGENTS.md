@@ -61,7 +61,7 @@ Requirements: Python 3.9 or newer, Node.js 22 or newer, and pnpm 11.
 ```powershell
 py -m venv .venv
 .\.venv\Scripts\Activate.ps1
-python -m pip install -e .
+python -m pip install -e ".[quality]"
 pnpm install
 ```
 
@@ -85,12 +85,18 @@ Run the smallest relevant checks first. Before handing off a material change,
 run the complete non-load-bearing suite:
 
 ```powershell
-python -m unittest discover -s tests_python -v
+python -m ruff check cloudmark tests_python scripts
+python -m coverage erase
+python -m coverage run -m unittest discover -s tests_python -v
+python -m coverage report
+pnpm run lint
+pnpm run typecheck
+pnpm run validate:openapi
 pnpm test
 ```
 
-Also run `pnpm run lint` for dashboard changes. Do not run full benchmarks in
-shared CI or on a developer workstation as part of routine verification.
+Do not run full benchmarks in shared CI or on a developer workstation as part
+of routine verification.
 
 ## Runtime data and recovery
 

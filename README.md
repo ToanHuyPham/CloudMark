@@ -1,5 +1,7 @@
 # CloudMark
 
+[![CI](https://github.com/ToanHuyPham/CloudMark/actions/workflows/ci.yml/badge.svg)](https://github.com/ToanHuyPham/CloudMark/actions/workflows/ci.yml)
+
 ![CloudMark infrastructure assessment platform](public/og-v050.png)
 
 CloudMark is an evidence-driven infrastructure assessment platform for cloud
@@ -38,6 +40,7 @@ timestamp, and raw result.
 | Available | Target-scoped, versioned Essential/Standard/Demanding workload gates with per-check run provenance and explicit unknown evidence |
 | Available | Exact-cohort repeated-window provider observations with median, P10/P90, best/worst, spread, topology/evidence-class contracts, and guarded comparison eligibility |
 | Available | Immutable, manually dispatched repeated network campaigns with one comparison-eligible window per UTC day |
+| Available | Immutable, baseline-anchored storage campaigns with explicit per-window confirmation and one exact-contract Run per UTC day |
 | Roadmap | Unattended sampling schedules, physical-fabric verification, additional vendor queue normalization, public-path classification, and mTLS enrollment |
 | Roadmap | Remaining CPU, memory/NUMA, GPU, application, platform, operations, and provider executors |
 | Partial | Read-only Linux Security Posture v2 runs locally or on an authenticated Agent with redacted kernel, LSM, Secure Boot, cgroup, network-hardening, and mount evidence; provider security evidence remains pending |
@@ -89,6 +92,11 @@ Requirements: Python 3.9+, Node.js 22+, and pnpm.
 python -m pip install -e .
 pnpm install
 ```
+
+For contributor quality checks, install `.[quality]` and run Ruff plus branch
+coverage before the dashboard lint, type-check, OpenAPI, and build/test gates.
+The checked-in CI workflow performs these checks without starting a benchmark;
+CLI dispatch tests mock every executor boundary rather than generating load.
 
 Start the Controller:
 
@@ -194,7 +202,7 @@ the authenticated `database-mysql-v1` MySQL/MariaDB Sysbench OLTP contract.
 The separate `web-http2-load-v1` profile adds bounded HTTP/2 multiplexed load
 without changing the readable Web v1/v2 contracts.
 Compute and memory remain `Partial` until floating-point, crypto, compilation,
-latency, NUMA, and broader architecture coverage are implemented. Network
+latency, measured remote-NUMA penalties, and broader architecture coverage are implemented. Network
 remains partial until driver per-queue evidence is normalized across additional NICs,
 controlled DNS coverage, cross-pair repeated windows, administrative path verification, and mTLS
 enrollment are implemented. Database coverage remains partial until checkpoint

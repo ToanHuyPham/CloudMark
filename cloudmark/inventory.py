@@ -20,6 +20,7 @@ from .tooling import (
     postgres_tool_supports,
     web_tool_supports,
 )
+from .memory_environment import collect_memory_environment
 
 
 def _run(command: list[str], timeout: float = 3.0) -> str | None:
@@ -210,13 +211,17 @@ def collect_inventory(workspace: Path | None = None) -> dict[str, Any]:
             "model": _cpu_model(),
             "logical_cores": os.cpu_count() or 1,
         },
-        "memory": {"total_bytes": _memory_bytes()},
+        "memory": {
+            "total_bytes": _memory_bytes(),
+            "environment": collect_memory_environment(),
+        },
         "virtualization": _virtualization(),
         "disks": _disks(workspace),
         "network": {"addresses": _network_addresses()},
         "capabilities": {
             "filesystem_metadata_benchmark": True,
             "storage_environment_linux": uname.system == "Linux" and Path("/proc/self/mountinfo").is_file(),
+            "memory_environment_linux": uname.system == "Linux" and Path("/sys/devices/system/node").is_dir(),
             "fio": shutil.which("fio") is not None,
             "iperf3": shutil.which("iperf3") is not None,
             "iproute2": shutil.which("ip") is not None,

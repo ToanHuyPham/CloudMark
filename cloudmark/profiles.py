@@ -432,7 +432,7 @@ ASSESSMENT_DOMAINS: list[dict[str, Any]] = [
     {"id": "provider-identity", "label": "Provider & Instance Identity", "status": "available", "summary": "Trusted metadata, declared manifests, region, zone and confidence"},
     {"id": "virtualization", "label": "Virtualization & Topology", "status": "partial", "summary": "Hypervisor evidence available; placement and deep topology pending"},
     {"id": "compute", "label": "CPU & Compute", "status": "partial", "summary": "Versioned integer single-, multi-core and sustained profiles available; floating point, crypto and compilation pending"},
-    {"id": "memory", "label": "Memory & NUMA", "status": "partial", "summary": "Versioned userspace bandwidth profiles available; true latency, STREAM and NUMA penalties pending"},
+    {"id": "memory", "label": "Memory & NUMA", "status": "partial", "summary": "Versioned userspace bandwidth, guest NUMA topology, and snapshot paging context available; true latency, STREAM and measured remote-node penalties pending"},
     {"id": "storage", "label": "Storage, Filesystem & Object", "status": "available", "summary": "Safe block/filesystem profiles available; object and snapshot tests pending"},
     {"id": "network", "label": "Network & Connectivity", "status": "partial", "summary": "Two-Agent TCP/UDP, idle/loaded latency, bounded path, driver queue, guest steering/IRQ, and system-resolver evidence, metadata-aware topology checks, Generator validity, and manual repeated windows available; physical-fabric verification and cross-pair automation pending"},
     {"id": "gpu", "label": "GPU & Accelerators", "status": "roadmap", "summary": "GPU inventory, VRAM, transfer, compute and framework profiles"},

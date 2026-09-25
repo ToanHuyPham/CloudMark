@@ -14,7 +14,7 @@ from cloudmark.storage_environment import (
     parse_mountinfo,
     select_workspace_mount,
 )
-from cloudmark.suitability import _run_storage_contract, evaluate_suitability
+from cloudmark.suitability import evaluate_suitability, storage_run_contract
 
 
 class StorageEnvironmentTests(unittest.TestCase):
@@ -142,9 +142,9 @@ class StorageEnvironmentTests(unittest.TestCase):
                 },
             }
 
-        deadline, deadline_verified = _run_storage_contract(run("mq-deadline"))
-        none, none_verified = _run_storage_contract(run("none"))
-        missing, missing_verified = _run_storage_contract({"suite": "storage", "result": {}})
+        deadline, deadline_verified = storage_run_contract(run("mq-deadline"))
+        none, none_verified = storage_run_contract(run("none"))
+        missing, missing_verified = storage_run_contract({"suite": "storage", "result": {}})
         self.assertTrue(deadline_verified)
         self.assertTrue(none_verified)
         self.assertNotEqual(deadline, none)

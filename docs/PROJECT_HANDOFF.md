@@ -11,6 +11,11 @@ The long-term product must support both major global providers and providers
 that expose no metadata service or public API. Vietnamese infrastructure
 providers are a primary use case.
 
+Provider identity probes fail closed: fixed proxy-free metadata requests must
+return a complete bounded provider-specific identity before CloudMark assigns
+high confidence. Local manifests remain bounded operator claims, are labelled
+unverified, and never persist their source path.
+
 ## Product principles
 
 1. **Evidence before scoring.** Unknown or unavailable measurements remain
@@ -30,7 +35,7 @@ providers are a primary use case.
 
 - provider and machine identity;
 - CPU performance, scaling, stability, and steal time;
-- memory bandwidth and scaling;
+- memory bandwidth and scaling plus bounded guest-visible NUMA topology;
 - storage throughput, IOPS, latency percentiles, synchronous behavior, mixed
   and sustained behavior, plus small-file metadata, checksum integrity,
   filesystem fsync, cache-scope, and cleanup evidence;
@@ -69,8 +74,8 @@ pre/post route and interface-counter snapshots, route/interface/MTU, read-only
 NIC driver/offload, TCP congestion-control, and bounded numeric path-trace
 evidence; bounded versioned common driver per-queue packet/byte counter deltas;
 queue-distribution,
-guest-visible RSS/RPS/XPS/MSI IRQ affinity, and fixed system-resolver diagnostic
-observations; and route-stability and
+guest-visible RSS/RPS/XPS/MSI IRQ affinity, and versioned fixed UDP/TCP
+system-resolver transport plus resolver-asserted AD observations; and route-stability and
 Generator-headroom validity gates. It retains bounded idle latency,
 directional TCP scaling, adaptive UDP loss/jitter sweeps, and simultaneous
 bidirectional TCP between the two Agents.
@@ -125,6 +130,18 @@ time-separated evidence for that pair, not a provider rating or a substitute
 for independent targets. A standard profile or methodology upgrade preserves
 an unfinished older contract as `superseded` and requires a new campaign.
 
+`storage-campaign-v1` creates a separate immutable acquisition contract from a
+completed exact-contract storage baseline. The baseline counts as the first of
+3–30 distinct UTC completion-day windows. Every later window is manually
+confirmed through the guarded campaign endpoint and retains both confirmation
+values. Generic Run submission cannot attach campaign metadata. Counted Runs
+must preserve matching run-time Target evidence, complete executor-specific
+measurements, and timezone-aware start/completion within one UTC day. Target/
+profile/filesystem/block/tool drift, duplicate days, failed or cancelled Runs,
+and cross-midnight completion do not count. A completed campaign is temporal
+evidence for one target and does not satisfy the independent-target requirement
+for provider evaluation.
+
 `linux-security-posture-v2` is a read-only single-target suite for a Linux
 Controller or authenticated Agent. It records bounded/redacted guest controls,
 Run provenance, and remote attribution in the API/dashboard without a score.
@@ -141,6 +158,8 @@ still require separate contracts.
 - `docs/`: architecture, methodology, safety, operations, and roadmap.
 - `scripts/`: bootstrap, local operation, and runtime recovery scripts.
 - `tests_python/` and `tests/`: non-destructive verification.
+- `.github/workflows/ci.yml`: least-privilege, SHA-pinned, non-load-bearing
+  Python Ruff/branch-coverage and dashboard quality gates.
 
 ## Supported operating-system direction
 

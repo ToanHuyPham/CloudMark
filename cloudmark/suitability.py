@@ -745,7 +745,7 @@ def _contract_token(value: Any, fallback: str = "unknown") -> str:
     return normalized[:160] if normalized else fallback
 
 
-def _run_storage_contract(run: dict[str, Any]) -> tuple[str, bool]:
+def storage_run_contract(run: dict[str, Any]) -> tuple[str, bool]:
     if str(run.get("suite") or "") != "storage":
         return "not-applicable", True
     result = run.get("result") if isinstance(run.get("result"), dict) else {}
@@ -872,7 +872,7 @@ def _provider_observations(targets: list[dict[str, Any]]) -> dict[str, Any]:
                     unit = str(item.get("unit") or "")
                     topology_scope, topology_evidence = _run_topology_contract(run)
                     implementation_contract, implementation_verified = _run_implementation_contract(run)
-                    storage_contract, storage_contract_verified = _run_storage_contract(run)
+                    storage_contract, storage_contract_verified = storage_run_contract(run)
                     contract_key = (
                         metric_key,
                         profile,
