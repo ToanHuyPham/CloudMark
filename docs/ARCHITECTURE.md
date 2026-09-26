@@ -120,6 +120,13 @@ neutralizes spreadsheet-formula prefixes; and is bounded to 50,000 rows and
 16 MiB. It exports neither a provider score nor a ranking and does not create a
 second aggregation methodology.
 
+`cost-observation-v1` persists a separate immutable operator-claim stream. Each
+record snapshots one target's provider/SKU/region/OS identity and retains an
+exact decimal price, currency, billing unit, commitment/tax context, timestamp
+and timestamp source, plus a bounded source reference. CloudMark never fetches
+the source or normalizes values across billing contracts. Cost observations do
+not enter suitability metrics, provider cohorts, or provider-rating readiness.
+
 `network-campaign-v1` is the durable acquisition contract for one fixed
 Target/Generator pair. It locks the pairing session, participant identities,
 topology evidence class, `network-peer-standard` profile version, and
@@ -285,6 +292,8 @@ SQLite tables:
 - `campaigns`: version-discriminated immutable repeated-network and storage
   contracts with target window counts;
   progress is derived from linked immutable Runs rather than duplicated state.
+- `cost_observations`: immutable timestamped operator price context with exact
+  target/source provenance and no update/delete path.
 
 WAL mode permits dashboard reads while a benchmark updates its job state.
 The frequently polled dashboard endpoint returns presentation summaries: only

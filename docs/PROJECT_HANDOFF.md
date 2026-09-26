@@ -130,6 +130,12 @@ export the exact v6 cohort contracts, statistics, UTC windows, target IDs, and
 Run provenance as bounded formula-neutralized CSV. The export keeps provider
 status `not-rated` and contains no score or ranking.
 
+`cost-observation-v1` records immutable timestamped operator price context for
+an exact target identity. Exact decimal/currency/unit, commitment/tax context,
+timestamp source, and bounded public-URL or redacted-reference provenance are
+retained. CloudMark does not fetch/verify the source, normalize prices, compute
+price/performance, or treat these records as provider-rating input.
+
 `network-campaign-v1` persists an immutable acquisition contract for one fixed
 Target/Generator pair and counts at most one comparison-eligible
 `network-peer-standard` Run per UTC day. Campaign creation is side-effect free;

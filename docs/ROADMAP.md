@@ -223,6 +223,10 @@ comparable; this remains distinct from a provider rating.
 `provider-observation-export-v1` is available as a bounded formula-neutralized
 CSV projection with exact contracts, descriptive statistics, windows, target
 IDs, and Run provenance. It does not add a score or ranking.
+`cost-observation-v1` separately stores immutable operator-supplied price
+context with exact decimal/currency/unit/source and target identity provenance.
+It remains unverified and is not a rating input; billing-term verification,
+normalization, exchange-rate policy, and price/performance remain planned.
 
 Each use case defines:
 
@@ -231,7 +235,8 @@ Each use case defines:
 3. stability — variance across runs, instances, and time windows;
 4. evidence confidence — topology, sample count, and tool health;
 5. operational evidence — snapshot, failover, API, and security;
-6. cost input — stored separately with timestamp, currency, and source.
+6. cost input — stored separately with timestamp, currency, source, and target
+   provenance in `cost-observation-v1`; verification/normalization remain planned.
 
 Current target verdicts are `Suitable`, `Conditional fit`, `Below requirement`,
 or `Insufficient evidence`. Future empirically calibrated provider reports may

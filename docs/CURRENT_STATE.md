@@ -308,9 +308,15 @@ baseline is still the repository head.
   converted into a score. Median/P10/P90/best/worst/spread statistics retain a
   guarded nine-sample/three-target/three-window comparable state. MySQL and
   MariaDB or different server versions cannot be silently merged. The complete
-  development head passes 219 Python tests, 4 dashboard/CI-contract tests,
-  Ruff, 75.7% branch coverage, dashboard lint and strict type checking, OpenAPI
+  development head passes 223 Python tests, 4 dashboard/CI-contract tests,
+  Ruff, 76.0% branch coverage, dashboard lint and strict type checking, OpenAPI
   validation, and the production build without starting provider load;
+- `cost-observation-v1` authenticated immutable timestamped cost context for a
+  Controller or Agent target, with provider/SKU/region/OS snapshot, exact
+  decimal/currency/billing unit, commitment/tax state, timestamp source, and a
+  bounded provider-public URL or redacted operator reference. Every record
+  remains `operator-declared-unverified`; CloudMark fetches no source, stores no
+  document, performs no price normalization, and does not enable rating;
 - implemented and simulation-verified `linux-security-posture-v2` single-target
   executor for a Linux Controller host or authenticated Linux Agent, with
   profile/methodology/tool versions, remote Agent attribution, task heartbeat/
@@ -467,7 +473,7 @@ Controller run: `run_1c572100e8704843`.
   unavailable, and no provider security rating is produced;
 - GPU evidence and GPU benchmarks are not complete;
 - scheduled sampling campaigns, cross-pair orchestration, cross-zone analysis,
-  timestamped cost,
+  independently verified and normalized cost,
   operational domains, and final provider ratings remain Roadmap; suitability
   evaluates individual targets while provider observations remain descriptive;
 - Windows is suitable for the Controller and inventory, but benchmark executor
@@ -488,9 +494,10 @@ Controller run: `run_1c572100e8704843`.
    replication overhead, and RPO/RTO evidence.
 4. Complete remaining compute, memory/NUMA, GPU, provider security, reliability,
    observability, container, and control-plane executors.
-5. Extend campaigns across independent targets and add timestamped price
-   inputs before any final provider-rating methodology; exact-cohort CSV export
-   is now available.
+5. Extend campaigns across independent targets, then add verified billing terms,
+   unit/currency normalization, and price/performance methodology before any
+   final provider rating; raw timestamped cost input and exact-cohort CSV export
+   are now available.
 6. Calibrate and version requirement thresholds across regional clouds, global
    clouds, and self-operated bare metal before treating them as stable policy.
 7. Run provider-machine validation only after the development milestones are

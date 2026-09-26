@@ -19,6 +19,8 @@ X-CloudMark-Token: <token printed by cloudmark serve>
 | GET | `/suitability` | Versioned target-scoped workload gates and provider-readiness evidence |
 | GET | `/provider-comparisons` | Exact-cohort repeated-window descriptive statistics |
 | GET | `/provider-comparisons.csv` | Bounded audit CSV with exact contracts, statistics, windows, and Run IDs |
+| GET | `/cost-observations` | Immutable timestamped operator cost context |
+| POST | `/cost-observations` | Record source-bound cost context for one exact target |
 | GET | `/profiles` | Benchmark and scenario profiles |
 | GET | `/network-campaigns` | Repeated network campaign projections |
 | POST | `/network-campaigns` | Create an immutable fixed-pair campaign without starting traffic |
@@ -517,6 +519,44 @@ and 16 MiB.
 Text cells that could be interpreted as spreadsheet formulas are prefixed with
 an apostrophe. The export preserves `not-rated` and includes no provider score,
 rank, or winner field. An empty observation set returns the stable header row.
+
+## Record cost context
+
+```http
+POST /api/v1/cost-observations
+X-CloudMark-Token: <controller token>
+Content-Type: application/json
+
+{
+  "target_id": "controller",
+  "amount": "0.125",
+  "currency": "USD",
+  "billing_unit": "hour",
+  "commitment": "on-demand",
+  "tax_included": false,
+  "source_type": "provider-public-url",
+  "source_reference": "https://provider.example/pricing"
+}
+```
+
+`amount` must be an exact positive decimal string; JSON floating-point numbers
+are rejected. An optional timezone-aware `observed_at` is normalized to UTC.
+When omitted, Controller receipt time is used and the timestamp source remains
+machine-readable. The selected target must already expose provider and SKU
+identity. Public URLs must use HTTPS and contain no credentials or fragment.
+
+The response is an immutable `cost-observation-v1` claim with target-identity
+provenance and `operator-declared-unverified` status. CloudMark does not fetch
+the source, store a document, infer billing terms, normalize units, or calculate
+price/performance. `provider_rating_input` remains false.
+
+```http
+GET /api/v1/cost-observations
+```
+
+This returns the bounded recent collection. Do not submit credentials, signed
+URLs, customer/account identifiers, or unredacted invoice content. See
+[`COST_OBSERVATION_METHODOLOGY.md`](COST_OBSERVATION_METHODOLOGY.md).
 
 The complete machine-readable contract is in
 [`openapi/cloudmark-v1.yaml`](../openapi/cloudmark-v1.yaml).

@@ -5753,6 +5753,7 @@ traffic: 2048000 bytes total, 128000 bytes headers (space savings 75.00%), 20480
         self.assertEqual(domains["database"], "partial")
         self.assertEqual(domains["web"], "partial")
         self.assertEqual(domains["security"], "partial")
+        self.assertEqual(domains["cost"], "partial")
         self.assertEqual(domains["reliability"], "roadmap")
         self.assertEqual(SECURITY_PROFILES["linux-security-posture"]["methodology_version"], "linux-security-posture-v2")
         self.assertTrue(SECURITY_PROFILES["linux-security-posture"]["read_only"])
@@ -6160,6 +6161,8 @@ max: 1.50
                 self.assertIn("sessions", dashboard)
                 self.assertEqual(dashboard["network_campaigns"], [])
                 self.assertEqual(dashboard["storage_campaigns"], [])
+                self.assertEqual(dashboard["cost_observations"]["items"], [])
+                self.assertFalse(dashboard["cost_observations"]["provider_rating_input"])
                 self.assertEqual(dashboard["suitability"]["engine_version"], "suitability-v1")
                 self.assertFalse(dashboard["suitability"]["policy"]["missing_evidence_is_zero"])
                 with urllib.request.urlopen(f"{base}/suitability", timeout=5) as response:
@@ -6195,6 +6198,55 @@ max: 1.50
                 with urllib.request.urlopen(f"{base}/storage-campaigns", timeout=5) as response:
                     storage_campaigns = json.load(response)
                 self.assertEqual(storage_campaigns["items"], [])
+                controller._inventory = {
+                    "hostname": "api-cost-target",
+                    "os": {"system": "Linux", "distribution": "Ubuntu", "architecture": "x86_64"},
+                }
+                controller._provider = {
+                    "provider": "API Test Provider",
+                    "confidence": 0.99,
+                    "source": "provider-metadata",
+                    "instance_type": "standard-4",
+                    "region": "region-a",
+                    "zone": "zone-a",
+                }
+                cost_request = urllib.request.Request(
+                    f"{base}/cost-observations",
+                    data=json.dumps({
+                        "target_id": "controller",
+                        "amount": "0.125",
+                        "currency": "USD",
+                        "billing_unit": "hour",
+                        "commitment": "on-demand",
+                        "tax_included": False,
+                        "source_type": "provider-public-url",
+                        "source_reference": "https://provider.example/pricing",
+                    }).encode("utf-8"),
+                    headers={
+                        "Content-Type": "application/json",
+                        "X-CloudMark-Token": controller.token,
+                    },
+                    method="POST",
+                )
+                unauthorized_cost_request = urllib.request.Request(
+                    f"{base}/cost-observations",
+                    data=cost_request.data,
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
+                )
+                with self.assertRaises(urllib.error.HTTPError) as unauthorized_cost:
+                    urllib.request.urlopen(unauthorized_cost_request, timeout=5)
+                self.assertEqual(unauthorized_cost.exception.code, 401)
+                with urllib.request.urlopen(cost_request, timeout=5) as response:
+                    cost_observation = json.load(response)
+                    self.assertEqual(response.status, 201)
+                self.assertEqual(cost_observation["version"], "cost-observation-v1")
+                self.assertEqual(cost_observation["evidence_status"], "operator-declared-unverified")
+                self.assertFalse(cost_observation["policy"]["provider_rating_input"])
+                with urllib.request.urlopen(f"{base}/cost-observations", timeout=5) as response:
+                    cost_report = json.load(response)
+                self.assertEqual(cost_report["items"][0]["id"], cost_observation["id"])
+                self.assertEqual(cost_report["rating_status"], "not-rated")
                 controller.database.create_session(
                     "session_http_campaign",
                     "HTTP campaign pair",

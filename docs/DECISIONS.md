@@ -879,3 +879,21 @@ projection prevents CSV from becoming a second aggregation path. Row/size
 bounds protect the local Controller, while formula neutralization prevents
 provider or tool labels from becoming active spreadsheet content when the file
 is opened by common desktop software.
+
+## D-054: Cost v1 is an immutable operator claim, not a comparison metric
+
+**Decision:** Add `cost-observation-v1` as a separate authenticated immutable
+record tied to a snapshot of one Controller/Agent target identity. Require an
+exact decimal string, three-letter currency, fixed billing unit and commitment
+class, explicit tax state, timestamp provenance, and either a public HTTPS URL
+without credentials/fragment or a bounded redacted operator reference. Store no
+document and provide no update/delete endpoint. Set
+`evidence_status=operator-declared-unverified`,
+`provider_rating_input=false`, `price_performance_calculated=false`, and
+`missing_terms_inferred=false` for every record.
+
+**Reason:** Timestamped source-bound price context is necessary before cost can
+be analyzed, but hourly/monthly terms, taxes, commitments, included usage,
+discounts, licenses, and currencies are not interchangeable. Persisting the raw
+claim separately makes later audit possible without prematurely normalizing it
+or allowing one operator-entered price to satisfy a provider-rating gate.

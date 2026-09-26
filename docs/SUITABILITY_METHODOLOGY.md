@@ -94,7 +94,8 @@ A target verdict is not a provider verdict. CloudMark keeps provider status
 2. three or more independent targets of the same product;
 3. three or more measurement windows;
 4. equivalent compute, memory, storage, and network profiles; and
-5. security, reliability, control-plane, and timestamped cost evidence.
+5. security, reliability, control-plane, and independently verified normalized
+   cost evidence.
 
 Future provider-rating aggregation must preserve sample count, median, P10/P90,
 worst observed value, zones, time windows, and methodology compatibility. SLA,
@@ -160,6 +161,12 @@ rows and 16 MiB.
 This is an audit/analysis transport only. It does not recalculate evidence,
 merge cohorts, select winners, or add provider score/rank fields. A header-only
 file is valid when no provider cohort exists.
+
+`cost-observation-v1` is intentionally outside the suitability and provider
+comparison projections. It preserves timestamped operator price context, but
+does not verify billing terms, normalize units/currencies, or calculate
+price/performance. Recording one or more cost observations therefore leaves the
+provider cost criterion unsatisfied and `rating_status=not-rated`.
 
 ## Interpretation discipline
 

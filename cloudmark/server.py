@@ -26,6 +26,7 @@ from .campaigns import (
     project_network_campaign,
 )
 from .compute import ComputeError, run_system_benchmark, system_preflight
+from .cost import COST_OBSERVATION_VERSION, CostObservationError, build_cost_observation
 from .database import Database
 from .database_benchmark import (
     DatabaseBenchmarkError,
@@ -183,6 +184,7 @@ class CloudMarkController:
             "sessions": [enrich_pairing_session(session) for session in self.database.list_sessions(10)],
             "network_campaigns": self.list_network_campaigns(),
             "storage_campaigns": self.list_storage_campaigns(),
+            "cost_observations": self.cost_observation_report(limit=20),
             "profiles": all_profiles(),
             "suitability": evaluate_suitability(
                 evidence_runs,
@@ -197,6 +199,34 @@ class CloudMarkController:
                 "full_run_evidence_endpoint": "/api/v1/runs/{id}",
             },
         }
+
+    def cost_observation_report(self, *, limit: int = 200) -> dict[str, Any]:
+        return {
+            "version": COST_OBSERVATION_VERSION,
+            "rating_status": "not-rated",
+            "provider_rating_input": False,
+            "claim": "Operator-supplied timestamped price context; CloudMark has not verified provider billing terms.",
+            "items": self.database.list_cost_observations(limit),
+        }
+
+    def create_cost_observation(self, request: dict[str, Any]) -> dict[str, Any]:
+        with self._submission_lock:
+            target_id = str(request.get("target_id") or "controller").strip()
+            if target_id == "controller":
+                system = self.system()
+            else:
+                agent = self.database.get_agent(target_id)
+                if not agent:
+                    raise LookupError("Cost observation target was not found.")
+                system = agent.get("system") if isinstance(agent.get("system"), dict) else {}
+            observation = build_cost_observation(
+                f"cost_{uuid.uuid4().hex[:12]}",
+                request,
+                target_id,
+                system,
+            )
+            self.database.create_cost_observation(observation)
+            return observation
 
     def list_network_campaigns(self, *, runs: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
         campaign_runs = runs if runs is not None else self.database.list_campaign_runs()
@@ -1170,6 +1200,8 @@ class Handler(BaseHTTPRequestHandler):
                     "text/csv; charset=utf-8",
                     content_disposition='attachment; filename="cloudmark-provider-observations.csv"',
                 )
+            elif path == "/api/v1/cost-observations":
+                self._send(200, self.controller.cost_observation_report())
             elif path == "/api/v1/profiles":
                 self._send(200, all_profiles())
             elif path == "/api/v1/network-campaigns":
@@ -1243,6 +1275,8 @@ class Handler(BaseHTTPRequestHandler):
             elif path.startswith("/api/v1/storage-campaigns/") and path.endswith("/runs"):
                 campaign_id = path.split("/")[-2]
                 self._send(202, self.controller.start_storage_campaign_window(campaign_id, body))
+            elif path == "/api/v1/cost-observations":
+                self._send(201, self.controller.create_cost_observation(body))
             elif path == "/api/v1/sessions":
                 self._send(
                     201,
@@ -1265,6 +1299,7 @@ class Handler(BaseHTTPRequestHandler):
             ComputeError,
             NetworkError,
             SecurityPostureError,
+            CostObservationError,
             json.JSONDecodeError,
         ) as exc:
             self._send_failure(400, exc)

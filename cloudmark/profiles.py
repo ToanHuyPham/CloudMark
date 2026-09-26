@@ -443,7 +443,7 @@ ASSESSMENT_DOMAINS: list[dict[str, Any]] = [
     {"id": "reliability", "label": "Reliability, HA & DR", "status": "roadmap", "summary": "Failover, replication, snapshot, restore, RPO and RTO drills"},
     {"id": "observability", "label": "Observability & Operations", "status": "roadmap", "summary": "Metrics, logs, traces, clock sync, alerting and operational overhead"},
     {"id": "control-plane", "label": "Provisioning & Control Plane", "status": "roadmap", "summary": "Create, resize, attach, snapshot and API reliability measurements"},
-    {"id": "cost", "label": "Cost & Efficiency", "status": "roadmap", "summary": "Timestamped pricing, price/performance and resource efficiency"},
+    {"id": "cost", "label": "Cost & Efficiency", "status": "partial", "summary": "Immutable timestamped operator price context available; verification, normalization, price/performance, and resource efficiency pending"},
     {"id": "consistency", "label": "Consistency & Noisy Neighbor", "status": "roadmap", "summary": "Cross-instance variance, throttling, steal time and time-window stability"},
 ]
 

@@ -1189,6 +1189,49 @@ type ProviderObservations = {
   excluded_targets: { target_id: string; reason: string }[];
 };
 
+type CostObservation = {
+  id: string;
+  version: "cost-observation-v1";
+  created_at: string;
+  observed_at: string;
+  observed_at_source: "controller-receipt-time" | "operator-supplied";
+  target: {
+    id: string;
+    hostname: string;
+    provider: string;
+    provider_source: string;
+    provider_confidence: number;
+    instance_type: string;
+    region: string;
+    zone: string;
+    operating_system: string;
+    architecture: string;
+  };
+  price: {
+    amount: string;
+    currency: string;
+    billing_unit: "hour" | "month" | "year" | "one-time";
+    commitment: "on-demand" | "spot" | "reserved" | "contract" | "unknown";
+    tax_included: boolean | null;
+  };
+  source: {
+    type: "provider-public-url" | "operator-reference";
+    reference: string;
+    fetched_by_cloudmark: false;
+    document_persisted: false;
+  };
+  evidence_status: "operator-declared-unverified";
+  claim: string;
+};
+
+type CostObservationReport = {
+  version: "cost-observation-v1";
+  rating_status: "not-rated";
+  provider_rating_input: false;
+  claim: string;
+  items: CostObservation[];
+};
+
 type SuitabilityReport = {
   engine_version: string;
   requirements_version: string;
@@ -1206,6 +1249,7 @@ type Dashboard = {
   sessions: Session[];
   network_campaigns: NetworkCampaign[];
   storage_campaigns: StorageCampaign[];
+  cost_observations: CostObservationReport;
   suitability?: SuitabilityReport;
   profiles: {
     compute: Record<string, { label: string; description: string; estimated_minutes: number; profile_version: string; methodology_version: string; jobs: { name: string }[] }>;
@@ -1407,6 +1451,14 @@ export default function Home() {
   const [selectedRequirementLevel, setSelectedRequirementLevel] = useState("essential");
   const [selectedSuitabilityScenario, setSelectedSuitabilityScenario] = useState("web-app");
   const [selectedProviderContract, setSelectedProviderContract] = useState("");
+  const [costTargetId, setCostTargetId] = useState("controller");
+  const [costAmount, setCostAmount] = useState("");
+  const [costCurrency, setCostCurrency] = useState("USD");
+  const [costBillingUnit, setCostBillingUnit] = useState<"hour" | "month" | "year" | "one-time">("hour");
+  const [costCommitment, setCostCommitment] = useState<"on-demand" | "spot" | "reserved" | "contract" | "unknown">("on-demand");
+  const [costTaxState, setCostTaxState] = useState<"unknown" | "included" | "excluded">("unknown");
+  const [costSourceType, setCostSourceType] = useState<"provider-public-url" | "operator-reference">("provider-public-url");
+  const [costSourceReference, setCostSourceReference] = useState("");
   const [selectedExecutionTarget, setSelectedExecutionTarget] = useState("local");
   const [selectedSessionId, setSelectedSessionId] = useState("");
   const [selectedTopologyScope, setSelectedTopologyScope] = useState<TopologyScope>("undeclared");
@@ -1686,6 +1738,7 @@ export default function Home() {
     (total, group) => total + group.metric_cohorts.filter((metric) => metric.status === "comparable").length,
     0,
   );
+  const costObservations = dashboard?.cost_observations.items || [];
 
   function runTargetName(run: Run) {
     const remoteId = run.request?.agent_id;
@@ -1714,6 +1767,42 @@ export default function Home() {
       return false;
     }
     return true;
+  }
+
+  async function recordCostObservation() {
+    if (!requireToken()) return;
+    if (!costAmount.trim() || !costSourceReference.trim()) {
+      setNotice("Enter an exact decimal price and a bounded source reference before recording cost evidence.");
+      return;
+    }
+    setBusy(true);
+    setNotice(null);
+    try {
+      const response = await fetch(`${API}/cost-observations`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-CloudMark-Token": token },
+        body: JSON.stringify({
+          target_id: costTargetId,
+          amount: costAmount.trim(),
+          currency: costCurrency.trim().toUpperCase(),
+          billing_unit: costBillingUnit,
+          commitment: costCommitment,
+          tax_included: costTaxState === "unknown" ? null : costTaxState === "included",
+          source_type: costSourceType,
+          source_reference: costSourceReference.trim(),
+        }),
+      });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || "Unable to record cost evidence");
+      setCostAmount("");
+      setCostSourceReference("");
+      setNotice(`Recorded ${payload.price.amount} ${payload.price.currency}/${payload.price.billing_unit} as unverified operator-supplied cost context.`);
+      await loadDashboard();
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Unable to record cost evidence");
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function startStorage() {
@@ -2860,6 +2949,24 @@ export default function Home() {
               <article className="panel"><span>COMPARABLE METRICS</span><strong>{comparableMetricCount}</strong><small>minimum sampling contract satisfied</small></article>
               <article className="panel"><span>EXCLUDED TARGETS</span><strong>{providerObservations?.excluded_targets.length || 0}</strong><small>missing identity, SKU, or fresh evidence</small></article>
               <article className="panel caution"><span>PROVIDER RATING</span><strong>Not rated</strong><small>operational and cost gates remain unavailable</small></article>
+            </section>
+            <section className="panel cost-observation-panel">
+              <div className="panel-head"><div><span className="section-kicker">TIMESTAMPED COST CONTEXT</span><h3>Record an immutable operator claim without creating a score.</h3></div><span className="run-id">{dashboard?.cost_observations.version || "cost-observation-v1"}</span></div>
+              <div className="cost-entry-grid">
+                <label><span>TARGET</span><select value={costTargetId} onChange={(event) => setCostTargetId(event.target.value)}><option value="controller">Controller host</option>{allAgents.map((agent) => <option key={agent.id} value={agent.id}>{agent.name} · {agent.id}</option>)}</select></label>
+                <label><span>PRICE</span><input inputMode="decimal" maxLength={20} value={costAmount} onChange={(event) => setCostAmount(event.target.value)} placeholder="0.125" /></label>
+                <label><span>CURRENCY</span><input maxLength={3} value={costCurrency} onChange={(event) => setCostCurrency(event.target.value.toUpperCase())} placeholder="USD" /></label>
+                <label><span>BILLING UNIT</span><select value={costBillingUnit} onChange={(event) => setCostBillingUnit(event.target.value as typeof costBillingUnit)}><option value="hour">Hour</option><option value="month">Month</option><option value="year">Year</option><option value="one-time">One time</option></select></label>
+                <label><span>COMMITMENT</span><select value={costCommitment} onChange={(event) => setCostCommitment(event.target.value as typeof costCommitment)}><option value="on-demand">On demand</option><option value="spot">Spot</option><option value="reserved">Reserved</option><option value="contract">Contract</option><option value="unknown">Unknown</option></select></label>
+                <label><span>TAX</span><select value={costTaxState} onChange={(event) => setCostTaxState(event.target.value as typeof costTaxState)}><option value="unknown">Unknown</option><option value="included">Included</option><option value="excluded">Excluded</option></select></label>
+                <label><span>SOURCE TYPE</span><select value={costSourceType} onChange={(event) => setCostSourceType(event.target.value as typeof costSourceType)}><option value="provider-public-url">Provider public HTTPS URL</option><option value="operator-reference">Operator reference</option></select></label>
+                <label className="cost-source-field"><span>SOURCE REFERENCE</span><input maxLength={512} value={costSourceReference} onChange={(event) => setCostSourceReference(event.target.value)} placeholder={costSourceType === "provider-public-url" ? "https://provider.example/pricing" : "Redacted quote or invoice reference"} /></label>
+                <button className="button primary" onClick={recordCostObservation} disabled={busy}>Record cost context</button>
+              </div>
+              <p className="method-note">The Controller receipt time becomes the observation timestamp. CloudMark snapshots the selected target identity but does not fetch the source, infer missing billing terms, calculate price/performance, or use this claim for provider rating.</p>
+              <div className="cost-observation-list">
+                {costObservations.length ? costObservations.slice(0, 6).map((item) => <article key={item.id}><div><span>{item.target.provider} · {item.target.instance_type}</span><strong>{item.price.amount} {item.price.currency} / {item.price.billing_unit}</strong><small>{item.price.commitment} · tax {item.price.tax_included == null ? "unknown" : item.price.tax_included ? "included" : "excluded"} · {new Date(item.observed_at).toLocaleString("en-US")} · {item.observed_at_source.replaceAll("-", " ")}</small></div><div><code>{item.source.type}</code><small>{item.source.reference}</small><i>Operator claim</i></div></article>) : <div className="provider-metric-empty"><strong>No cost context recorded.</strong><p>Add a timestamped source-bound claim for the exact target. This will not satisfy the final cost or provider-rating gate.</p></div>}
+              </div>
             </section>
             <section className="panel comparison-contract-panel">
               <div className="panel-head"><div><span className="section-kicker">COMPARISON CONTRACT</span><h3>{activeProviderContract?.label || "No compatible metric evidence yet"}</h3></div><span className="run-id">{providerObservations?.version || "provider-observations-v6"}</span></div>
