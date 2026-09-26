@@ -389,6 +389,7 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .provider-criteria p { margin: 0 0 7px; display: flex; gap: 9px; align-items: center; color: #8d9aa6; font-size: var(--type-label); }.provider-criteria p:last-child { margin-bottom: 0; }.provider-criteria i { width: 18px; color: #6d7a86; font-style: normal; text-align: center; }.provider-criteria .met i { color: var(--lime); }
 
 .provider-contract-selector { min-width: min(480px, 100%); }
+.provider-export-link { display: inline-flex; align-items: center; justify-content: center; text-decoration: none; }
 .provider-summary-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-top: 18px; }
 .provider-summary-grid article { min-width: 0; min-height: 110px; padding: 16px; }
 .provider-summary-grid span, .provider-summary-grid strong, .provider-summary-grid small { display: block; overflow-wrap: anywhere; }
@@ -584,6 +585,7 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
   .sidebar { padding-left: 16px; padding-right: 16px; }
   .workspace { padding: 0 16px; }.topbar { align-items: flex-start; padding: 18px 0; }.top-actions { flex-wrap: wrap; justify-content: flex-end; }.api-state, .button.secondary { display: none; }
   .campaign-empty .button.secondary { display: inline-flex; }
+  .provider-contract-selector .provider-export-link { display: inline-flex; }
   .panel-head { align-items: flex-start; flex-wrap: wrap; }.compact-select { width: 100%; min-width: 0; }.compact-select select { width: 100%; max-width: 100%; }
   .campaign-progress { grid-template-columns: 1fr; }
   .campaign-progress > div, .campaign-progress > div:nth-child(2n) { border-right: 0; border-bottom: 1px solid var(--line); }

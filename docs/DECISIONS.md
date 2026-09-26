@@ -861,3 +861,21 @@ turn a resource-control difference into apparent provider variance. Exact
 stable boundary fields preserve useful repeated evidence while excluding
 transient utilization snapshots that would fragment every run into a separate
 cohort.
+
+## D-053: Provider cohort export is bounded, formula-neutralized, and unscored
+
+**Decision:** Add `provider-observation-export-v1` as a read-only deterministic
+UTF-8 CSV projection of `provider-observations-v6`. Emit one row per exact
+metric cohort with projection/export versions, generation time, provider/SKU/
+region/OS identity, all compatibility contracts, status/reasons, descriptive
+statistics, UTC windows, target IDs, and source Run IDs. Prefix text cells that
+could be interpreted as spreadsheet formulas after leading whitespace, cap the
+export at 50,000 rows and 16 MiB, and keep the fixed download filename. Export
+no provider score, rank, or winner field.
+
+**Reason:** Operators need a portable, traceable dataset for audit and external
+analysis before any provider-rating methodology exists. Reusing the exact v6
+projection prevents CSV from becoming a second aggregation path. Row/size
+bounds protect the local Controller, while formula neutralization prevents
+provider or tool labels from becoming active spreadsheet content when the file
+is opened by common desktop software.

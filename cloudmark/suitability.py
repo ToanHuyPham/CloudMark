@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import csv
+import io
+import json
 import math
 from datetime import datetime, timezone
 from typing import Any, Callable
@@ -19,6 +22,9 @@ from .profiles import (
 SUITABILITY_ENGINE_VERSION = "suitability-v1"
 REQUIREMENTS_VERSION = "workload-requirements-1.0"
 PROVIDER_OBSERVATION_VERSION = "provider-observations-v6"
+PROVIDER_OBSERVATION_EXPORT_VERSION = "provider-observation-export-v1"
+PROVIDER_OBSERVATION_EXPORT_MAX_ROWS = 50_000
+PROVIDER_OBSERVATION_EXPORT_MAX_BYTES = 16 * 1024 * 1024
 EVIDENCE_MAX_AGE_DAYS = 30
 EVIDENCE_FUTURE_SKEW_SECONDS = 86_400
 COMPARISON_MIN_SAMPLES = 9
@@ -1178,6 +1184,141 @@ def _provider_observations(targets: list[dict[str, Any]]) -> dict[str, Any]:
         "groups": groups,
         "excluded_targets": excluded_targets,
     }
+
+
+PROVIDER_OBSERVATION_EXPORT_FIELDS = (
+    "export_version",
+    "generated_at",
+    "projection_version",
+    "rating_status",
+    "cohort_id",
+    "provider",
+    "instance_type",
+    "region",
+    "operating_system",
+    "comparison_status",
+    "cohort_target_ids_json",
+    "observed_suites_json",
+    "metric_contract_id",
+    "metric_key",
+    "metric_label",
+    "suite",
+    "direction",
+    "unit",
+    "profile",
+    "methodology_version",
+    "topology_scope",
+    "topology_evidence",
+    "implementation_contract",
+    "system_execution_contract",
+    "storage_contract",
+    "metric_status",
+    "reasons_json",
+    "sample_count",
+    "target_count",
+    "window_count",
+    "windows_json",
+    "run_ids_json",
+    "latest_observed_at",
+    "median",
+    "p10",
+    "p90",
+    "minimum",
+    "maximum",
+    "best",
+    "worst",
+    "relative_spread_percent",
+    "stability",
+)
+
+
+def _csv_cell(value: Any) -> Any:
+    if value is None:
+        return ""
+    if isinstance(value, bool):
+        return str(value).lower()
+    if isinstance(value, (int, float)):
+        return value
+    if isinstance(value, (list, dict)):
+        text = json.dumps(value, ensure_ascii=False, separators=(",", ":"), sort_keys=isinstance(value, dict))
+    else:
+        text = str(value)
+    normalized_start = text.lstrip(" \t\r\n")
+    return f"'{text}" if normalized_start.startswith(("=", "+", "-", "@")) else text
+
+
+def provider_observation_csv(provider_observations: dict[str, Any], generated_at: str) -> bytes:
+    """Create a deterministic, formula-neutralized audit export without provider scoring."""
+    if provider_observations.get("version") != PROVIDER_OBSERVATION_VERSION:
+        raise ValueError("Provider observation export requires the installed projection version.")
+    output = io.StringIO(newline="")
+    writer = csv.DictWriter(output, fieldnames=PROVIDER_OBSERVATION_EXPORT_FIELDS, lineterminator="\r\n")
+    writer.writeheader()
+    row_count = 0
+    groups = provider_observations.get("groups") if isinstance(provider_observations.get("groups"), list) else []
+    for group in sorted(groups, key=lambda item: str(item.get("id") or "") if isinstance(item, dict) else ""):
+        if not isinstance(group, dict):
+            continue
+        metrics = group.get("metric_cohorts") if isinstance(group.get("metric_cohorts"), list) else []
+        for metric in sorted(
+            (item for item in metrics if isinstance(item, dict)),
+            key=lambda item: str(item.get("contract_id") or ""),
+        ):
+            row_count += 1
+            if row_count > PROVIDER_OBSERVATION_EXPORT_MAX_ROWS:
+                raise ValueError("Provider observation export exceeds the bounded row limit.")
+            statistics = metric.get("statistics") if isinstance(metric.get("statistics"), dict) else {}
+            row = {
+                "export_version": PROVIDER_OBSERVATION_EXPORT_VERSION,
+                "generated_at": generated_at,
+                "projection_version": provider_observations.get("version"),
+                "rating_status": provider_observations.get("rating_status"),
+                "cohort_id": group.get("id"),
+                "provider": group.get("provider"),
+                "instance_type": group.get("instance_type"),
+                "region": group.get("region"),
+                "operating_system": group.get("operating_system"),
+                "comparison_status": group.get("comparison_status"),
+                "cohort_target_ids_json": group.get("target_ids") or [],
+                "observed_suites_json": group.get("observed_suites") or [],
+                "metric_contract_id": metric.get("contract_id"),
+                "metric_key": metric.get("key"),
+                "metric_label": metric.get("label"),
+                "suite": metric.get("suite"),
+                "direction": metric.get("direction"),
+                "unit": metric.get("unit"),
+                "profile": metric.get("profile"),
+                "methodology_version": metric.get("methodology_version"),
+                "topology_scope": metric.get("topology_scope"),
+                "topology_evidence": metric.get("topology_evidence"),
+                "implementation_contract": metric.get("implementation_contract"),
+                "system_execution_contract": metric.get("system_execution_contract"),
+                "storage_contract": metric.get("storage_contract"),
+                "metric_status": metric.get("status"),
+                "reasons_json": metric.get("reasons") or [],
+                "sample_count": metric.get("sample_count"),
+                "target_count": metric.get("target_count"),
+                "window_count": metric.get("window_count"),
+                "windows_json": metric.get("windows") or [],
+                "run_ids_json": metric.get("run_ids") or [],
+                "latest_observed_at": metric.get("latest_observed_at"),
+                "median": statistics.get("median"),
+                "p10": statistics.get("p10"),
+                "p90": statistics.get("p90"),
+                "minimum": statistics.get("minimum"),
+                "maximum": statistics.get("maximum"),
+                "best": statistics.get("best"),
+                "worst": statistics.get("worst"),
+                "relative_spread_percent": statistics.get("relative_spread_percent"),
+                "stability": statistics.get("stability"),
+            }
+            writer.writerow({name: _csv_cell(row.get(name)) for name in PROVIDER_OBSERVATION_EXPORT_FIELDS})
+            if output.tell() > PROVIDER_OBSERVATION_EXPORT_MAX_BYTES:
+                raise ValueError("Provider observation export exceeds the bounded response size.")
+    payload = output.getvalue().encode("utf-8")
+    if len(payload) > PROVIDER_OBSERVATION_EXPORT_MAX_BYTES:
+        raise ValueError("Provider observation export exceeds the bounded response size.")
+    return payload
 
 
 def evaluate_suitability(

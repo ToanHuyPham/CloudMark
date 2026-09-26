@@ -220,6 +220,9 @@ with descriptive
 median, P10/P90, actual best/worst, and spread. Nine samples across three
 targets and three UTC-day windows are required before a metric is marked
 comparable; this remains distinct from a provider rating.
+`provider-observation-export-v1` is available as a bounded formula-neutralized
+CSV projection with exact contracts, descriptive statistics, windows, target
+IDs, and Run provenance. It does not add a score or ranking.
 
 Each use case defines:
 

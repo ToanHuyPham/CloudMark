@@ -113,6 +113,13 @@ The minimum comparable cohort is nine samples across three targets and three
 windows. Smaller cohorts remain visible as observations; no relative provider
 ranking is computed.
 
+`provider-observation-export-v1` is a read-only projection of those exact
+metric cohorts into deterministic UTF-8 CSV. It includes compatibility
+contracts, descriptive statistics, UTC windows, target IDs, and source Run IDs;
+neutralizes spreadsheet-formula prefixes; and is bounded to 50,000 rows and
+16 MiB. It exports neither a provider score nor a ranking and does not create a
+second aggregation methodology.
+
 `network-campaign-v1` is the durable acquisition contract for one fixed
 Target/Generator pair. It locks the pairing session, participant identities,
 topology evidence class, `network-peer-standard` profile version, and

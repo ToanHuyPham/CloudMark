@@ -39,6 +39,7 @@ timestamp, and raw result.
 | Partial | HTTP/2 multiplexed dynamic load with fixed h2load connection/stream shapes, exact request-log P50/P95/P99, Generator validity, and cleanup |
 | Available | Target-scoped, versioned Essential/Standard/Demanding workload gates with per-check run provenance and explicit unknown evidence |
 | Available | Exact-cohort repeated-window provider observations with median, P10/P90, best/worst, spread, topology/evidence-class contracts, and guarded comparison eligibility |
+| Available | Bounded formula-safe CSV export of exact provider cohorts, statistics, UTC windows, and source Run IDs |
 | Available | Immutable, manually dispatched repeated network campaigns with one comparison-eligible window per UTC day |
 | Available | Immutable, baseline-anchored storage campaigns with explicit per-window confirmation and one exact-contract Run per UTC day |
 | Roadmap | Unattended sampling schedules, physical-fabric verification, additional vendor queue normalization, public-path classification, and mTLS enrollment |

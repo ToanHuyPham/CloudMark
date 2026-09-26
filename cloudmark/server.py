@@ -64,7 +64,7 @@ from .remote import (
 )
 from .runner import RUNNER_VERSION, CancellationToken, JobContext, RunCancelled, RunTimedOut
 from .security_posture import SecurityPostureError, run_security_posture, security_posture_preflight
-from .suitability import evaluate_suitability
+from .suitability import evaluate_suitability, provider_observation_csv
 from .storage_campaigns import (
     STORAGE_CAMPAIGN_MAX_WINDOWS,
     STORAGE_CAMPAIGN_MIN_WINDOWS,
@@ -1068,10 +1068,22 @@ class Handler(BaseHTTPRequestHandler):
 
     def _send(self, status: int, value: Any) -> None:
         body = _json_bytes(value)
+        self._send_bytes(status, body, "application/json; charset=utf-8")
+
+    def _send_bytes(
+        self,
+        status: int,
+        body: bytes,
+        content_type: str,
+        *,
+        content_disposition: str | None = None,
+    ) -> None:
         self.send_response(status)
-        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
+        if content_disposition:
+            self.send_header("Content-Disposition", content_disposition)
         origin = self._origin()
         if origin:
             self.send_header("Access-Control-Allow-Origin", origin)
@@ -1141,6 +1153,23 @@ class Handler(BaseHTTPRequestHandler):
                     self.controller.database.get_agent,
                 )
                 self._send(200, report["provider_observations"])
+            elif path == "/api/v1/provider-comparisons.csv":
+                report = evaluate_suitability(
+                    self.controller.database.list_runs(2000),
+                    self.controller.system(),
+                    self.controller.database.get_agent,
+                )
+                try:
+                    export = provider_observation_csv(report["provider_observations"], report["generated_at"])
+                except ValueError as exc:
+                    self._send_failure(HTTPStatus.REQUEST_ENTITY_TOO_LARGE, exc)
+                    return
+                self._send_bytes(
+                    200,
+                    export,
+                    "text/csv; charset=utf-8",
+                    content_disposition='attachment; filename="cloudmark-provider-observations.csv"',
+                )
             elif path == "/api/v1/profiles":
                 self._send(200, all_profiles())
             elif path == "/api/v1/network-campaigns":

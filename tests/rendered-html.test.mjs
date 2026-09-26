@@ -66,6 +66,8 @@ test("keeps production metadata and project policy explicit", async () => {
   assert.match(page, /COMPARISON CONTRACT/);
   assert.match(page, /DATABASE ENGINE CONTRACT/);
   assert.match(page, /provider-observations-v6/);
+  assert.match(page, /provider-comparisons\.csv/);
+  assert.match(page, /Export audit CSV/);
   assert.match(page, /READ-ONLY STORAGE CONTEXT/);
   assert.match(page, /STORAGE ENVIRONMENT \/ TOOL/);
   assert.match(page, /REPEATED UTC-DAY STORAGE EVIDENCE/);

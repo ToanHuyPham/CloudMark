@@ -766,6 +766,13 @@ repeat it on three different UTC dates. Do not create nested VMs on one target
 to inflate the target count. Network evidence must come from paired provider
 Agents, and CloudMark counts one paired Run once.
 
+Select **Export audit CSV** to download the exact displayed cohort dataset for
+offline audit or analysis. The file includes every compatibility contract,
+descriptive statistic, UTC window, target ID, and source Run ID. It contains no
+provider score or ranking. CloudMark neutralizes spreadsheet-formula prefixes,
+but operators should still treat exported provider/tool labels as evidence
+rather than executable spreadsheet content.
+
 ## 16. API quick reference
 
 Health:
@@ -790,6 +797,12 @@ Repeated-window provider observations:
 
 ```bash
 curl http://127.0.0.1:8787/api/v1/provider-comparisons
+```
+
+Provider observation audit CSV:
+
+```bash
+curl -o cloudmark-provider-observations.csv http://127.0.0.1:8787/api/v1/provider-comparisons.csv
 ```
 
 Create an inventory run:

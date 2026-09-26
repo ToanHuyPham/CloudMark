@@ -148,6 +148,19 @@ These values describe an exact cohort and do not select a winner. Provider
 rating remains `not-rated` until the separate security, reliability,
 control-plane, cost, and product-claim gates are implemented.
 
+### Audit export
+
+`provider-observation-export-v1` emits one deterministic UTF-8 CSV row per
+exact metric cohort. Every row retains the v6 compatibility contracts,
+descriptive statistics, UTC windows, target IDs, source Run IDs, observation
+status, and reasons. Text that begins like a spreadsheet formula after leading
+whitespace is prefixed with an apostrophe. The response is bounded to 50,000
+rows and 16 MiB.
+
+This is an audit/analysis transport only. It does not recalculate evidence,
+merge cohorts, select winners, or add provider score/rank fields. A header-only
+file is valid when no provider cohort exists.
+
 ## Interpretation discipline
 
 Thresholds express a minimum requirement, not a universal ranking. Compare

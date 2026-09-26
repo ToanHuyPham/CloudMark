@@ -257,6 +257,20 @@ paths:
       description: Returns provider-observations-v6 descriptive median, P10, P90, worst-value, and stability statistics only for exact provider, SKU, region, operating-system, profile, methodology, topology, topology-evidence, compute/memory execution-boundary/tool, database implementation/server-version, and storage environment/tool cohorts. Provider ratings remain disabled.
       responses:
         "200": { description: Versioned provider observation report }
+  /provider-comparisons.csv:
+    get:
+      summary: Export provider observation cohorts as an audit CSV
+      description: Returns provider-observation-export-v1 with exact cohort contracts, descriptive statistics, UTC windows, and source Run IDs. Spreadsheet formula prefixes are neutralized, output is bounded, and no provider score or ranking is exported.
+      responses:
+        "200":
+          description: UTF-8 provider observation audit export
+          headers:
+            Content-Disposition:
+              schema: { type: string }
+          content:
+            text/csv:
+              schema: { type: string }
+        "413": { description: Export exceeds the bounded row or response-size policy }
   /profiles:
     get:
       summary: Benchmark and suitability profiles

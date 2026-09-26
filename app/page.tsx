@@ -2852,6 +2852,7 @@ export default function Home() {
                   {!providerContracts.length && <option value="">No repeated evidence</option>}
                   {providerContracts.map((metric) => <option key={metric.contract_id} value={metric.contract_id}>{metric.label} · {metric.profile} · {metric.topology_scope} / {metric.topology_evidence}{metric.implementation_contract !== "not-applicable" ? ` · ${metric.implementation_contract}` : ""}</option>)}
                 </select></label>
+                <a className="button secondary provider-export-link" href={`${API}/provider-comparisons.csv`} download="cloudmark-provider-observations.csv">Export audit CSV</a>
               </div>
             </section>
             <section className="provider-summary-grid">

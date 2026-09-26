@@ -18,6 +18,7 @@ X-CloudMark-Token: <token printed by cloudmark serve>
 | GET | `/dashboard` | Compact aggregated local dashboard payload |
 | GET | `/suitability` | Versioned target-scoped workload gates and provider-readiness evidence |
 | GET | `/provider-comparisons` | Exact-cohort repeated-window descriptive statistics |
+| GET | `/provider-comparisons.csv` | Bounded audit CSV with exact contracts, statistics, windows, and Run IDs |
 | GET | `/profiles` | Benchmark and scenario profiles |
 | GET | `/network-campaigns` | Repeated network campaign projections |
 | POST | `/network-campaigns` | Create an immutable fixed-pair campaign without starting traffic |
@@ -499,6 +500,23 @@ separate metric contracts.
 PostgreSQL, Redis, and MySQL/MariaDB expose separate descriptive metric keys.
 MySQL and MariaDB implementations or different server versions are never
 silently merged, even when the CloudMark profile name matches.
+
+## Export provider observations
+
+```http
+GET /api/v1/provider-comparisons.csv
+```
+
+The read-only `provider-observation-export-v1` response contains one row per
+exact metric cohort. It retains the projection/export versions, generation
+time, provider/SKU/region/OS identity, every compatibility contract, descriptive
+statistics, status/reasons, UTC windows, target IDs, and source Run IDs. The
+response is UTF-8 CSV with a fixed filename and remains bounded to 50,000 rows
+and 16 MiB.
+
+Text cells that could be interpreted as spreadsheet formulas are prefixed with
+an apostrophe. The export preserves `not-rated` and includes no provider score,
+rank, or winner field. An empty observation set returns the stable header row.
 
 The complete machine-readable contract is in
 [`openapi/cloudmark-v1.yaml`](../openapi/cloudmark-v1.yaml).

@@ -299,13 +299,17 @@ baseline is still the repository head.
   locks compiler, fixed allocation/reserve, cgroup memory limit, guest page
   size/exposed NUMA-node count, swap/HugeTLB capacity, and THP/zswap policy.
   Missing or inconsistent system-boundary evidence remains observational.
+  `provider-observation-export-v1` adds a deterministic read-only CSV download
+  containing the exact cohort contracts, statistics, UTC windows, target IDs,
+  and source Run IDs. It neutralizes spreadsheet-formula prefixes, caps output
+  at 50,000 rows/16 MiB, and exports no provider score or ranking.
   PostgreSQL, Redis GET/SET, and
   MySQL/MariaDB read/write metrics now enter descriptive cohorts without being
   converted into a score. Median/P10/P90/best/worst/spread statistics retain a
   guarded nine-sample/three-target/three-window comparable state. MySQL and
   MariaDB or different server versions cannot be silently merged. The complete
-  development head passes 218 Python tests, 4 dashboard/CI-contract tests,
-  Ruff, 75.6% branch coverage, dashboard lint and strict type checking, OpenAPI
+  development head passes 219 Python tests, 4 dashboard/CI-contract tests,
+  Ruff, 75.7% branch coverage, dashboard lint and strict type checking, OpenAPI
   validation, and the production build without starting provider load;
 - implemented and simulation-verified `linux-security-posture-v2` single-target
   executor for a Linux Controller host or authenticated Linux Agent, with
@@ -484,8 +488,9 @@ Controller run: `run_1c572100e8704843`.
    replication overhead, and RPO/RTO evidence.
 4. Complete remaining compute, memory/NUMA, GPU, provider security, reliability,
    observability, container, and control-plane executors.
-5. Extend campaigns across independent targets, then add timestamped price
-   inputs and cohort export before any final provider-rating methodology.
+5. Extend campaigns across independent targets and add timestamped price
+   inputs before any final provider-rating methodology; exact-cohort CSV export
+   is now available.
 6. Calibrate and version requirement thresholds across regional clouds, global
    clouds, and self-operated bare metal before treating them as stable policy.
 7. Run provider-machine validation only after the development milestones are
