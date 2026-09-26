@@ -162,6 +162,6 @@ architecture, OS, filesystem, mount options, storage allocation, cache context,
 power context, and background-load policy. Never compare filesystem operations
 per second directly with fio IOPS.
 
-`provider-observations-v5` enforces this boundary for storage metrics. A storage
+`provider-observations-v6` enforces this boundary for storage metrics. A storage
 cohort is not comparable unless the filesystem/mount contract, block policy
 when applicable, and exact executor version are present and identical.

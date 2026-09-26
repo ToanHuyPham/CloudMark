@@ -1,6 +1,6 @@
 # CloudMark current state
 
-Last updated: 2026-09-22
+Last updated: 2026-09-26
 
 ## Repository baseline
 
@@ -290,17 +290,23 @@ baseline is still the repository head.
   cleanup are comparison gates. The complete development head passes
   146 Python tests, 3 rendered-dashboard tests, dashboard lint, and the
   production build without starting load;
-- `provider-observations-v5` exact provider/SKU/region/OS/topology/evidence-class
+- `provider-observations-v6` exact provider/SKU/region/OS/topology/evidence-class
   cohorts with strict profile/methodology/topology compatibility, UTC-day
   windows, network Run de-duplication, database/cache engine implementation
   plus exact server-version isolation, and storage filesystem/mount/block/tool
-  isolation. PostgreSQL, Redis GET/SET, and
+  isolation. Compute/memory cohorts additionally require exact verified tool,
+  host/affinity/effective-thread, and cgroup CPU quota boundaries; memory also
+  locks compiler, fixed allocation/reserve, cgroup memory limit, guest page
+  size/exposed NUMA-node count, swap/HugeTLB capacity, and THP/zswap policy.
+  Missing or inconsistent system-boundary evidence remains observational.
+  PostgreSQL, Redis GET/SET, and
   MySQL/MariaDB read/write metrics now enter descriptive cohorts without being
   converted into a score. Median/P10/P90/best/worst/spread statistics retain a
   guarded nine-sample/three-target/three-window comparable state. MySQL and
   MariaDB or different server versions cannot be silently merged. The complete
-  development head passes 135 Python tests, 3 rendered-dashboard tests,
-  dashboard lint, and the production build without starting provider load;
+  development head passes 218 Python tests, 4 dashboard/CI-contract tests,
+  Ruff, 75.6% branch coverage, dashboard lint and strict type checking, OpenAPI
+  validation, and the production build without starting provider load;
 - implemented and simulation-verified `linux-security-posture-v2` single-target
   executor for a Linux Controller host or authenticated Linux Agent, with
   profile/methodology/tool versions, remote Agent attribution, task heartbeat/

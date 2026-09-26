@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ipaddress
 import json
+import math
 import os
 import sqlite3
 import subprocess
@@ -93,7 +94,7 @@ from cloudmark.provider import _declared_manifest
 from cloudmark.runner import CancellationToken, JobContext, ProcessResult, RunCancelled, RunTimedOut
 from cloudmark.redis_benchmark import parse_redis_benchmark_csv, redis_analysis, redis_total_steps
 from cloudmark.server import CloudMarkController, Handler, Server, _dashboard_run_summaries, _json_bytes
-from cloudmark.suitability import SCENARIO_REQUIREMENTS, _run_valid, evaluate_suitability
+from cloudmark.suitability import SCENARIO_REQUIREMENTS, _run_valid, _system_execution_contract, evaluate_suitability
 from cloudmark.topology import assess_pairing_topology
 from cloudmark.tooling import h2load_http2_argument, mysql_tool_supports, postgres_tool_supports, web_tool_supports
 from cloudmark.web_benchmark import (
@@ -126,6 +127,29 @@ class CloudMarkTests(unittest.TestCase):
                 "confidence": 0.9,
                 "source": "test",
                 "instance_type": "standard-4",
+            },
+        }
+
+    @staticmethod
+    def _compute_execution_evidence(*, quota_cores: float | None = None) -> dict[str, object]:
+        quota_ceiling = math.ceil(quota_cores) if quota_cores is not None else None
+        return {
+            "tool": {"name": "sysbench", "version": "sysbench 1.0.20"},
+            "preflight": {
+                "cpu_execution_boundary": {
+                    "host_logical_cores": 4,
+                    "affinity_logical_cores": 4,
+                    "effective_logical_cores": min(4, quota_ceiling) if quota_ceiling is not None else 4,
+                    "affinity_respected": True,
+                    "cpu_ids_persisted": False,
+                    "cgroup_cpu_quota_applied": quota_cores is not None,
+                    "cgroup_cpu_quota_verified": True,
+                    "cgroup_version": "v2",
+                    "quota_capacity_cores": quota_cores,
+                    "quota_thread_ceiling": quota_ceiling,
+                    "quota_levels_checked": 1,
+                    "quota_limiting_ancestor_depth": 0 if quota_cores is not None else None,
+                },
             },
         }
 
@@ -403,6 +427,7 @@ class CloudMarkTests(unittest.TestCase):
                     "request": {"agent_id": agent_id},
                     "result": {
                         "methodology_version": "compute-v1",
+                        **self._compute_execution_evidence(),
                         "compute_jobs": [{
                             "name": "integer-sustained",
                             "metrics": {"events_per_second": next(rates)},
@@ -412,10 +437,11 @@ class CloudMarkTests(unittest.TestCase):
 
         report = evaluate_suitability(runs, self._suitability_system("controller"), agents.get)
         observations = report["provider_observations"]
-        self.assertEqual(observations["version"], "provider-observations-v5")
+        self.assertEqual(observations["version"], "provider-observations-v6")
         self.assertTrue(observations["policy"]["exact_pair_topology"])
         self.assertTrue(observations["policy"]["exact_pair_topology_evidence"])
         self.assertTrue(observations["policy"]["exact_database_implementation_and_version"])
+        self.assertTrue(observations["policy"]["exact_system_execution_boundary_and_tool"])
         self.assertTrue(observations["policy"]["exact_storage_environment_and_tool"])
         self.assertFalse(observations["policy"]["provider_ranking"])
         group = observations["groups"][0]
@@ -430,7 +456,106 @@ class CloudMarkTests(unittest.TestCase):
         self.assertEqual(metric["statistics"]["p10"], 1080)
         self.assertEqual(metric["statistics"]["p90"], 1720)
         self.assertEqual(metric["statistics"]["worst"], 1000)
+        self.assertIn("tool=sysbench:sysbench 1.0.20", metric["system_execution_contract"])
         self.assertEqual(group["rating_status"], "not-rated")
+
+    def test_provider_observations_separate_system_execution_boundaries_and_fail_closed(self) -> None:
+        completed_at = datetime.now(timezone.utc).isoformat()
+        systems = {
+            "agent_a": {"last_seen_at": completed_at, "system": self._suitability_system("agent-a")},
+        }
+
+        def compute_run(run_id: str, rate: float, quota_cores: float | None, *, evidence: bool = True) -> dict[str, object]:
+            result: dict[str, object] = {
+                "methodology_version": "compute-v1",
+                "compute_jobs": [{"name": "integer-sustained", "metrics": {"events_per_second": rate}}],
+            }
+            if evidence:
+                result.update(self._compute_execution_evidence(quota_cores=quota_cores))
+            return {
+                "id": run_id,
+                "suite": "compute",
+                "profile": "compute-standard",
+                "status": "completed",
+                "finished_at": completed_at,
+                "methodology_version": "compute-v1",
+                "request": {"agent_id": "agent_a"},
+                "result": result,
+            }
+
+        report = evaluate_suitability(
+            [
+                compute_run("run_unlimited", 4000, None),
+                compute_run("run_quota", 1900, 1.5),
+                compute_run("run_missing_boundary", 3900, None, evidence=False),
+            ],
+            self._suitability_system("controller"),
+            systems.get,
+        )
+        metrics = [
+            item
+            for item in report["provider_observations"]["groups"][0]["metric_cohorts"]
+            if item["key"] == "compute.sustained_eps"
+        ]
+        self.assertEqual(len(metrics), 3)
+        self.assertEqual({item["sample_count"] for item in metrics}, {1})
+        self.assertTrue(any("quota-cores=unlimited" in item["system_execution_contract"] for item in metrics))
+        self.assertTrue(any("quota-cores=1.5" in item["system_execution_contract"] for item in metrics))
+        missing = next(item for item in metrics if "tool=unknown:unknown" in item["system_execution_contract"])
+        self.assertEqual(missing["status"], "observational")
+        self.assertIn("execution boundary", " ".join(missing["reasons"]).lower())
+
+    def test_memory_execution_contract_requires_exact_compiler_resource_and_policy_evidence(self) -> None:
+        execution = self._compute_execution_evidence(quota_cores=2.0)
+        run = {
+            "suite": "memory",
+            "result": {
+                "tool": {
+                    "name": "cloudmark-memory-bench",
+                    "version": "1.0",
+                    "compiler_version": "gcc 14.2.0",
+                },
+                "preflight": {
+                    **execution["preflight"],
+                    "array_bytes": 256 * 1024**2,
+                    "safety_reserve_bytes": 512 * 1024**2,
+                    "memory_allocation_boundary": {
+                        "status": "observed",
+                        "cgroup_version": "v2",
+                        "cgroup_limit_bytes": 4 * 1024**3,
+                        "finite_cgroup_limit_detected": True,
+                        "cgroup_headroom_verified": True,
+                        "read_only": True,
+                    },
+                    "memory_environment": {
+                        "methodology_version": "memory-environment-v2",
+                        "evidence_status": "complete",
+                        "page_size_bytes": 4096,
+                        "node_count": 1,
+                        "paging": {
+                            "status": "observed",
+                            "swap_total_bytes": 0,
+                            "huge_pages_total": 0,
+                            "transparent_hugepage": {
+                                "enabled_policy": "madvise",
+                                "defrag_policy": "defer_madvise",
+                            },
+                            "zswap": {"enabled": False},
+                        },
+                    },
+                },
+            },
+        }
+        contract, verified = _system_execution_contract(run)
+        self.assertTrue(verified)
+        self.assertIn("compiler=gcc 14.2.0", contract)
+        self.assertIn("memory-limit-bytes=4294967296", contract)
+        self.assertIn("thp=madvise", contract)
+
+        run["result"]["tool"]["compiler_version"] = "unknown"
+        unknown_compiler_contract, unknown_compiler_verified = _system_execution_contract(run)
+        self.assertFalse(unknown_compiler_verified)
+        self.assertNotEqual(contract, unknown_compiler_contract)
 
     def test_provider_observations_extract_cache_metrics_and_separate_database_implementations(self) -> None:
         completed_at = datetime.now(timezone.utc).isoformat()
@@ -541,7 +666,7 @@ class CloudMarkTests(unittest.TestCase):
             systems.get,
         )
         observations = report["provider_observations"]
-        self.assertEqual(observations["version"], "provider-observations-v5")
+        self.assertEqual(observations["version"], "provider-observations-v6")
         metrics = observations["groups"][0]["metric_cohorts"]
         mysql_tps = [item for item in metrics if item["key"] == "database.mysql_read_write_t4_tps"]
         self.assertEqual(len(mysql_tps), 3)
@@ -5961,7 +6086,7 @@ max: 1.50
                 self.assertEqual(suitability["requirements_version"], "workload-requirements-1.0")
                 with urllib.request.urlopen(f"{base}/provider-comparisons", timeout=5) as response:
                     provider_observations = json.load(response)
-                self.assertEqual(provider_observations["version"], "provider-observations-v5")
+                self.assertEqual(provider_observations["version"], "provider-observations-v6")
                 self.assertEqual(provider_observations["rating_status"], "not-rated")
                 self.assertFalse(provider_observations["policy"]["provider_ranking"])
                 self.assertTrue(

@@ -472,11 +472,17 @@ are satisfied.
 GET /api/v1/provider-comparisons
 ```
 
-The `provider-observations-v5` response groups fresh valid evidence only when
+The `provider-observations-v6` response groups fresh valid evidence only when
 provider, product/SKU, region, operating system, profile, methodology, metric,
 unit, paired topology, and topology evidence class match. Database and cache
 metrics additionally require the same engine, implementation, and exact server
-version. Storage metrics additionally require the same filesystem, bounded
+version. Compute and memory metrics additionally require the same verified
+executor version, host/affinity/effective thread boundary, and cgroup CPU quota
+contract. Memory cohorts also require the same compiler, fixed allocation and
+reserve, cgroup memory limit, guest page size and exposed NUMA-node count, swap
+and HugeTLB capacity, and selected THP/zswap policy. Missing or internally
+inconsistent execution evidence leaves a cohort observational. Storage metrics
+additionally require the same filesystem, bounded
 mount semantics, guest-visible block policy, and exact executor version. A UTC
 calendar day is one measurement window. Each metric
 cohort exposes sample, target, window, and Run ID sets plus median, P10, P90,

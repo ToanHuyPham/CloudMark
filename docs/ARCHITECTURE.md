@@ -94,13 +94,16 @@ measurement windows, observed suites, and missing operational domains, but
 does not produce a provider rating until the complete aggregation contract is
 implemented.
 
-`provider-observations-v5` adds a second read-time projection for repeated
+`provider-observations-v6` adds a second read-time projection for repeated
 measurements. Cohorts must match provider, SKU, region, operating system,
 profile, methodology, metric, unit, paired topology, and topology evidence
-class. Database/cache cohorts additionally match engine implementation and
-exact server version. Storage cohorts match bounded filesystem/mount semantics,
+class. Compute/memory cohorts additionally match verified executor versions,
+CPU affinity/effective-thread/cgroup-quota boundaries, and, for memory, the
+compiler, allocation, cgroup-memory, guest NUMA/page-size, and stable paging
+policy contract. Database/cache cohorts additionally match engine implementation
+and exact server version. Storage cohorts match bounded filesystem/mount semantics,
 guest-visible block policy, and executor version. It exposes PostgreSQL, Redis,
-MySQL/MariaDB, and storage metrics under distinct keys, de-duplicates a paired
+MySQL/MariaDB, compute, memory, and storage metrics under distinct keys, de-duplicates a paired
 network Run, and uses UTC calendar days as
 windows, and reports descriptive distributions only. Trusted Agent metadata
 may independently derive a placement scope; contradictory operator
@@ -124,7 +127,7 @@ locked profile or methodology no longer matches the installed standard contract.
 `storage-campaign-v1` begins from one immutable completed baseline with full
 measurement, cleanup, storage-environment, and executor evidence. The baseline
 counts as the first window. The contract locks one target identity, profile,
-methodology, and `provider-observations-v5` storage contract for 3–30 distinct
+methodology, and `provider-observations-v6` storage contract for 3–30 distinct
 UTC completion days. Every later Run requires explicit write and window
 confirmation through the campaign endpoint; the generic Run endpoint rejects
 campaign fields. Each counted Run must retain matching run-time Target evidence,

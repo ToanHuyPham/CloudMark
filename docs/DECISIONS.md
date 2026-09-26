@@ -839,3 +839,25 @@ can be the actual execution boundary. A 1.5-core quota may need two threads to
 consume its allowance but does not represent two cores. Preserving both values
 avoids host-wide oversubscription without erasing the throttled nature of the
 environment from comparison evidence.
+
+## D-052: System comparisons require an exact verified execution contract
+
+**Decision:** Advance the read-time provider projection to
+`provider-observations-v6`. Compute and memory metric cohorts now include the
+exact executor version, host logical threads, process-affinity threads,
+effective threads, cgroup version, fractional CPU quota, and quota thread
+ceiling. Memory cohorts additionally include the compiler version, fixed array
+allocation and reserve, finite cgroup memory limit or verified unlimited state,
+`memory-environment-v2`, guest page size, exposed NUMA-node count, swap and
+HugeTLB capacity, and selected THP/zswap policy. Transient free-memory, current
+cgroup usage, and swap-usage values remain evidence but are not cohort keys.
+Missing or inconsistent system execution evidence remains visible as
+observational and cannot become comparable.
+
+**Reason:** Matching a provider SKU and CloudMark profile does not make two
+results equivalent when one process sees a different affinity mask, CPU quota,
+memory limit, compiler, or paging policy. Silently aggregating those runs would
+turn a resource-control difference into apparent provider variance. Exact
+stable boundary fields preserve useful repeated evidence while excluding
+transient utilization snapshots that would fragment every run into a separate
+cohort.

@@ -1126,6 +1126,7 @@ type ProviderMetricCohort = {
   topology_scope: TopologyScope | "single-target";
   topology_evidence: "single-target" | "operator-declared" | "independently-derived" | "contradicted" | "unavailable";
   implementation_contract: string;
+  system_execution_contract: string;
   storage_contract: string;
   status: "comparable" | "observational";
   reasons: string[];
@@ -1177,6 +1178,7 @@ type ProviderObservations = {
     exact_pair_topology: boolean;
     exact_pair_topology_evidence: boolean;
     exact_database_implementation_and_version: boolean;
+    exact_system_execution_boundary_and_tool: boolean;
     exact_storage_environment_and_tool: boolean;
     cross_sku_aggregation: boolean;
     cross_region_aggregation: boolean;
@@ -2844,7 +2846,7 @@ export default function Home() {
         {activeView === "providers" && (
           <div className="view providers-view">
             <section className="section-intro">
-              <div><span className="section-kicker">REPEATED-WINDOW OBSERVATIONS</span><h2>Compare like with like without inventing a provider score.</h2><p>CloudMark separates cohorts by provider, SKU, region, operating system, profile, methodology, paired topology, database implementation/version, and the exact storage filesystem/block/tool contract. Descriptive statistics become comparable only after the minimum target, window, and sample contract is met.</p></div>
+              <div><span className="section-kicker">REPEATED-WINDOW OBSERVATIONS</span><h2>Compare like with like without inventing a provider score.</h2><p>CloudMark separates cohorts by provider, SKU, region, operating system, profile, methodology, paired topology, compute/memory execution boundary and tool, database implementation/version, and the exact storage filesystem/block/tool contract. Descriptive statistics become comparable only after the minimum target, window, and sample contract is met.</p></div>
               <div className="runner-actions provider-contract-selector">
                 <label><span>METRIC CONTRACT</span><select value={activeProviderContract?.contract_id || ""} onChange={(event) => setSelectedProviderContract(event.target.value)} disabled={!providerContracts.length}>
                   {!providerContracts.length && <option value="">No repeated evidence</option>}
@@ -2859,18 +2861,19 @@ export default function Home() {
               <article className="panel caution"><span>PROVIDER RATING</span><strong>Not rated</strong><small>operational and cost gates remain unavailable</small></article>
             </section>
             <section className="panel comparison-contract-panel">
-              <div className="panel-head"><div><span className="section-kicker">COMPARISON CONTRACT</span><h3>{activeProviderContract?.label || "No compatible metric evidence yet"}</h3></div><span className="run-id">{providerObservations?.version || "provider-observations-v5"}</span></div>
+              <div className="panel-head"><div><span className="section-kicker">COMPARISON CONTRACT</span><h3>{activeProviderContract?.label || "No compatible metric evidence yet"}</h3></div><span className="run-id">{providerObservations?.version || "provider-observations-v6"}</span></div>
               <div className="comparison-contract-grid">
                 <div><span>PROFILE</span><strong>{activeProviderContract?.profile || "Unavailable"}</strong></div>
                 <div><span>METHODOLOGY</span><strong>{activeProviderContract?.methodology_version || "Unavailable"}</strong></div>
                 <div><span>PAIR TOPOLOGY</span><strong>{activeProviderContract?.topology_scope || "Unavailable"}</strong></div>
                 <div><span>TOPOLOGY EVIDENCE</span><strong>{activeProviderContract?.topology_evidence || "Unavailable"}</strong></div>
                 <div><span>DATABASE ENGINE CONTRACT</span><strong>{activeProviderContract?.implementation_contract === "not-applicable" ? "Not applicable" : activeProviderContract?.implementation_contract || "Unavailable"}</strong></div>
+                <div><span>SYSTEM EXECUTION / TOOL</span><strong>{activeProviderContract?.system_execution_contract === "not-applicable" ? "Not applicable" : activeProviderContract?.system_execution_contract || "Unavailable"}</strong></div>
                 <div><span>STORAGE ENVIRONMENT / TOOL</span><strong>{activeProviderContract?.storage_contract === "not-applicable" ? "Not applicable" : activeProviderContract?.storage_contract || "Unavailable"}</strong></div>
                 <div><span>DIRECTION</span><strong>{activeProviderContract ? `${activeProviderContract.direction} is better` : "Unavailable"}</strong></div>
                 <div><span>MINIMUM SAMPLE</span><strong>{providerObservations ? `${providerObservations.minimum_comparable_sampling.samples} runs / ${providerObservations.minimum_comparable_sampling.targets} targets / ${providerObservations.minimum_comparable_sampling.windows} days` : "Unavailable"}</strong></div>
               </div>
-              <p className="method-note">A measurement window is one UTC calendar day. Paired runs with different scopes or topology evidence classes are never merged. Database/cache evidence requires the same engine implementation and server version; storage evidence requires the same filesystem, bounded mount semantics, guest-visible block policy, and executor version. P10, median, P90, actual best/worst, sample count, target count, and relative spread remain descriptive evidence; CloudMark does not rank providers.</p>
+              <p className="method-note">A measurement window is one UTC calendar day. Paired runs with different scopes or topology evidence classes are never merged. Compute and memory evidence requires the same executor version and verified CPU/cgroup boundary; memory also requires the same compiler, allocation contract, NUMA shape, and stable paging policy. Database/cache evidence requires the same engine implementation and server version; storage evidence requires the same filesystem, bounded mount semantics, guest-visible block policy, and executor version. P10, median, P90, actual best/worst, sample count, target count, and relative spread remain descriptive evidence; CloudMark does not rank providers.</p>
             </section>
             {providerGroups.length ? <section className="provider-comparison-grid" aria-label="Provider cohort observations">
               {providerGroups.map((group) => {

@@ -223,7 +223,7 @@ class StorageEnvironmentTests(unittest.TestCase):
             for item in report["provider_observations"]["groups"][0]["metric_cohorts"]
             if item["key"] == "storage.sequential_read_bps"
         ]
-        self.assertEqual(report["provider_observations"]["version"], "provider-observations-v5")
+        self.assertEqual(report["provider_observations"]["version"], "provider-observations-v6")
         self.assertEqual(len(metrics), 2)
         self.assertEqual({item["sample_count"] for item in metrics}, {1})
         self.assertTrue(all("storage filesystem" not in " ".join(item["reasons"]).lower() for item in metrics))
