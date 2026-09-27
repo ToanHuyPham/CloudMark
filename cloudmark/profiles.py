@@ -438,7 +438,7 @@ ASSESSMENT_DOMAINS: list[dict[str, Any]] = [
     {"id": "gpu", "label": "GPU & Accelerators", "status": "roadmap", "summary": "GPU inventory, VRAM, transfer, compute and framework profiles"},
     {"id": "web", "label": "Web, API & TLS", "status": "partial", "summary": "Guarded two-Agent static and reverse-proxied dynamic HTTP/TLS workloads, Generator headroom, tail latency, transfer, HTTP/2 negotiation, and fixed multiplexed HTTP/2 load evidence available"},
     {"id": "database", "label": "Database & Cache", "status": "partial", "summary": "Guarded PostgreSQL, Redis, and MySQL/MariaDB paired workloads, Generator validity, logical recovery, forced-checkpoint, and cleanup evidence available; replication and cross-zone recovery pending"},
-    {"id": "containers", "label": "Containers & Kubernetes", "status": "partial", "summary": "Runtime discovery available; image, pod, network and scaling tests pending"},
+    {"id": "containers", "label": "Containers & Kubernetes", "status": "partial", "summary": "Runtime CLI discovery and bounded current-process container context available; image, pod, network and scaling tests pending"},
     {"id": "security", "label": "Security & Isolation", "status": "partial", "summary": "Read-only Linux guest hardening evidence is available; IAM, firewall/exposure, encryption, vulnerability, compliance, and tenant-isolation evidence remain pending"},
     {"id": "reliability", "label": "Reliability, HA & DR", "status": "roadmap", "summary": "Failover, replication, snapshot, restore, RPO and RTO drills"},
     {"id": "observability", "label": "Observability & Operations", "status": "roadmap", "summary": "Metrics, logs, traces, clock sync, alerting and operational overhead"},

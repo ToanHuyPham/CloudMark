@@ -84,6 +84,14 @@ verified cgroup quota adds fractional `quota_capacity_cores`, a
 `quota_thread_ceiling`, levels checked, and limiting ancestor depth. Cgroup
 paths are never returned.
 
+Inventory also includes `container.environment` under the
+`container-environment-v1` contract on Linux. It reads bounded fixed procfs
+sources and fixed Docker/Podman marker presence, then exposes only normalized
+runtime/orchestrator hints, cgroup version, root filesystem class, source
+status, and explicit limitations. Container IDs, raw cgroup paths, mountinfo,
+runtime-daemon responses, and Kubernetes API data are never returned. A
+`not-detected` result does not prove direct host execution.
+
 `/dashboard` is a presentation endpoint polled by the local UI. It retains the
 latest completed result for each system suite/target and each paired suite,
 plus all active Runs. Older history entries retain lifecycle metadata but omit

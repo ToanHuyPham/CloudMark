@@ -911,3 +911,20 @@ reject version drift or incomplete contracts, and cap output at 1,000 rows and
 not silently become a second cost methodology. Exact values and explicit policy
 flags preserve traceability, while formula neutralization and hard bounds make
 the file safer to open and keep the local Controller response predictable.
+
+## D-056: Container context is a redacted inventory observation
+
+**Decision:** Add `container-environment-v1` to local and Agent inventory on
+Linux. Read only capped `/proc/1/cgroup`, `/proc/self/cgroup`, and
+`/proc/self/mountinfo` plus fixed `/.dockerenv` and `/run/.containerenv` marker
+presence. Retain normalized runtime/orchestrator hints, cgroup v1/v2, root
+filesystem class, and source status. Persist no raw cgroup/mount data,
+container/pod/namespace identifier, or marker content. Do not query a runtime
+daemon, Kubernetes API, or registry. Classify overlay-only as `suspected` and
+state that `not-detected` does not prove host execution.
+
+**Reason:** CLI presence shows that a client binary is installed, not whether
+the assessed process itself is containerized. Bounded guest-process evidence
+improves interpretation of CPU, memory, and filesystem results while avoiding
+daemon privileges and identifier leakage. It remains contextual because guest
+markers cannot prove the physical host boundary or container platform quality.

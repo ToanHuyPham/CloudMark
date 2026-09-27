@@ -304,6 +304,18 @@ systems.
   no kernel/sysctl/mount state, and produces no security score or provider
   security claim.
 
+## Container Environment
+
+- Linux container context reads only `/proc/1/cgroup`, `/proc/self/cgroup`,
+  `/proc/self/mountinfo`, and fixed Docker/Podman marker presence with 4 KiB/
+  64 KiB caps.
+- Raw cgroup paths, container/pod IDs, mount rows/sources, namespace IDs, and
+  marker contents are never persisted.
+- CloudMark does not contact runtime sockets, Docker/Podman/containerd/CRI-O,
+  Kubernetes APIs, or registries and never starts a container for inventory.
+- Missing/truncated evidence remains partial. Overlay-only is suspected, and
+  absence of recognized evidence never proves direct host execution.
+
 ## Suitability and provider claims
 
 - Suitability evaluation is read-only and never starts a benchmark.
