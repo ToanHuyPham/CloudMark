@@ -26,7 +26,12 @@ from .campaigns import (
     project_network_campaign,
 )
 from .compute import ComputeError, run_system_benchmark, system_preflight
-from .cost import COST_OBSERVATION_VERSION, CostObservationError, build_cost_observation
+from .cost import (
+    COST_OBSERVATION_VERSION,
+    CostObservationError,
+    build_cost_observation,
+    cost_observation_csv,
+)
 from .database import Database
 from .database_benchmark import (
     DatabaseBenchmarkError,
@@ -1202,6 +1207,18 @@ class Handler(BaseHTTPRequestHandler):
                 )
             elif path == "/api/v1/cost-observations":
                 self._send(200, self.controller.cost_observation_report())
+            elif path == "/api/v1/cost-observations.csv":
+                try:
+                    export = cost_observation_csv(self.controller.database.list_cost_observations(1000))
+                except CostObservationError as exc:
+                    self._send_failure(HTTPStatus.REQUEST_ENTITY_TOO_LARGE, exc)
+                    return
+                self._send_bytes(
+                    200,
+                    export,
+                    "text/csv; charset=utf-8",
+                    content_disposition='attachment; filename="cloudmark-cost-observations.csv"',
+                )
             elif path == "/api/v1/profiles":
                 self._send(200, all_profiles())
             elif path == "/api/v1/network-campaigns":

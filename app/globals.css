@@ -405,6 +405,7 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .cost-entry-grid input:focus, .cost-entry-grid select:focus { border-color: var(--lime); }
 .cost-source-field { grid-column: span 2; }
 .cost-entry-grid .button { align-self: end; }
+.cost-export-link { display: inline-flex; align-items: center; justify-content: center; text-decoration: none; }
 .cost-observation-list { border-top: 1px solid var(--line); }
 .cost-observation-list article { min-height: 86px; display: grid; grid-template-columns: 1fr 1fr; gap: 20px; align-items: center; padding: 14px 17px; border-bottom: 1px solid var(--line); }
 .cost-observation-list article:last-child { border-bottom: 0; }
@@ -606,6 +607,7 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
   .campaign-progress { grid-template-columns: 1fr; }
   .cost-entry-grid, .cost-observation-list article { grid-template-columns: 1fr; }
   .cost-source-field { grid-column: auto; }
+  .cost-entry-grid .cost-export-link { display: inline-flex; }
   .campaign-progress > div, .campaign-progress > div:nth-child(2n) { border-right: 0; border-bottom: 1px solid var(--line); }
   .campaign-progress > div:last-child { border-bottom: 0; }
   .campaign-actions, .campaign-empty { align-items: flex-start; flex-direction: column; }

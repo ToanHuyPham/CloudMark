@@ -126,6 +126,10 @@ exact decimal price, currency, billing unit, commitment/tax context, timestamp
 and timestamp source, plus a bounded source reference. CloudMark never fetches
 the source or normalizes values across billing contracts. Cost observations do
 not enter suitability metrics, provider cohorts, or provider-rating readiness.
+`cost-observation-export-v1` is a deterministic read-only CSV projection of
+that raw immutable stream. It preserves exact decimal values and provenance,
+neutralizes spreadsheet-formula prefixes, caps output at 1,000 rows/4 MiB, and
+adds no normalization, score, or ranking.
 
 `network-campaign-v1` is the durable acquisition contract for one fixed
 Target/Generator pair. It locks the pairing session, participant identities,

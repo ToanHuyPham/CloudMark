@@ -21,6 +21,7 @@ X-CloudMark-Token: <token printed by cloudmark serve>
 | GET | `/provider-comparisons.csv` | Bounded audit CSV with exact contracts, statistics, windows, and Run IDs |
 | GET | `/cost-observations` | Immutable timestamped operator cost context |
 | POST | `/cost-observations` | Record source-bound cost context for one exact target |
+| GET | `/cost-observations.csv` | Bounded audit CSV of raw cost observations and non-scoring policy |
 | GET | `/profiles` | Benchmark and scenario profiles |
 | GET | `/network-campaigns` | Repeated network campaign projections |
 | POST | `/network-campaigns` | Create an immutable fixed-pair campaign without starting traffic |
@@ -557,6 +558,17 @@ GET /api/v1/cost-observations
 This returns the bounded recent collection. Do not submit credentials, signed
 URLs, customer/account identifiers, or unredacted invoice content. See
 [`COST_OBSERVATION_METHODOLOGY.md`](COST_OBSERVATION_METHODOLOGY.md).
+
+```http
+GET /api/v1/cost-observations.csv
+```
+
+The read-only `cost-observation-export-v1` response retains each observation's
+exact decimal string, target/source/timestamp provenance, claim status, and
+machine-readable non-scoring policy. Rows are deterministic, spreadsheet
+formula prefixes are neutralized, and output is capped at 1,000 rows and 4 MiB.
+No unit/currency normalization, price/performance value, score, or ranking is
+added.
 
 The complete machine-readable contract is in
 [`openapi/cloudmark-v1.yaml`](../openapi/cloudmark-v1.yaml).

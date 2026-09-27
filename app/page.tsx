@@ -2962,6 +2962,7 @@ export default function Home() {
                 <label><span>SOURCE TYPE</span><select value={costSourceType} onChange={(event) => setCostSourceType(event.target.value as typeof costSourceType)}><option value="provider-public-url">Provider public HTTPS URL</option><option value="operator-reference">Operator reference</option></select></label>
                 <label className="cost-source-field"><span>SOURCE REFERENCE</span><input maxLength={512} value={costSourceReference} onChange={(event) => setCostSourceReference(event.target.value)} placeholder={costSourceType === "provider-public-url" ? "https://provider.example/pricing" : "Redacted quote or invoice reference"} /></label>
                 <button className="button primary" onClick={recordCostObservation} disabled={busy}>Record cost context</button>
+                <a className="button secondary cost-export-link" href={`${API}/cost-observations.csv`} download="cloudmark-cost-observations.csv">Export cost CSV</a>
               </div>
               <p className="method-note">The Controller receipt time becomes the observation timestamp. CloudMark snapshots the selected target identity but does not fetch the source, infer missing billing terms, calculate price/performance, or use this claim for provider rating.</p>
               <div className="cost-observation-list">

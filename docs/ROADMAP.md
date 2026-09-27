@@ -227,6 +227,8 @@ IDs, and Run provenance. It does not add a score or ranking.
 context with exact decimal/currency/unit/source and target identity provenance.
 It remains unverified and is not a rating input; billing-term verification,
 normalization, exchange-rate policy, and price/performance remain planned.
+`cost-observation-export-v1` provides a bounded formula-neutralized raw audit
+CSV without adding a derived economic metric.
 
 Each use case defines:
 

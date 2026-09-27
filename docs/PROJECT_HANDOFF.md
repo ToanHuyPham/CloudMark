@@ -135,6 +135,9 @@ an exact target identity. Exact decimal/currency/unit, commitment/tax context,
 timestamp source, and bounded public-URL or redacted-reference provenance are
 retained. CloudMark does not fetch/verify the source, normalize prices, compute
 price/performance, or treat these records as provider-rating input.
+The separate `cost-observation-export-v1` endpoint emits a bounded,
+formula-neutralized CSV of the raw v1 records and their non-scoring policy
+without converting currencies/units or deriving a metric.
 
 `network-campaign-v1` persists an immutable acquisition contract for one fixed
 Target/Generator pair and counts at most one comparison-eligible

@@ -824,6 +824,16 @@ Timestamped cost observations:
 curl http://127.0.0.1:8787/api/v1/cost-observations
 ```
 
+Raw cost audit CSV:
+
+```bash
+curl -o cloudmark-cost-observations.csv http://127.0.0.1:8787/api/v1/cost-observations.csv
+```
+
+The same file is available through **Export cost CSV**. It preserves raw
+decimal and provenance fields and neutralizes formula prefixes; it does not
+normalize or rank prices.
+
 Create an inventory run:
 
 ```bash

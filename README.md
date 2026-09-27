@@ -41,6 +41,7 @@ timestamp, and raw result.
 | Available | Exact-cohort repeated-window provider observations with median, P10/P90, best/worst, spread, topology/evidence-class contracts, and guarded comparison eligibility |
 | Available | Bounded formula-safe CSV export of exact provider cohorts, statistics, UTC windows, and source Run IDs |
 | Partial | Immutable timestamped operator cost context with exact decimal/currency/unit/source and target-identity provenance; verification and price/performance remain unavailable |
+| Available | Bounded formula-safe CSV audit export of raw cost observations without normalization, score, or ranking |
 | Available | Immutable, manually dispatched repeated network campaigns with one comparison-eligible window per UTC day |
 | Available | Immutable, baseline-anchored storage campaigns with explicit per-window confirmation and one exact-contract Run per UTC day |
 | Roadmap | Unattended sampling schedules, physical-fabric verification, additional vendor queue normalization, public-path classification, and mTLS enrollment |

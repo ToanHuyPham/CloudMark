@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import csv
+import io
 import math
 import re
 from datetime import datetime, timedelta, timezone
@@ -9,6 +11,9 @@ from urllib.parse import urlparse
 
 
 COST_OBSERVATION_VERSION = "cost-observation-v1"
+COST_OBSERVATION_EXPORT_VERSION = "cost-observation-export-v1"
+COST_OBSERVATION_EXPORT_MAX_ROWS = 1_000
+COST_OBSERVATION_EXPORT_MAX_BYTES = 4 * 1024 * 1024
 COST_OBSERVATION_MAX_SOURCE_BYTES = 512
 COST_OBSERVATION_MAX_FUTURE_SKEW = timedelta(days=1)
 COST_BILLING_UNITS = {"hour", "month", "year", "one-time"}
@@ -20,6 +25,133 @@ COST_CURRENCY_PATTERN = re.compile(r"^[A-Z]{3}$")
 
 class CostObservationError(ValueError):
     pass
+
+
+COST_OBSERVATION_EXPORT_FIELDS = (
+    "export_version",
+    "observation_version",
+    "observation_id",
+    "created_at",
+    "observed_at",
+    "observed_at_source",
+    "target_id",
+    "hostname",
+    "provider",
+    "provider_source",
+    "provider_confidence",
+    "instance_type",
+    "region",
+    "zone",
+    "operating_system",
+    "architecture",
+    "amount",
+    "currency",
+    "billing_unit",
+    "commitment",
+    "tax_included",
+    "source_type",
+    "source_reference",
+    "evidence_status",
+    "claim",
+    "immutable",
+    "provider_rating_input",
+    "price_performance_calculated",
+    "missing_terms_inferred",
+)
+
+
+def _csv_cell(value: Any) -> Any:
+    if value is None:
+        return ""
+    if isinstance(value, bool):
+        return str(value).lower()
+    if isinstance(value, (int, float)):
+        return value
+    text = str(value)
+    normalized_start = text.lstrip(" \t\r\n")
+    return f"'{text}" if normalized_start.startswith(("=", "+", "-", "@")) else text
+
+
+def cost_observation_csv(observations: list[dict[str, Any]]) -> bytes:
+    """Export exact raw cost claims without normalizing or scoring them."""
+    if any(not isinstance(item, dict) for item in observations):
+        raise CostObservationError("Cost observation export received an invalid record.")
+    output = io.StringIO(newline="")
+    writer = csv.DictWriter(output, fieldnames=COST_OBSERVATION_EXPORT_FIELDS, lineterminator="\r\n")
+    writer.writeheader()
+    ordered = sorted(
+        (item for item in observations if isinstance(item, dict)),
+        key=lambda item: (str(item.get("observed_at") or ""), str(item.get("id") or "")),
+        reverse=True,
+    )
+    if len(ordered) > COST_OBSERVATION_EXPORT_MAX_ROWS:
+        raise CostObservationError("Cost observation export exceeds the bounded row limit.")
+    for observation in ordered:
+        if observation.get("version") != COST_OBSERVATION_VERSION:
+            raise CostObservationError("Cost observation export requires the installed observation version.")
+        target = observation.get("target") if isinstance(observation.get("target"), dict) else {}
+        price = observation.get("price") if isinstance(observation.get("price"), dict) else {}
+        source = observation.get("source") if isinstance(observation.get("source"), dict) else {}
+        policy = observation.get("policy") if isinstance(observation.get("policy"), dict) else {}
+        if (
+            not target
+            or not price
+            or not source
+            or not policy
+            or observation.get("evidence_status") != "operator-declared-unverified"
+            or observation.get("observed_at_source") not in {"controller-receipt-time", "operator-supplied"}
+            or _price_amount(price.get("amount")) != price.get("amount")
+            or not COST_CURRENCY_PATTERN.fullmatch(str(price.get("currency") or ""))
+            or price.get("billing_unit") not in COST_BILLING_UNITS
+            or price.get("commitment") not in COST_COMMITMENTS
+            or price.get("tax_included") is not None
+            and not isinstance(price.get("tax_included"), bool)
+            or source.get("type") not in COST_SOURCE_TYPES
+            or _source_reference(str(source.get("type")), source.get("reference")) != source.get("reference")
+            or policy.get("immutable") is not True
+            or policy.get("provider_rating_input") is not False
+            or policy.get("price_performance_calculated") is not False
+            or policy.get("missing_terms_inferred") is not False
+        ):
+            raise CostObservationError("Cost observation export received an incomplete or inconsistent contract.")
+        row = {
+            "export_version": COST_OBSERVATION_EXPORT_VERSION,
+            "observation_version": observation.get("version"),
+            "observation_id": observation.get("id"),
+            "created_at": observation.get("created_at"),
+            "observed_at": observation.get("observed_at"),
+            "observed_at_source": observation.get("observed_at_source"),
+            "target_id": target.get("id"),
+            "hostname": target.get("hostname"),
+            "provider": target.get("provider"),
+            "provider_source": target.get("provider_source"),
+            "provider_confidence": target.get("provider_confidence"),
+            "instance_type": target.get("instance_type"),
+            "region": target.get("region"),
+            "zone": target.get("zone"),
+            "operating_system": target.get("operating_system"),
+            "architecture": target.get("architecture"),
+            "amount": price.get("amount"),
+            "currency": price.get("currency"),
+            "billing_unit": price.get("billing_unit"),
+            "commitment": price.get("commitment"),
+            "tax_included": price.get("tax_included"),
+            "source_type": source.get("type"),
+            "source_reference": source.get("reference"),
+            "evidence_status": observation.get("evidence_status"),
+            "claim": observation.get("claim"),
+            "immutable": policy.get("immutable"),
+            "provider_rating_input": policy.get("provider_rating_input"),
+            "price_performance_calculated": policy.get("price_performance_calculated"),
+            "missing_terms_inferred": policy.get("missing_terms_inferred"),
+        }
+        writer.writerow({name: _csv_cell(row.get(name)) for name in COST_OBSERVATION_EXPORT_FIELDS})
+        if output.tell() > COST_OBSERVATION_EXPORT_MAX_BYTES:
+            raise CostObservationError("Cost observation export exceeds the bounded response size.")
+    payload = output.getvalue().encode("utf-8")
+    if len(payload) > COST_OBSERVATION_EXPORT_MAX_BYTES:
+        raise CostObservationError("Cost observation export exceeds the bounded response size.")
+    return payload
 
 
 def _bounded_text(value: Any, label: str, *, maximum_bytes: int = 160) -> str:

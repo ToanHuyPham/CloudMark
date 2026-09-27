@@ -44,6 +44,7 @@ from cloudmark.benchmarks import _metrics, _parse_fio_log, run_storage
 from cloudmark.bootstrap import create_plan
 from cloudmark.campaigns import build_network_campaign_contract, project_network_campaign
 from cloudmark.compute import ComputeError, parse_sysbench_cpu, run_system_benchmark, system_preflight
+from cloudmark.cost import CostObservationError
 from cloudmark.database import Database
 from cloudmark.database_benchmark import (
     DatabaseBenchmarkError,
@@ -6247,6 +6248,24 @@ max: 1.50
                     cost_report = json.load(response)
                 self.assertEqual(cost_report["items"][0]["id"], cost_observation["id"])
                 self.assertEqual(cost_report["rating_status"], "not-rated")
+                with urllib.request.urlopen(f"{base}/cost-observations.csv", timeout=5) as response:
+                    cost_export = response.read().decode("utf-8")
+                    self.assertEqual(response.headers.get_content_type(), "text/csv")
+                    self.assertEqual(
+                        response.headers.get("Content-Disposition"),
+                        'attachment; filename="cloudmark-cost-observations.csv"',
+                    )
+                cost_rows = list(csv.DictReader(io.StringIO(cost_export)))
+                self.assertEqual(cost_rows[0]["observation_id"], cost_observation["id"])
+                self.assertEqual(cost_rows[0]["amount"], "0.125")
+                self.assertEqual(cost_rows[0]["provider_rating_input"], "false")
+                with patch(
+                    "cloudmark.server.cost_observation_csv",
+                    side_effect=CostObservationError("Cost observation export exceeds the bounded response size."),
+                ):
+                    with self.assertRaises(urllib.error.HTTPError) as oversized_cost_export:
+                        urllib.request.urlopen(f"{base}/cost-observations.csv", timeout=5)
+                self.assertEqual(oversized_cost_export.exception.code, 413)
                 controller.database.create_session(
                     "session_http_campaign",
                     "HTTP campaign pair",

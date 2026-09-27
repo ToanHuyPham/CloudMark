@@ -897,3 +897,17 @@ be analyzed, but hourly/monthly terms, taxes, commitments, included usage,
 discounts, licenses, and currencies are not interchangeable. Persisting the raw
 claim separately makes later audit possible without prematurely normalizing it
 or allowing one operator-entered price to satisfy a provider-rating gate.
+
+## D-055: Cost export preserves raw claims and adds no derived economics
+
+**Decision:** Add `cost-observation-export-v1` as a deterministic read-only
+UTF-8 CSV projection of the immutable v1 cost stream. Retain exact decimal,
+target/source/timestamp provenance, evidence status, claim, and all non-scoring
+policy flags. Sort by observation time and ID, neutralize formula-like text,
+reject version drift or incomplete contracts, and cap output at 1,000 rows and
+4 MiB. Export no normalized price, price/performance, score, rank, or winner.
+
+**Reason:** Raw cost evidence needs a portable audit path, but exporting it must
+not silently become a second cost methodology. Exact values and explicit policy
+flags preserve traceability, while formula neutralization and hard bounds make
+the file safer to open and keep the local Controller response predictable.

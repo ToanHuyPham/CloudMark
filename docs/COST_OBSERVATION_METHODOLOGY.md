@@ -65,8 +65,22 @@ update or delete endpoint exists.
 ```http
 GET  /api/v1/cost-observations
 POST /api/v1/cost-observations
+GET  /api/v1/cost-observations.csv
 ```
 
 The POST endpoint requires the Controller token. The GET endpoint returns at
 most 200 recent records; the compact five-second dashboard read model includes
 at most 20.
+
+## Audit export
+
+`cost-observation-export-v1` emits one deterministic UTF-8 CSV row per raw v1
+observation. It retains the exact decimal string, target identity, source and
+timestamp provenance, claim, and every non-scoring policy flag. Text cells that
+could be interpreted as spreadsheet formulas after leading whitespace are
+prefixed with an apostrophe.
+
+The endpoint reads at most 1,000 immutable records and caps output at 4 MiB. It
+fails closed on version drift or incomplete/inconsistent observation contracts.
+It never converts currencies or billing units, derives price/performance, or
+adds score/rank fields.

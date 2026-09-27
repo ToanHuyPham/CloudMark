@@ -1,11 +1,19 @@
 from __future__ import annotations
 
+import csv
+import io
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from unittest.mock import patch
 
-from cloudmark.cost import CostObservationError, build_cost_observation
+from cloudmark.cost import (
+    COST_OBSERVATION_EXPORT_VERSION,
+    CostObservationError,
+    build_cost_observation,
+    cost_observation_csv,
+)
 from cloudmark.database import Database
 from cloudmark.server import CloudMarkController
 
@@ -94,6 +102,45 @@ class CostObservationTests(unittest.TestCase):
             now=now,
         )
         self.assertEqual(zulu["observed_at"], "2026-09-26T01:00:00+00:00")
+
+    def test_cost_csv_is_deterministic_formula_safe_exact_and_unscored(self) -> None:
+        now = datetime(2026, 9, 26, 2, 0, tzinfo=timezone.utc)
+        first_observation = build_cost_observation(
+            "cost_export_old",
+            cost_request(
+                source_type="operator-reference",
+                source_reference="@SUM(1+1)",
+                observed_at="2026-09-25T01:00:00+00:00",
+            ),
+            "controller",
+            target_system(" =HYPERLINK(\"https://invalid.example\")"),
+            now=now,
+        )
+        second_observation = build_cost_observation(
+            "cost_export_new",
+            cost_request(observed_at="2026-09-26T01:00:00+00:00"),
+            "controller",
+            target_system(),
+            now=now,
+        )
+        first = cost_observation_csv([first_observation, second_observation])
+        second = cost_observation_csv([second_observation, first_observation])
+        self.assertEqual(first, second)
+        rows = list(csv.DictReader(io.StringIO(first.decode("utf-8"))))
+        self.assertEqual([row["observation_id"] for row in rows], ["cost_export_new", "cost_export_old"])
+        self.assertEqual(rows[0]["export_version"], COST_OBSERVATION_EXPORT_VERSION)
+        self.assertEqual(rows[0]["amount"], "0.125")
+        self.assertEqual(rows[0]["provider_rating_input"], "false")
+        self.assertTrue(rows[1]["provider"].startswith("'=HYPERLINK"))
+        self.assertTrue(rows[1]["source_reference"].startswith("'@SUM"))
+        self.assertFalse(any("score" in name for name in rows[0]))
+
+        invalid = {**first_observation, "version": "cost-observation-v0"}
+        with self.assertRaisesRegex(CostObservationError, "installed observation version"):
+            cost_observation_csv([invalid])
+        with patch("cloudmark.cost.COST_OBSERVATION_EXPORT_MAX_ROWS", 0):
+            with self.assertRaisesRegex(CostObservationError, "row limit"):
+                cost_observation_csv([first_observation])
 
     def test_database_round_trips_immutable_cost_observations_in_time_order(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

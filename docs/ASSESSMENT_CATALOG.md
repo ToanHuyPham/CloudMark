@@ -108,7 +108,8 @@ currency, billing unit, commitment/tax context, observation timestamp and its
 source class/reference against a snapshot of the exact target identity. It does
 not fetch or verify the source, infer missing terms, normalize billing units,
 or calculate price/performance. Cost observations do not satisfy the provider
-rating gate; domain 16 is therefore `Partial`.
+rating gate. A bounded formula-neutralized CSV exports those raw claims without
+normalization or scoring; domain 16 is therefore `Partial`.
 
 ## Mapping evidence to intended use
 

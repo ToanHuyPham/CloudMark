@@ -308,15 +308,18 @@ baseline is still the repository head.
   converted into a score. Median/P10/P90/best/worst/spread statistics retain a
   guarded nine-sample/three-target/three-window comparable state. MySQL and
   MariaDB or different server versions cannot be silently merged. The complete
-  development head passes 223 Python tests, 4 dashboard/CI-contract tests,
-  Ruff, 76.0% branch coverage, dashboard lint and strict type checking, OpenAPI
+  development head passes 224 Python tests, 4 dashboard/CI-contract tests,
+  Ruff, 76.1% branch coverage, dashboard lint and strict type checking, OpenAPI
   validation, and the production build without starting provider load;
 - `cost-observation-v1` authenticated immutable timestamped cost context for a
   Controller or Agent target, with provider/SKU/region/OS snapshot, exact
   decimal/currency/billing unit, commitment/tax state, timestamp source, and a
   bounded provider-public URL or redacted operator reference. Every record
   remains `operator-declared-unverified`; CloudMark fetches no source, stores no
-  document, performs no price normalization, and does not enable rating;
+  document, performs no price normalization, and does not enable rating.
+  `cost-observation-export-v1` adds deterministic formula-neutralized CSV with
+  exact decimal/target/source/timestamp provenance and non-scoring policy,
+  bounded to 1,000 rows/4 MiB with no derived price metric;
 - implemented and simulation-verified `linux-security-posture-v2` single-target
   executor for a Linux Controller host or authenticated Linux Agent, with
   profile/methodology/tool versions, remote Agent attribution, task heartbeat/
