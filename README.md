@@ -39,12 +39,15 @@ timestamp, and raw result.
 | Partial | HTTP/2 multiplexed dynamic load with fixed h2load connection/stream shapes, exact request-log P50/P95/P99, Generator validity, and cleanup |
 | Available | Target-scoped, versioned Essential/Standard/Demanding workload gates with per-check run provenance and explicit unknown evidence |
 | Available | Exact-cohort repeated-window provider observations with median, P10/P90, best/worst, spread, topology/evidence-class contracts, and guarded comparison eligibility |
+| Available | Bounded formula-safe CSV export of exact provider cohorts, statistics, UTC windows, and source Run IDs |
+| Partial | Immutable timestamped operator cost context with exact decimal/currency/unit/source and target-identity provenance; verification and price/performance remain unavailable |
+| Available | Bounded formula-safe CSV audit export of raw cost observations without normalization, score, or ranking |
 | Available | Immutable, manually dispatched repeated network campaigns with one comparison-eligible window per UTC day |
 | Available | Immutable, baseline-anchored storage campaigns with explicit per-window confirmation and one exact-contract Run per UTC day |
 | Roadmap | Unattended sampling schedules, physical-fabric verification, additional vendor queue normalization, public-path classification, and mTLS enrollment |
 | Roadmap | Remaining CPU, memory/NUMA, GPU, application, platform, operations, and provider executors |
 | Partial | Read-only Linux Security Posture v2 runs locally or on an authenticated Agent with redacted kernel, LSM, Secure Boot, cgroup, network-hardening, and mount evidence; provider security evidence remains pending |
-| Roadmap | Cross-target campaign orchestration, cross-zone analysis, timestamped cost, operations, and final provider ratings |
+| Roadmap | Cross-target campaign orchestration, cross-zone analysis, verified/normalized cost, operations, and final provider ratings |
 
 `Partial` and `Roadmap` capabilities never receive an artificial zero score.
 The dashboard reports insufficient evidence until the required executor and
@@ -117,6 +120,10 @@ On Windows, `.\scripts\start-local.ps1` starts both local processes and records
 their PIDs and logs under `.tmp/local`. Runtime evidence and secrets remain
 outside Git in `.cloudmark`; follow [`docs/RECOVERY.md`](docs/RECOVERY.md) to
 create a consistent protected snapshot before moving to another machine.
+
+Timestamped cost context is documented separately in
+[`docs/COST_OBSERVATION_METHODOLOGY.md`](docs/COST_OBSERVATION_METHODOLOGY.md).
+It remains an unverified operator claim and never enables provider scoring.
 
 ## Assessment commands
 
@@ -211,8 +218,8 @@ are available.
 Web/API/TLS remains partial until database-backed applications, HTTP/3, CDN,
 WAF, and autoscaling evidence are available.
 The current development head also implements `suitability-v1` target-scoped
-hard gates with exact evidence provenance and `provider-observations-v5`
-topology-, evidence-class-, and database-implementation-aware same-SKU
+hard gates with exact evidence provenance and `provider-observations-v6`
+system-execution-, topology-, evidence-class-, and database-implementation-aware same-SKU
 repeated-window descriptive comparisons. Provider-wide ratings and
 control-plane executors remain explicitly unavailable.
 

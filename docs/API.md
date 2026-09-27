@@ -18,6 +18,10 @@ X-CloudMark-Token: <token printed by cloudmark serve>
 | GET | `/dashboard` | Compact aggregated local dashboard payload |
 | GET | `/suitability` | Versioned target-scoped workload gates and provider-readiness evidence |
 | GET | `/provider-comparisons` | Exact-cohort repeated-window descriptive statistics |
+| GET | `/provider-comparisons.csv` | Bounded audit CSV with exact contracts, statistics, windows, and Run IDs |
+| GET | `/cost-observations` | Immutable timestamped operator cost context |
+| POST | `/cost-observations` | Record source-bound cost context for one exact target |
+| GET | `/cost-observations.csv` | Bounded audit CSV of raw cost observations and non-scoring policy |
 | GET | `/profiles` | Benchmark and scenario profiles |
 | GET | `/network-campaigns` | Repeated network campaign projections |
 | POST | `/network-campaigns` | Create an immutable fixed-pair campaign without starting traffic |
@@ -472,11 +476,17 @@ are satisfied.
 GET /api/v1/provider-comparisons
 ```
 
-The `provider-observations-v5` response groups fresh valid evidence only when
+The `provider-observations-v6` response groups fresh valid evidence only when
 provider, product/SKU, region, operating system, profile, methodology, metric,
 unit, paired topology, and topology evidence class match. Database and cache
 metrics additionally require the same engine, implementation, and exact server
-version. Storage metrics additionally require the same filesystem, bounded
+version. Compute and memory metrics additionally require the same verified
+executor version, host/affinity/effective thread boundary, and cgroup CPU quota
+contract. Memory cohorts also require the same compiler, fixed allocation and
+reserve, cgroup memory limit, guest page size and exposed NUMA-node count, swap
+and HugeTLB capacity, and selected THP/zswap policy. Missing or internally
+inconsistent execution evidence leaves a cohort observational. Storage metrics
+additionally require the same filesystem, bounded
 mount semantics, guest-visible block policy, and exact executor version. A UTC
 calendar day is one measurement window. Each metric
 cohort exposes sample, target, window, and Run ID sets plus median, P10, P90,
@@ -493,6 +503,72 @@ separate metric contracts.
 PostgreSQL, Redis, and MySQL/MariaDB expose separate descriptive metric keys.
 MySQL and MariaDB implementations or different server versions are never
 silently merged, even when the CloudMark profile name matches.
+
+## Export provider observations
+
+```http
+GET /api/v1/provider-comparisons.csv
+```
+
+The read-only `provider-observation-export-v1` response contains one row per
+exact metric cohort. It retains the projection/export versions, generation
+time, provider/SKU/region/OS identity, every compatibility contract, descriptive
+statistics, status/reasons, UTC windows, target IDs, and source Run IDs. The
+response is UTF-8 CSV with a fixed filename and remains bounded to 50,000 rows
+and 16 MiB.
+
+Text cells that could be interpreted as spreadsheet formulas are prefixed with
+an apostrophe. The export preserves `not-rated` and includes no provider score,
+rank, or winner field. An empty observation set returns the stable header row.
+
+## Record cost context
+
+```http
+POST /api/v1/cost-observations
+X-CloudMark-Token: <controller token>
+Content-Type: application/json
+
+{
+  "target_id": "controller",
+  "amount": "0.125",
+  "currency": "USD",
+  "billing_unit": "hour",
+  "commitment": "on-demand",
+  "tax_included": false,
+  "source_type": "provider-public-url",
+  "source_reference": "https://provider.example/pricing"
+}
+```
+
+`amount` must be an exact positive decimal string; JSON floating-point numbers
+are rejected. An optional timezone-aware `observed_at` is normalized to UTC.
+When omitted, Controller receipt time is used and the timestamp source remains
+machine-readable. The selected target must already expose provider and SKU
+identity. Public URLs must use HTTPS and contain no credentials or fragment.
+
+The response is an immutable `cost-observation-v1` claim with target-identity
+provenance and `operator-declared-unverified` status. CloudMark does not fetch
+the source, store a document, infer billing terms, normalize units, or calculate
+price/performance. `provider_rating_input` remains false.
+
+```http
+GET /api/v1/cost-observations
+```
+
+This returns the bounded recent collection. Do not submit credentials, signed
+URLs, customer/account identifiers, or unredacted invoice content. See
+[`COST_OBSERVATION_METHODOLOGY.md`](COST_OBSERVATION_METHODOLOGY.md).
+
+```http
+GET /api/v1/cost-observations.csv
+```
+
+The read-only `cost-observation-export-v1` response retains each observation's
+exact decimal string, target/source/timestamp provenance, claim status, and
+machine-readable non-scoring policy. Rows are deterministic, spreadsheet
+formula prefixes are neutralized, and output is capped at 1,000 rows and 4 MiB.
+No unit/currency normalization, price/performance value, score, or ranking is
+added.
 
 The complete machine-readable contract is in
 [`openapi/cloudmark-v1.yaml`](../openapi/cloudmark-v1.yaml).

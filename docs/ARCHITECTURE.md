@@ -94,13 +94,16 @@ measurement windows, observed suites, and missing operational domains, but
 does not produce a provider rating until the complete aggregation contract is
 implemented.
 
-`provider-observations-v5` adds a second read-time projection for repeated
+`provider-observations-v6` adds a second read-time projection for repeated
 measurements. Cohorts must match provider, SKU, region, operating system,
 profile, methodology, metric, unit, paired topology, and topology evidence
-class. Database/cache cohorts additionally match engine implementation and
-exact server version. Storage cohorts match bounded filesystem/mount semantics,
+class. Compute/memory cohorts additionally match verified executor versions,
+CPU affinity/effective-thread/cgroup-quota boundaries, and, for memory, the
+compiler, allocation, cgroup-memory, guest NUMA/page-size, and stable paging
+policy contract. Database/cache cohorts additionally match engine implementation
+and exact server version. Storage cohorts match bounded filesystem/mount semantics,
 guest-visible block policy, and executor version. It exposes PostgreSQL, Redis,
-MySQL/MariaDB, and storage metrics under distinct keys, de-duplicates a paired
+MySQL/MariaDB, compute, memory, and storage metrics under distinct keys, de-duplicates a paired
 network Run, and uses UTC calendar days as
 windows, and reports descriptive distributions only. Trusted Agent metadata
 may independently derive a placement scope; contradictory operator
@@ -109,6 +112,24 @@ addresses do not by themselves prove public-Internet traversal.
 The minimum comparable cohort is nine samples across three targets and three
 windows. Smaller cohorts remain visible as observations; no relative provider
 ranking is computed.
+
+`provider-observation-export-v1` is a read-only projection of those exact
+metric cohorts into deterministic UTF-8 CSV. It includes compatibility
+contracts, descriptive statistics, UTC windows, target IDs, and source Run IDs;
+neutralizes spreadsheet-formula prefixes; and is bounded to 50,000 rows and
+16 MiB. It exports neither a provider score nor a ranking and does not create a
+second aggregation methodology.
+
+`cost-observation-v1` persists a separate immutable operator-claim stream. Each
+record snapshots one target's provider/SKU/region/OS identity and retains an
+exact decimal price, currency, billing unit, commitment/tax context, timestamp
+and timestamp source, plus a bounded source reference. CloudMark never fetches
+the source or normalizes values across billing contracts. Cost observations do
+not enter suitability metrics, provider cohorts, or provider-rating readiness.
+`cost-observation-export-v1` is a deterministic read-only CSV projection of
+that raw immutable stream. It preserves exact decimal values and provenance,
+neutralizes spreadsheet-formula prefixes, caps output at 1,000 rows/4 MiB, and
+adds no normalization, score, or ranking.
 
 `network-campaign-v1` is the durable acquisition contract for one fixed
 Target/Generator pair. It locks the pairing session, participant identities,
@@ -124,7 +145,7 @@ locked profile or methodology no longer matches the installed standard contract.
 `storage-campaign-v1` begins from one immutable completed baseline with full
 measurement, cleanup, storage-environment, and executor evidence. The baseline
 counts as the first window. The contract locks one target identity, profile,
-methodology, and `provider-observations-v5` storage contract for 3–30 distinct
+methodology, and `provider-observations-v6` storage contract for 3–30 distinct
 UTC completion days. Every later Run requires explicit write and window
 confirmation through the campaign endpoint; the generic Run endpoint rejects
 campaign fields. Each counted Run must retain matching run-time Target evidence,
@@ -275,6 +296,8 @@ SQLite tables:
 - `campaigns`: version-discriminated immutable repeated-network and storage
   contracts with target window counts;
   progress is derived from linked immutable Runs rather than duplicated state.
+- `cost_observations`: immutable timestamped operator price context with exact
+  target/source provenance and no update/delete path.
 
 WAL mode permits dashboard reads while a benchmark updates its job state.
 The frequently polled dashboard endpoint returns presentation summaries: only

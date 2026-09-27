@@ -110,17 +110,34 @@ provenance. It produces target observations only; provider status stays
 `not-rated` until multi-target, repeated-window, operational, and cost evidence
 is implemented.
 
-`provider-observations-v5` now produces descriptive exact-cohort distributions
+`provider-observations-v6` now produces descriptive exact-cohort distributions
 for repeated evidence. It requires matching provider/SKU/region/OS and exact
 profile/methodology/topology/evidence-class compatibility; database/cache
 metrics also require exact engine implementation and server version. Storage
 metrics require exact filesystem, bounded mount semantics, guest-visible block
-policy, and executor version. It exposes PostgreSQL, Redis, MySQL/MariaDB, and
+policy, and executor version. Compute/memory metrics require an exact verified
+tool and CPU execution boundary; memory additionally locks compiler, allocation,
+cgroup-memory, exposed NUMA/page-size, and stable paging-policy evidence. It
+exposes PostgreSQL, Redis, MySQL/MariaDB, and
 storage observations, Run IDs, and sampling counts,
 and does not enable provider ratings. Pair declarations are
 independently checked when trusted provider metadata can establish a placement
 scope; contradictions remain observational. Globally routable addresses alone
 never prove public-Internet traversal.
+
+The read-only `provider-observation-export-v1` endpoint and dashboard action
+export the exact v6 cohort contracts, statistics, UTC windows, target IDs, and
+Run provenance as bounded formula-neutralized CSV. The export keeps provider
+status `not-rated` and contains no score or ranking.
+
+`cost-observation-v1` records immutable timestamped operator price context for
+an exact target identity. Exact decimal/currency/unit, commitment/tax context,
+timestamp source, and bounded public-URL or redacted-reference provenance are
+retained. CloudMark does not fetch/verify the source, normalize prices, compute
+price/performance, or treat these records as provider-rating input.
+The separate `cost-observation-export-v1` endpoint emits a bounded,
+formula-neutralized CSV of the raw v1 records and their non-scoring policy
+without converting currencies/units or deriving a metric.
 
 `network-campaign-v1` persists an immutable acquisition contract for one fixed
 Target/Generator pair and counts at most one comparison-eligible

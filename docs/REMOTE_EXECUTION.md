@@ -86,7 +86,7 @@ Linux Agents additionally collect bounded read-only
 `storage-environment-v1` evidence from procfs/sysfs. This observation is not an
 admission requirement: an older Agent or unsupported operating system may run
 the benchmark, but its storage metrics remain observational rather than
-comparison-eligible under `provider-observations-v5`.
+comparison-eligible under `provider-observations-v6`.
 
 A completed remote storage Run with full context can become a
 `storage-campaign-v1` baseline. The campaign remains bound to that exact Agent

@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import csv
+import io
 import ipaddress
 import json
+import math
 import os
 import sqlite3
 import subprocess
@@ -41,6 +44,7 @@ from cloudmark.benchmarks import _metrics, _parse_fio_log, run_storage
 from cloudmark.bootstrap import create_plan
 from cloudmark.campaigns import build_network_campaign_contract, project_network_campaign
 from cloudmark.compute import ComputeError, parse_sysbench_cpu, run_system_benchmark, system_preflight
+from cloudmark.cost import CostObservationError
 from cloudmark.database import Database
 from cloudmark.database_benchmark import (
     DatabaseBenchmarkError,
@@ -93,7 +97,14 @@ from cloudmark.provider import _declared_manifest
 from cloudmark.runner import CancellationToken, JobContext, ProcessResult, RunCancelled, RunTimedOut
 from cloudmark.redis_benchmark import parse_redis_benchmark_csv, redis_analysis, redis_total_steps
 from cloudmark.server import CloudMarkController, Handler, Server, _dashboard_run_summaries, _json_bytes
-from cloudmark.suitability import SCENARIO_REQUIREMENTS, _run_valid, evaluate_suitability
+from cloudmark.suitability import (
+    PROVIDER_OBSERVATION_EXPORT_VERSION,
+    SCENARIO_REQUIREMENTS,
+    _run_valid,
+    _system_execution_contract,
+    evaluate_suitability,
+    provider_observation_csv,
+)
 from cloudmark.topology import assess_pairing_topology
 from cloudmark.tooling import h2load_http2_argument, mysql_tool_supports, postgres_tool_supports, web_tool_supports
 from cloudmark.web_benchmark import (
@@ -126,6 +137,29 @@ class CloudMarkTests(unittest.TestCase):
                 "confidence": 0.9,
                 "source": "test",
                 "instance_type": "standard-4",
+            },
+        }
+
+    @staticmethod
+    def _compute_execution_evidence(*, quota_cores: float | None = None) -> dict[str, object]:
+        quota_ceiling = math.ceil(quota_cores) if quota_cores is not None else None
+        return {
+            "tool": {"name": "sysbench", "version": "sysbench 1.0.20"},
+            "preflight": {
+                "cpu_execution_boundary": {
+                    "host_logical_cores": 4,
+                    "affinity_logical_cores": 4,
+                    "effective_logical_cores": min(4, quota_ceiling) if quota_ceiling is not None else 4,
+                    "affinity_respected": True,
+                    "cpu_ids_persisted": False,
+                    "cgroup_cpu_quota_applied": quota_cores is not None,
+                    "cgroup_cpu_quota_verified": True,
+                    "cgroup_version": "v2",
+                    "quota_capacity_cores": quota_cores,
+                    "quota_thread_ceiling": quota_ceiling,
+                    "quota_levels_checked": 1,
+                    "quota_limiting_ancestor_depth": 0 if quota_cores is not None else None,
+                },
             },
         }
 
@@ -403,6 +437,7 @@ class CloudMarkTests(unittest.TestCase):
                     "request": {"agent_id": agent_id},
                     "result": {
                         "methodology_version": "compute-v1",
+                        **self._compute_execution_evidence(),
                         "compute_jobs": [{
                             "name": "integer-sustained",
                             "metrics": {"events_per_second": next(rates)},
@@ -412,10 +447,11 @@ class CloudMarkTests(unittest.TestCase):
 
         report = evaluate_suitability(runs, self._suitability_system("controller"), agents.get)
         observations = report["provider_observations"]
-        self.assertEqual(observations["version"], "provider-observations-v5")
+        self.assertEqual(observations["version"], "provider-observations-v6")
         self.assertTrue(observations["policy"]["exact_pair_topology"])
         self.assertTrue(observations["policy"]["exact_pair_topology_evidence"])
         self.assertTrue(observations["policy"]["exact_database_implementation_and_version"])
+        self.assertTrue(observations["policy"]["exact_system_execution_boundary_and_tool"])
         self.assertTrue(observations["policy"]["exact_storage_environment_and_tool"])
         self.assertFalse(observations["policy"]["provider_ranking"])
         group = observations["groups"][0]
@@ -430,7 +466,178 @@ class CloudMarkTests(unittest.TestCase):
         self.assertEqual(metric["statistics"]["p10"], 1080)
         self.assertEqual(metric["statistics"]["p90"], 1720)
         self.assertEqual(metric["statistics"]["worst"], 1000)
+        self.assertIn("tool=sysbench:sysbench 1.0.20", metric["system_execution_contract"])
         self.assertEqual(group["rating_status"], "not-rated")
+
+    def test_provider_observations_separate_system_execution_boundaries_and_fail_closed(self) -> None:
+        completed_at = datetime.now(timezone.utc).isoformat()
+        systems = {
+            "agent_a": {"last_seen_at": completed_at, "system": self._suitability_system("agent-a")},
+        }
+
+        def compute_run(run_id: str, rate: float, quota_cores: float | None, *, evidence: bool = True) -> dict[str, object]:
+            result: dict[str, object] = {
+                "methodology_version": "compute-v1",
+                "compute_jobs": [{"name": "integer-sustained", "metrics": {"events_per_second": rate}}],
+            }
+            if evidence:
+                result.update(self._compute_execution_evidence(quota_cores=quota_cores))
+            return {
+                "id": run_id,
+                "suite": "compute",
+                "profile": "compute-standard",
+                "status": "completed",
+                "finished_at": completed_at,
+                "methodology_version": "compute-v1",
+                "request": {"agent_id": "agent_a"},
+                "result": result,
+            }
+
+        report = evaluate_suitability(
+            [
+                compute_run("run_unlimited", 4000, None),
+                compute_run("run_quota", 1900, 1.5),
+                compute_run("run_missing_boundary", 3900, None, evidence=False),
+            ],
+            self._suitability_system("controller"),
+            systems.get,
+        )
+        metrics = [
+            item
+            for item in report["provider_observations"]["groups"][0]["metric_cohorts"]
+            if item["key"] == "compute.sustained_eps"
+        ]
+        self.assertEqual(len(metrics), 3)
+        self.assertEqual({item["sample_count"] for item in metrics}, {1})
+        self.assertTrue(any("quota-cores=unlimited" in item["system_execution_contract"] for item in metrics))
+        self.assertTrue(any("quota-cores=1.5" in item["system_execution_contract"] for item in metrics))
+        missing = next(item for item in metrics if "tool=unknown:unknown" in item["system_execution_contract"])
+        self.assertEqual(missing["status"], "observational")
+        self.assertIn("execution boundary", " ".join(missing["reasons"]).lower())
+
+    def test_provider_observation_csv_is_deterministic_traceable_and_formula_safe(self) -> None:
+        metric = {
+            "contract_id": "compute.contract",
+            "key": "compute.sustained_eps",
+            "label": "Sustained all-core integer rate",
+            "suite": "compute",
+            "direction": "higher",
+            "unit": "events/s",
+            "profile": "compute-standard",
+            "methodology_version": "compute-v1",
+            "topology_scope": "single-target",
+            "topology_evidence": "single-target",
+            "implementation_contract": "not-applicable",
+            "system_execution_contract": "system-execution-v1;tool=sysbench:sysbench 1.0.20",
+            "storage_contract": "not-applicable",
+            "status": "observational",
+            "reasons": ["At least 9 samples are required."],
+            "sample_count": 1,
+            "target_count": 1,
+            "window_count": 1,
+            "windows": ["2026-09-26"],
+            "run_ids": ["run_export_1"],
+            "latest_observed_at": "2026-09-26T01:00:00+00:00",
+            "statistics": {
+                "median": 1400.0,
+                "p10": 1400.0,
+                "p90": 1400.0,
+                "minimum": 1400.0,
+                "maximum": 1400.0,
+                "best": 1400.0,
+                "worst": 1400.0,
+                "relative_spread_percent": None,
+                "stability": "insufficient-sampling",
+            },
+        }
+        observations = {
+            "version": "provider-observations-v6",
+            "rating_status": "not-rated",
+            "groups": [{
+                "id": "cohort-001",
+                "provider": " =HYPERLINK(\"https://invalid.example\")",
+                "instance_type": "standard-4",
+                "region": "region-a",
+                "operating_system": "Ubuntu",
+                "comparison_status": "observational",
+                "target_ids": ["agent_a"],
+                "observed_suites": ["compute"],
+                "metric_cohorts": [metric],
+            }],
+        }
+        generated_at = "2026-09-26T02:00:00+00:00"
+        first = provider_observation_csv(observations, generated_at)
+        second = provider_observation_csv(observations, generated_at)
+        self.assertEqual(first, second)
+        rows = list(csv.DictReader(io.StringIO(first.decode("utf-8"))))
+        self.assertEqual(len(rows), 1)
+        row = rows[0]
+        self.assertEqual(row["export_version"], PROVIDER_OBSERVATION_EXPORT_VERSION)
+        self.assertEqual(row["generated_at"], generated_at)
+        self.assertEqual(row["rating_status"], "not-rated")
+        self.assertTrue(row["provider"].startswith("' =HYPERLINK"))
+        self.assertEqual(json.loads(row["run_ids_json"]), ["run_export_1"])
+        self.assertEqual(row["system_execution_contract"], metric["system_execution_contract"])
+        self.assertEqual(row["median"], "1400.0")
+        self.assertFalse(any("score" in name for name in row))
+
+        with self.assertRaisesRegex(ValueError, "installed projection version"):
+            provider_observation_csv({**observations, "version": "provider-observations-v5"}, generated_at)
+        with patch("cloudmark.suitability.PROVIDER_OBSERVATION_EXPORT_MAX_ROWS", 0):
+            with self.assertRaisesRegex(ValueError, "row limit"):
+                provider_observation_csv(observations, generated_at)
+
+    def test_memory_execution_contract_requires_exact_compiler_resource_and_policy_evidence(self) -> None:
+        execution = self._compute_execution_evidence(quota_cores=2.0)
+        run = {
+            "suite": "memory",
+            "result": {
+                "tool": {
+                    "name": "cloudmark-memory-bench",
+                    "version": "1.0",
+                    "compiler_version": "gcc 14.2.0",
+                },
+                "preflight": {
+                    **execution["preflight"],
+                    "array_bytes": 256 * 1024**2,
+                    "safety_reserve_bytes": 512 * 1024**2,
+                    "memory_allocation_boundary": {
+                        "status": "observed",
+                        "cgroup_version": "v2",
+                        "cgroup_limit_bytes": 4 * 1024**3,
+                        "finite_cgroup_limit_detected": True,
+                        "cgroup_headroom_verified": True,
+                        "read_only": True,
+                    },
+                    "memory_environment": {
+                        "methodology_version": "memory-environment-v2",
+                        "evidence_status": "complete",
+                        "page_size_bytes": 4096,
+                        "node_count": 1,
+                        "paging": {
+                            "status": "observed",
+                            "swap_total_bytes": 0,
+                            "huge_pages_total": 0,
+                            "transparent_hugepage": {
+                                "enabled_policy": "madvise",
+                                "defrag_policy": "defer_madvise",
+                            },
+                            "zswap": {"enabled": False},
+                        },
+                    },
+                },
+            },
+        }
+        contract, verified = _system_execution_contract(run)
+        self.assertTrue(verified)
+        self.assertIn("compiler=gcc 14.2.0", contract)
+        self.assertIn("memory-limit-bytes=4294967296", contract)
+        self.assertIn("thp=madvise", contract)
+
+        run["result"]["tool"]["compiler_version"] = "unknown"
+        unknown_compiler_contract, unknown_compiler_verified = _system_execution_contract(run)
+        self.assertFalse(unknown_compiler_verified)
+        self.assertNotEqual(contract, unknown_compiler_contract)
 
     def test_provider_observations_extract_cache_metrics_and_separate_database_implementations(self) -> None:
         completed_at = datetime.now(timezone.utc).isoformat()
@@ -541,7 +748,7 @@ class CloudMarkTests(unittest.TestCase):
             systems.get,
         )
         observations = report["provider_observations"]
-        self.assertEqual(observations["version"], "provider-observations-v5")
+        self.assertEqual(observations["version"], "provider-observations-v6")
         metrics = observations["groups"][0]["metric_cohorts"]
         mysql_tps = [item for item in metrics if item["key"] == "database.mysql_read_write_t4_tps"]
         self.assertEqual(len(mysql_tps), 3)
@@ -5547,6 +5754,7 @@ traffic: 2048000 bytes total, 128000 bytes headers (space savings 75.00%), 20480
         self.assertEqual(domains["database"], "partial")
         self.assertEqual(domains["web"], "partial")
         self.assertEqual(domains["security"], "partial")
+        self.assertEqual(domains["cost"], "partial")
         self.assertEqual(domains["reliability"], "roadmap")
         self.assertEqual(SECURITY_PROFILES["linux-security-posture"]["methodology_version"], "linux-security-posture-v2")
         self.assertTrue(SECURITY_PROFILES["linux-security-posture"]["read_only"])
@@ -5954,6 +6162,8 @@ max: 1.50
                 self.assertIn("sessions", dashboard)
                 self.assertEqual(dashboard["network_campaigns"], [])
                 self.assertEqual(dashboard["storage_campaigns"], [])
+                self.assertEqual(dashboard["cost_observations"]["items"], [])
+                self.assertFalse(dashboard["cost_observations"]["provider_rating_input"])
                 self.assertEqual(dashboard["suitability"]["engine_version"], "suitability-v1")
                 self.assertFalse(dashboard["suitability"]["policy"]["missing_evidence_is_zero"])
                 with urllib.request.urlopen(f"{base}/suitability", timeout=5) as response:
@@ -5961,19 +6171,101 @@ max: 1.50
                 self.assertEqual(suitability["requirements_version"], "workload-requirements-1.0")
                 with urllib.request.urlopen(f"{base}/provider-comparisons", timeout=5) as response:
                     provider_observations = json.load(response)
-                self.assertEqual(provider_observations["version"], "provider-observations-v5")
+                self.assertEqual(provider_observations["version"], "provider-observations-v6")
                 self.assertEqual(provider_observations["rating_status"], "not-rated")
                 self.assertFalse(provider_observations["policy"]["provider_ranking"])
                 self.assertTrue(
                     provider_observations["policy"]["exact_database_implementation_and_version"]
                 )
                 self.assertTrue(provider_observations["policy"]["exact_storage_environment_and_tool"])
+                with urllib.request.urlopen(f"{base}/provider-comparisons.csv", timeout=5) as response:
+                    provider_export = response.read().decode("utf-8")
+                    self.assertEqual(response.headers.get_content_type(), "text/csv")
+                    self.assertEqual(
+                        response.headers.get("Content-Disposition"),
+                        'attachment; filename="cloudmark-provider-observations.csv"',
+                    )
+                self.assertTrue(provider_export.startswith("export_version,generated_at,projection_version"))
+                with patch(
+                    "cloudmark.server.provider_observation_csv",
+                    side_effect=ValueError("Provider observation export exceeds the bounded response size."),
+                ):
+                    with self.assertRaises(urllib.error.HTTPError) as oversized_export:
+                        urllib.request.urlopen(f"{base}/provider-comparisons.csv", timeout=5)
+                self.assertEqual(oversized_export.exception.code, 413)
                 with urllib.request.urlopen(f"{base}/network-campaigns", timeout=5) as response:
                     campaigns = json.load(response)
                 self.assertEqual(campaigns["items"], [])
                 with urllib.request.urlopen(f"{base}/storage-campaigns", timeout=5) as response:
                     storage_campaigns = json.load(response)
                 self.assertEqual(storage_campaigns["items"], [])
+                controller._inventory = {
+                    "hostname": "api-cost-target",
+                    "os": {"system": "Linux", "distribution": "Ubuntu", "architecture": "x86_64"},
+                }
+                controller._provider = {
+                    "provider": "API Test Provider",
+                    "confidence": 0.99,
+                    "source": "provider-metadata",
+                    "instance_type": "standard-4",
+                    "region": "region-a",
+                    "zone": "zone-a",
+                }
+                cost_request = urllib.request.Request(
+                    f"{base}/cost-observations",
+                    data=json.dumps({
+                        "target_id": "controller",
+                        "amount": "0.125",
+                        "currency": "USD",
+                        "billing_unit": "hour",
+                        "commitment": "on-demand",
+                        "tax_included": False,
+                        "source_type": "provider-public-url",
+                        "source_reference": "https://provider.example/pricing",
+                    }).encode("utf-8"),
+                    headers={
+                        "Content-Type": "application/json",
+                        "X-CloudMark-Token": controller.token,
+                    },
+                    method="POST",
+                )
+                unauthorized_cost_request = urllib.request.Request(
+                    f"{base}/cost-observations",
+                    data=cost_request.data,
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
+                )
+                with self.assertRaises(urllib.error.HTTPError) as unauthorized_cost:
+                    urllib.request.urlopen(unauthorized_cost_request, timeout=5)
+                self.assertEqual(unauthorized_cost.exception.code, 401)
+                with urllib.request.urlopen(cost_request, timeout=5) as response:
+                    cost_observation = json.load(response)
+                    self.assertEqual(response.status, 201)
+                self.assertEqual(cost_observation["version"], "cost-observation-v1")
+                self.assertEqual(cost_observation["evidence_status"], "operator-declared-unverified")
+                self.assertFalse(cost_observation["policy"]["provider_rating_input"])
+                with urllib.request.urlopen(f"{base}/cost-observations", timeout=5) as response:
+                    cost_report = json.load(response)
+                self.assertEqual(cost_report["items"][0]["id"], cost_observation["id"])
+                self.assertEqual(cost_report["rating_status"], "not-rated")
+                with urllib.request.urlopen(f"{base}/cost-observations.csv", timeout=5) as response:
+                    cost_export = response.read().decode("utf-8")
+                    self.assertEqual(response.headers.get_content_type(), "text/csv")
+                    self.assertEqual(
+                        response.headers.get("Content-Disposition"),
+                        'attachment; filename="cloudmark-cost-observations.csv"',
+                    )
+                cost_rows = list(csv.DictReader(io.StringIO(cost_export)))
+                self.assertEqual(cost_rows[0]["observation_id"], cost_observation["id"])
+                self.assertEqual(cost_rows[0]["amount"], "0.125")
+                self.assertEqual(cost_rows[0]["provider_rating_input"], "false")
+                with patch(
+                    "cloudmark.server.cost_observation_csv",
+                    side_effect=CostObservationError("Cost observation export exceeds the bounded response size."),
+                ):
+                    with self.assertRaises(urllib.error.HTTPError) as oversized_cost_export:
+                        urllib.request.urlopen(f"{base}/cost-observations.csv", timeout=5)
+                self.assertEqual(oversized_cost_export.exception.code, 413)
                 controller.database.create_session(
                     "session_http_campaign",
                     "HTTP campaign pair",

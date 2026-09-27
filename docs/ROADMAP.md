@@ -212,13 +212,23 @@ Demanding hard gates to all 12 use cases, preserves per-check run provenance,
 and reports missing/stale evidence, blockers, limitations, and next actions.
 It deliberately does not publish a provider rating.
 
-`provider-observations-v5` is also available at development head. It reports
+`provider-observations-v6` is also available at development head. It reports
 exact provider/SKU/region/OS/topology/evidence-class, profile/methodology, and
-database implementation/server-version and storage environment/tool cohorts
+compute/memory execution-boundary/tool, database implementation/server-version,
+and storage environment/tool cohorts
 with descriptive
 median, P10/P90, actual best/worst, and spread. Nine samples across three
 targets and three UTC-day windows are required before a metric is marked
 comparable; this remains distinct from a provider rating.
+`provider-observation-export-v1` is available as a bounded formula-neutralized
+CSV projection with exact contracts, descriptive statistics, windows, target
+IDs, and Run provenance. It does not add a score or ranking.
+`cost-observation-v1` separately stores immutable operator-supplied price
+context with exact decimal/currency/unit/source and target identity provenance.
+It remains unverified and is not a rating input; billing-term verification,
+normalization, exchange-rate policy, and price/performance remain planned.
+`cost-observation-export-v1` provides a bounded formula-neutralized raw audit
+CSV without adding a derived economic metric.
 
 Each use case defines:
 
@@ -227,7 +237,8 @@ Each use case defines:
 3. stability — variance across runs, instances, and time windows;
 4. evidence confidence — topology, sample count, and tool health;
 5. operational evidence — snapshot, failover, API, and security;
-6. cost input — stored separately with timestamp, currency, and source.
+6. cost input — stored separately with timestamp, currency, source, and target
+   provenance in `cost-observation-v1`; verification/normalization remain planned.
 
 Current target verdicts are `Suitable`, `Conditional fit`, `Below requirement`,
 or `Insufficient evidence`. Future empirically calibrated provider reports may

@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import csv
+import io
+import json
 import math
 from datetime import datetime, timezone
 from typing import Any, Callable
@@ -18,7 +21,10 @@ from .profiles import (
 
 SUITABILITY_ENGINE_VERSION = "suitability-v1"
 REQUIREMENTS_VERSION = "workload-requirements-1.0"
-PROVIDER_OBSERVATION_VERSION = "provider-observations-v5"
+PROVIDER_OBSERVATION_VERSION = "provider-observations-v6"
+PROVIDER_OBSERVATION_EXPORT_VERSION = "provider-observation-export-v1"
+PROVIDER_OBSERVATION_EXPORT_MAX_ROWS = 50_000
+PROVIDER_OBSERVATION_EXPORT_MAX_BYTES = 16 * 1024 * 1024
 EVIDENCE_MAX_AGE_DAYS = 30
 EVIDENCE_FUTURE_SKEW_SECONDS = 86_400
 COMPARISON_MIN_SAMPLES = 9
@@ -745,6 +751,131 @@ def _contract_token(value: Any, fallback: str = "unknown") -> str:
     return normalized[:160] if normalized else fallback
 
 
+def _positive_integer(value: Any) -> int | None:
+    return value if isinstance(value, int) and not isinstance(value, bool) and value > 0 else None
+
+
+def _finite_positive_number(value: Any) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    number = float(value)
+    return number if math.isfinite(number) and number > 0 else None
+
+
+def _system_execution_contract(run: dict[str, Any]) -> tuple[str, bool]:
+    """Return the exact tool and resource boundary for compute/memory evidence."""
+    suite = str(run.get("suite") or "")
+    if suite not in {"compute", "memory"}:
+        return "not-applicable", True
+    result = run.get("result") if isinstance(run.get("result"), dict) else {}
+    preflight = result.get("preflight") if isinstance(result.get("preflight"), dict) else {}
+    tool = result.get("tool") if isinstance(result.get("tool"), dict) else {}
+    cpu = preflight.get("cpu_execution_boundary") if isinstance(preflight.get("cpu_execution_boundary"), dict) else {}
+
+    tool_name = _contract_token(tool.get("name"))
+    tool_version = _contract_token(tool.get("version"))
+    host_cores = _positive_integer(cpu.get("host_logical_cores"))
+    affinity_cores = _positive_integer(cpu.get("affinity_logical_cores"))
+    effective_cores = _positive_integer(cpu.get("effective_logical_cores"))
+    affinity_respected = cpu.get("affinity_respected")
+    quota_verified = cpu.get("cgroup_cpu_quota_verified")
+    quota_applied = cpu.get("cgroup_cpu_quota_applied")
+    quota_version = cpu.get("cgroup_version")
+    quota_capacity = _finite_positive_number(cpu.get("quota_capacity_cores"))
+    quota_ceiling = _positive_integer(cpu.get("quota_thread_ceiling"))
+    cpu_verified = (
+        tool_name != "unknown"
+        and tool_version not in {"unknown", "unknown-version"}
+        and host_cores is not None
+        and effective_cores is not None
+        and isinstance(affinity_respected, bool)
+        and (affinity_cores is not None if affinity_respected else cpu.get("affinity_logical_cores") is None)
+        and quota_verified is True
+        and isinstance(quota_applied, bool)
+        and quota_version in {None, "v1", "v2"}
+        and (
+            quota_capacity is not None and quota_ceiling is not None
+            if quota_applied
+            else cpu.get("quota_capacity_cores") is None and cpu.get("quota_thread_ceiling") is None
+        )
+        and effective_cores <= host_cores
+        and (affinity_cores is None or effective_cores <= affinity_cores)
+        and (quota_ceiling is None or effective_cores <= quota_ceiling)
+    )
+    cpu_contract = (
+        f"tool={tool_name}:{tool_version};host-threads={host_cores or 'unknown'};"
+        f"affinity-threads={affinity_cores or 'unavailable'};effective-threads={effective_cores or 'unknown'};"
+        f"cpu-cgroup={_contract_token(quota_version, 'none-observed')};"
+        f"quota-cores={quota_capacity if quota_capacity is not None else 'unlimited'};"
+        f"quota-thread-ceiling={quota_ceiling if quota_ceiling is not None else 'unlimited'}"
+    )
+    if suite == "compute":
+        return f"system-execution-v1;{cpu_contract}", cpu_verified
+
+    memory = (
+        preflight.get("memory_allocation_boundary")
+        if isinstance(preflight.get("memory_allocation_boundary"), dict)
+        else {}
+    )
+    environment = preflight.get("memory_environment") if isinstance(preflight.get("memory_environment"), dict) else {}
+    paging = environment.get("paging") if isinstance(environment.get("paging"), dict) else {}
+    transparent_hugepage = (
+        paging.get("transparent_hugepage")
+        if isinstance(paging.get("transparent_hugepage"), dict)
+        else {}
+    )
+    zswap = paging.get("zswap") if isinstance(paging.get("zswap"), dict) else {}
+    compiler_version = _contract_token(tool.get("compiler_version"))
+    array_bytes = _positive_integer(preflight.get("array_bytes"))
+    reserve_bytes = _positive_integer(preflight.get("safety_reserve_bytes"))
+    memory_cgroup_version = memory.get("cgroup_version")
+    finite_memory_limit = memory.get("finite_cgroup_limit_detected")
+    memory_limit_bytes = _positive_integer(memory.get("cgroup_limit_bytes"))
+    page_size_bytes = _positive_integer(environment.get("page_size_bytes"))
+    node_count = _positive_integer(environment.get("node_count"))
+    swap_total_bytes = paging.get("swap_total_bytes")
+    huge_pages_total = paging.get("huge_pages_total")
+    thp_enabled = _contract_token(transparent_hugepage.get("enabled_policy"))
+    thp_defrag = _contract_token(transparent_hugepage.get("defrag_policy"))
+    zswap_enabled = zswap.get("enabled")
+    memory_verified = (
+        cpu_verified
+        and compiler_version not in {"unknown", "unknown-version"}
+        and array_bytes is not None
+        and reserve_bytes is not None
+        and memory.get("status") == "observed"
+        and memory.get("cgroup_headroom_verified") is True
+        and memory.get("read_only") is True
+        and memory_cgroup_version in {None, "v1", "v2"}
+        and isinstance(finite_memory_limit, bool)
+        and (memory_limit_bytes is not None if finite_memory_limit else memory.get("cgroup_limit_bytes") is None)
+        and environment.get("methodology_version") == "memory-environment-v2"
+        and environment.get("evidence_status") == "complete"
+        and page_size_bytes is not None
+        and node_count is not None
+        and paging.get("status") == "observed"
+        and isinstance(swap_total_bytes, int)
+        and not isinstance(swap_total_bytes, bool)
+        and swap_total_bytes >= 0
+        and isinstance(huge_pages_total, int)
+        and not isinstance(huge_pages_total, bool)
+        and huge_pages_total >= 0
+        and thp_enabled != "unknown"
+        and thp_defrag != "unknown"
+        and isinstance(zswap_enabled, bool)
+    )
+    memory_contract = (
+        f"compiler={compiler_version};array-bytes={array_bytes or 'unknown'};reserve-bytes={reserve_bytes or 'unknown'};"
+        f"memory-cgroup={_contract_token(memory_cgroup_version, 'none-observed')};"
+        f"memory-limit-bytes={memory_limit_bytes if memory_limit_bytes is not None else 'unlimited'};"
+        f"environment={_contract_token(environment.get('methodology_version'))};page-bytes={page_size_bytes or 'unknown'};"
+        f"numa-nodes={node_count or 'unknown'};swap-total-bytes={swap_total_bytes if isinstance(swap_total_bytes, int) else 'unknown'};"
+        f"huge-pages-total={huge_pages_total if isinstance(huge_pages_total, int) else 'unknown'};"
+        f"thp={thp_enabled};thp-defrag={thp_defrag};zswap={str(zswap_enabled).lower() if isinstance(zswap_enabled, bool) else 'unknown'}"
+    )
+    return f"system-execution-v1;{cpu_contract};{memory_contract}", memory_verified
+
+
 def storage_run_contract(run: dict[str, Any]) -> tuple[str, bool]:
     if str(run.get("suite") or "") != "storage":
         return "not-applicable", True
@@ -846,7 +977,7 @@ def _provider_observations(targets: list[dict[str, Any]]) -> dict[str, Any]:
         peer_ids = {peer["id"] for peer in peers}
         identity_verified = all(_provider_identity_verified(peer["provider"]) for peer in peers)
         runs_by_id: dict[str, dict[str, Any]] = {}
-        metric_builders: dict[tuple[str, str, str, str, str, str, str, str], dict[str, Any]] = {}
+        metric_builders: dict[tuple[str, str, str, str, str, str, str, str, str], dict[str, Any]] = {}
         for peer in peers:
             for run in peer["_runs"]:
                 if not _run_is_fresh(run):
@@ -872,6 +1003,7 @@ def _provider_observations(targets: list[dict[str, Any]]) -> dict[str, Any]:
                     unit = str(item.get("unit") or "")
                     topology_scope, topology_evidence = _run_topology_contract(run)
                     implementation_contract, implementation_verified = _run_implementation_contract(run)
+                    system_execution_contract, system_execution_verified = _system_execution_contract(run)
                     storage_contract, storage_contract_verified = storage_run_contract(run)
                     contract_key = (
                         metric_key,
@@ -881,6 +1013,7 @@ def _provider_observations(targets: list[dict[str, Any]]) -> dict[str, Any]:
                         topology_scope,
                         topology_evidence,
                         implementation_contract,
+                        system_execution_contract,
                         storage_contract,
                     )
                     builder = metric_builders.setdefault(contract_key, {
@@ -890,11 +1023,15 @@ def _provider_observations(targets: list[dict[str, Any]]) -> dict[str, Any]:
                         "windows": set(),
                         "observed_at": [],
                         "implementation_verified": True,
+                        "system_execution_verified": True,
                         "storage_contract_verified": True,
                         "_seen_runs": set(),
                     })
                     builder["implementation_verified"] = (
                         builder["implementation_verified"] and implementation_verified
+                    )
+                    builder["system_execution_verified"] = (
+                        builder["system_execution_verified"] and system_execution_verified
                     )
                     builder["storage_contract_verified"] = (
                         builder["storage_contract_verified"] and storage_contract_verified
@@ -921,6 +1058,7 @@ def _provider_observations(targets: list[dict[str, Any]]) -> dict[str, Any]:
                 topology_scope,
                 topology_evidence,
                 implementation_contract,
+                system_execution_contract,
                 storage_contract,
             ) = contract_key
             values = builder["values"]
@@ -945,6 +1083,8 @@ def _provider_observations(targets: list[dict[str, Any]]) -> dict[str, Any]:
                 reasons.append("Paired benchmark topology is not declared.")
             if not builder["implementation_verified"]:
                 reasons.append("Database engine implementation or server version evidence is unavailable.")
+            if not builder["system_execution_verified"]:
+                reasons.append("Compute or memory execution boundary and tool evidence is unavailable or incomplete.")
             if not builder["storage_contract_verified"]:
                 reasons.append("Storage filesystem, block-device, or tool contract evidence is unavailable.")
             relative_spread, stability = _stability(values, median, p10, p90)
@@ -960,6 +1100,7 @@ def _provider_observations(targets: list[dict[str, Any]]) -> dict[str, Any]:
                 "topology_scope": topology_scope,
                 "topology_evidence": topology_evidence,
                 "implementation_contract": implementation_contract,
+                "system_execution_contract": system_execution_contract,
                 "storage_contract": storage_contract,
                 "status": "comparable" if not reasons else "observational",
                 "reasons": reasons,
@@ -1033,6 +1174,7 @@ def _provider_observations(targets: list[dict[str, Any]]) -> dict[str, Any]:
             "exact_pair_topology": True,
             "exact_pair_topology_evidence": True,
             "exact_database_implementation_and_version": True,
+            "exact_system_execution_boundary_and_tool": True,
             "exact_storage_environment_and_tool": True,
             "cross_sku_aggregation": False,
             "cross_region_aggregation": False,
@@ -1042,6 +1184,141 @@ def _provider_observations(targets: list[dict[str, Any]]) -> dict[str, Any]:
         "groups": groups,
         "excluded_targets": excluded_targets,
     }
+
+
+PROVIDER_OBSERVATION_EXPORT_FIELDS = (
+    "export_version",
+    "generated_at",
+    "projection_version",
+    "rating_status",
+    "cohort_id",
+    "provider",
+    "instance_type",
+    "region",
+    "operating_system",
+    "comparison_status",
+    "cohort_target_ids_json",
+    "observed_suites_json",
+    "metric_contract_id",
+    "metric_key",
+    "metric_label",
+    "suite",
+    "direction",
+    "unit",
+    "profile",
+    "methodology_version",
+    "topology_scope",
+    "topology_evidence",
+    "implementation_contract",
+    "system_execution_contract",
+    "storage_contract",
+    "metric_status",
+    "reasons_json",
+    "sample_count",
+    "target_count",
+    "window_count",
+    "windows_json",
+    "run_ids_json",
+    "latest_observed_at",
+    "median",
+    "p10",
+    "p90",
+    "minimum",
+    "maximum",
+    "best",
+    "worst",
+    "relative_spread_percent",
+    "stability",
+)
+
+
+def _csv_cell(value: Any) -> Any:
+    if value is None:
+        return ""
+    if isinstance(value, bool):
+        return str(value).lower()
+    if isinstance(value, (int, float)):
+        return value
+    if isinstance(value, (list, dict)):
+        text = json.dumps(value, ensure_ascii=False, separators=(",", ":"), sort_keys=isinstance(value, dict))
+    else:
+        text = str(value)
+    normalized_start = text.lstrip(" \t\r\n")
+    return f"'{text}" if normalized_start.startswith(("=", "+", "-", "@")) else text
+
+
+def provider_observation_csv(provider_observations: dict[str, Any], generated_at: str) -> bytes:
+    """Create a deterministic, formula-neutralized audit export without provider scoring."""
+    if provider_observations.get("version") != PROVIDER_OBSERVATION_VERSION:
+        raise ValueError("Provider observation export requires the installed projection version.")
+    output = io.StringIO(newline="")
+    writer = csv.DictWriter(output, fieldnames=PROVIDER_OBSERVATION_EXPORT_FIELDS, lineterminator="\r\n")
+    writer.writeheader()
+    row_count = 0
+    groups = provider_observations.get("groups") if isinstance(provider_observations.get("groups"), list) else []
+    for group in sorted(groups, key=lambda item: str(item.get("id") or "") if isinstance(item, dict) else ""):
+        if not isinstance(group, dict):
+            continue
+        metrics = group.get("metric_cohorts") if isinstance(group.get("metric_cohorts"), list) else []
+        for metric in sorted(
+            (item for item in metrics if isinstance(item, dict)),
+            key=lambda item: str(item.get("contract_id") or ""),
+        ):
+            row_count += 1
+            if row_count > PROVIDER_OBSERVATION_EXPORT_MAX_ROWS:
+                raise ValueError("Provider observation export exceeds the bounded row limit.")
+            statistics = metric.get("statistics") if isinstance(metric.get("statistics"), dict) else {}
+            row = {
+                "export_version": PROVIDER_OBSERVATION_EXPORT_VERSION,
+                "generated_at": generated_at,
+                "projection_version": provider_observations.get("version"),
+                "rating_status": provider_observations.get("rating_status"),
+                "cohort_id": group.get("id"),
+                "provider": group.get("provider"),
+                "instance_type": group.get("instance_type"),
+                "region": group.get("region"),
+                "operating_system": group.get("operating_system"),
+                "comparison_status": group.get("comparison_status"),
+                "cohort_target_ids_json": group.get("target_ids") or [],
+                "observed_suites_json": group.get("observed_suites") or [],
+                "metric_contract_id": metric.get("contract_id"),
+                "metric_key": metric.get("key"),
+                "metric_label": metric.get("label"),
+                "suite": metric.get("suite"),
+                "direction": metric.get("direction"),
+                "unit": metric.get("unit"),
+                "profile": metric.get("profile"),
+                "methodology_version": metric.get("methodology_version"),
+                "topology_scope": metric.get("topology_scope"),
+                "topology_evidence": metric.get("topology_evidence"),
+                "implementation_contract": metric.get("implementation_contract"),
+                "system_execution_contract": metric.get("system_execution_contract"),
+                "storage_contract": metric.get("storage_contract"),
+                "metric_status": metric.get("status"),
+                "reasons_json": metric.get("reasons") or [],
+                "sample_count": metric.get("sample_count"),
+                "target_count": metric.get("target_count"),
+                "window_count": metric.get("window_count"),
+                "windows_json": metric.get("windows") or [],
+                "run_ids_json": metric.get("run_ids") or [],
+                "latest_observed_at": metric.get("latest_observed_at"),
+                "median": statistics.get("median"),
+                "p10": statistics.get("p10"),
+                "p90": statistics.get("p90"),
+                "minimum": statistics.get("minimum"),
+                "maximum": statistics.get("maximum"),
+                "best": statistics.get("best"),
+                "worst": statistics.get("worst"),
+                "relative_spread_percent": statistics.get("relative_spread_percent"),
+                "stability": statistics.get("stability"),
+            }
+            writer.writerow({name: _csv_cell(row.get(name)) for name in PROVIDER_OBSERVATION_EXPORT_FIELDS})
+            if output.tell() > PROVIDER_OBSERVATION_EXPORT_MAX_BYTES:
+                raise ValueError("Provider observation export exceeds the bounded response size.")
+    payload = output.getvalue().encode("utf-8")
+    if len(payload) > PROVIDER_OBSERVATION_EXPORT_MAX_BYTES:
+        raise ValueError("Provider observation export exceeds the bounded response size.")
+    return payload
 
 
 def evaluate_suitability(

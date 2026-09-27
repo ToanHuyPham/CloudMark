@@ -839,3 +839,75 @@ can be the actual execution boundary. A 1.5-core quota may need two threads to
 consume its allowance but does not represent two cores. Preserving both values
 avoids host-wide oversubscription without erasing the throttled nature of the
 environment from comparison evidence.
+
+## D-052: System comparisons require an exact verified execution contract
+
+**Decision:** Advance the read-time provider projection to
+`provider-observations-v6`. Compute and memory metric cohorts now include the
+exact executor version, host logical threads, process-affinity threads,
+effective threads, cgroup version, fractional CPU quota, and quota thread
+ceiling. Memory cohorts additionally include the compiler version, fixed array
+allocation and reserve, finite cgroup memory limit or verified unlimited state,
+`memory-environment-v2`, guest page size, exposed NUMA-node count, swap and
+HugeTLB capacity, and selected THP/zswap policy. Transient free-memory, current
+cgroup usage, and swap-usage values remain evidence but are not cohort keys.
+Missing or inconsistent system execution evidence remains visible as
+observational and cannot become comparable.
+
+**Reason:** Matching a provider SKU and CloudMark profile does not make two
+results equivalent when one process sees a different affinity mask, CPU quota,
+memory limit, compiler, or paging policy. Silently aggregating those runs would
+turn a resource-control difference into apparent provider variance. Exact
+stable boundary fields preserve useful repeated evidence while excluding
+transient utilization snapshots that would fragment every run into a separate
+cohort.
+
+## D-053: Provider cohort export is bounded, formula-neutralized, and unscored
+
+**Decision:** Add `provider-observation-export-v1` as a read-only deterministic
+UTF-8 CSV projection of `provider-observations-v6`. Emit one row per exact
+metric cohort with projection/export versions, generation time, provider/SKU/
+region/OS identity, all compatibility contracts, status/reasons, descriptive
+statistics, UTC windows, target IDs, and source Run IDs. Prefix text cells that
+could be interpreted as spreadsheet formulas after leading whitespace, cap the
+export at 50,000 rows and 16 MiB, and keep the fixed download filename. Export
+no provider score, rank, or winner field.
+
+**Reason:** Operators need a portable, traceable dataset for audit and external
+analysis before any provider-rating methodology exists. Reusing the exact v6
+projection prevents CSV from becoming a second aggregation path. Row/size
+bounds protect the local Controller, while formula neutralization prevents
+provider or tool labels from becoming active spreadsheet content when the file
+is opened by common desktop software.
+
+## D-054: Cost v1 is an immutable operator claim, not a comparison metric
+
+**Decision:** Add `cost-observation-v1` as a separate authenticated immutable
+record tied to a snapshot of one Controller/Agent target identity. Require an
+exact decimal string, three-letter currency, fixed billing unit and commitment
+class, explicit tax state, timestamp provenance, and either a public HTTPS URL
+without credentials/fragment or a bounded redacted operator reference. Store no
+document and provide no update/delete endpoint. Set
+`evidence_status=operator-declared-unverified`,
+`provider_rating_input=false`, `price_performance_calculated=false`, and
+`missing_terms_inferred=false` for every record.
+
+**Reason:** Timestamped source-bound price context is necessary before cost can
+be analyzed, but hourly/monthly terms, taxes, commitments, included usage,
+discounts, licenses, and currencies are not interchangeable. Persisting the raw
+claim separately makes later audit possible without prematurely normalizing it
+or allowing one operator-entered price to satisfy a provider-rating gate.
+
+## D-055: Cost export preserves raw claims and adds no derived economics
+
+**Decision:** Add `cost-observation-export-v1` as a deterministic read-only
+UTF-8 CSV projection of the immutable v1 cost stream. Retain exact decimal,
+target/source/timestamp provenance, evidence status, claim, and all non-scoring
+policy flags. Sort by observation time and ID, neutralize formula-like text,
+reject version drift or incomplete contracts, and cap output at 1,000 rows and
+4 MiB. Export no normalized price, price/performance, score, rank, or winner.
+
+**Reason:** Raw cost evidence needs a portable audit path, but exporting it must
+not silently become a second cost methodology. Exact values and explicit policy
+flags preserve traceability, while formula neutralization and hard bounds make
+the file safer to open and keep the local Controller response predictable.

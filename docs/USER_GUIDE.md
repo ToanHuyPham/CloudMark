@@ -766,6 +766,26 @@ repeat it on three different UTC dates. Do not create nested VMs on one target
 to inflate the target count. Network evidence must come from paired provider
 Agents, and CloudMark counts one paired Run once.
 
+Select **Export audit CSV** to download the exact displayed cohort dataset for
+offline audit or analysis. The file includes every compatibility contract,
+descriptive statistic, UTC window, target ID, and source Run ID. It contains no
+provider score or ranking. CloudMark neutralizes spreadsheet-formula prefixes,
+but operators should still treat exported provider/tool labels as evidence
+rather than executable spreadsheet content.
+
+Under **Timestamped Cost Context**, select the exact Controller/Agent target and
+enter a decimal price string, currency, billing unit, commitment class, tax
+state, and either a public provider HTTPS pricing URL or a redacted operator
+reference. The Controller receipt time is used by the dashboard. The API can
+instead supply a timezone-aware source observation time.
+
+The record is immutable and labelled **Operator claim**. CloudMark does not
+open the URL, store a quote/invoice, normalize hourly/monthly prices, infer
+discounts or included usage, calculate price/performance, or satisfy the final
+cost/provider-rating gate. Never enter credentials, signed links, account IDs,
+or unredacted invoice content. See
+[`COST_OBSERVATION_METHODOLOGY.md`](COST_OBSERVATION_METHODOLOGY.md).
+
 ## 16. API quick reference
 
 Health:
@@ -791,6 +811,28 @@ Repeated-window provider observations:
 ```bash
 curl http://127.0.0.1:8787/api/v1/provider-comparisons
 ```
+
+Provider observation audit CSV:
+
+```bash
+curl -o cloudmark-provider-observations.csv http://127.0.0.1:8787/api/v1/provider-comparisons.csv
+```
+
+Timestamped cost observations:
+
+```bash
+curl http://127.0.0.1:8787/api/v1/cost-observations
+```
+
+Raw cost audit CSV:
+
+```bash
+curl -o cloudmark-cost-observations.csv http://127.0.0.1:8787/api/v1/cost-observations.csv
+```
+
+The same file is available through **Export cost CSV**. It preserves raw
+decimal and provenance fields and neutralizes formula prefixes; it does not
+normalize or rank prices.
 
 Create an inventory run:
 

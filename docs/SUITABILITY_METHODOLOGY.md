@@ -94,7 +94,8 @@ A target verdict is not a provider verdict. CloudMark keeps provider status
 2. three or more independent targets of the same product;
 3. three or more measurement windows;
 4. equivalent compute, memory, storage, and network profiles; and
-5. security, reliability, control-plane, and timestamped cost evidence.
+5. security, reliability, control-plane, and independently verified normalized
+   cost evidence.
 
 Future provider-rating aggregation must preserve sample count, median, P10/P90,
 worst observed value, zones, time windows, and methodology compatibility. SLA,
@@ -103,15 +104,20 @@ own documents or controlled drills; VM performance cannot substitute for them.
 
 ### Repeated-window descriptive observations
 
-`provider-observations-v5` implements the non-rating portion of that
+`provider-observations-v6` implements the non-rating portion of that
 aggregation. It creates an exact cohort from provider, product/SKU, region, and
 operating system, then separates every metric again by profile, methodology,
 unit, paired topology, and topology evidence class. Database and cache evidence
 is separated again by engine implementation and exact server version. Storage
 evidence is separated by filesystem, bounded mount semantics, guest-visible
-block policy, and executor version. Cross-SKU,
+block policy, and executor version. Compute and memory evidence is separated by
+verified executor version, host/affinity/effective threads, and cgroup CPU quota.
+Memory also separates compiler, fixed allocation/reserve, cgroup memory limit,
+guest page size and exposed NUMA-node count, swap/HugeTLB capacity, and selected
+THP/zswap policy. Cross-SKU,
 cross-region, cross-OS, cross-methodology, cross-topology,
-cross-evidence-class, cross-database-implementation, and cross-storage-contract
+cross-evidence-class, cross-system-execution-contract,
+cross-database-implementation, and cross-storage-contract
 merging is forbidden. A
 paired network Run is one observation even when both endpoints belong to the
 same cohort.
@@ -142,6 +148,25 @@ an artificial relative percentage.
 These values describe an exact cohort and do not select a winner. Provider
 rating remains `not-rated` until the separate security, reliability,
 control-plane, cost, and product-claim gates are implemented.
+
+### Audit export
+
+`provider-observation-export-v1` emits one deterministic UTF-8 CSV row per
+exact metric cohort. Every row retains the v6 compatibility contracts,
+descriptive statistics, UTC windows, target IDs, source Run IDs, observation
+status, and reasons. Text that begins like a spreadsheet formula after leading
+whitespace is prefixed with an apostrophe. The response is bounded to 50,000
+rows and 16 MiB.
+
+This is an audit/analysis transport only. It does not recalculate evidence,
+merge cohorts, select winners, or add provider score/rank fields. A header-only
+file is valid when no provider cohort exists.
+
+`cost-observation-v1` is intentionally outside the suitability and provider
+comparison projections. It preserves timestamped operator price context, but
+does not verify billing terms, normalize units/currencies, or calculate
+price/performance. Recording one or more cost observations therefore leaves the
+provider cost criterion unsatisfied and `rating_status=not-rated`.
 
 ## Interpretation discipline
 

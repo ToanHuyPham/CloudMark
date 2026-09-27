@@ -33,7 +33,7 @@ The campaign records:
 - provider identity source, provider/product, region, and zone;
 - operating system, release, and architecture;
 - storage profile, profile version, and methodology version;
-- exact `provider-observations-v5` storage environment/tool contract; and
+- exact `provider-observations-v6` storage environment/tool contract; and
 - a target of 3–30 distinct UTC completion days.
 
 An active campaign for the same target, profile, and storage contract cannot be

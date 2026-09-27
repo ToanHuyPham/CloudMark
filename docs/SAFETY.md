@@ -321,6 +321,16 @@ systems.
   profile, methodology, or unit boundaries.
 - Descriptive distributions remain observation-only below nine samples, three
   targets, or three UTC-day windows, and never trigger a benchmark themselves.
+- Cost observations accept only an exact decimal string, fixed currency/unit/
+  commitment/tax fields, one selected target, and a bounded source reference.
+  They never fetch a URL, upload/store a document, infer billing terms, compute
+  price/performance, or become provider-rating input.
+- Public cost sources require HTTPS without embedded credentials or fragments.
+  Operator references must be redacted and must never contain credentials,
+  signed URLs, account/customer identifiers, or invoice content.
+- Cost CSV export preserves raw values only, neutralizes spreadsheet-formula
+  prefixes, rejects incomplete/version-drifted records, and is capped at 1,000
+  rows/4 MiB. It never creates a price metric or provider comparison.
 
 ## Secrets
 

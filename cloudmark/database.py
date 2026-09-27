@@ -112,11 +112,22 @@ class Database:
                 contract_json TEXT NOT NULL
             )
             """,
+            """
+            CREATE TABLE IF NOT EXISTS cost_observations (
+                id TEXT PRIMARY KEY,
+                target_id TEXT NOT NULL,
+                observed_at TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                observation_json TEXT NOT NULL
+            )
+            """,
             "CREATE INDEX IF NOT EXISTS idx_runs_status_started ON runs(status, started_at)",
             "CREATE INDEX IF NOT EXISTS idx_agents_session_id ON agents(session_id)",
             "CREATE INDEX IF NOT EXISTS idx_agent_tasks_next ON agent_tasks(agent_id, status, created_at)",
             "CREATE INDEX IF NOT EXISTS idx_agent_tasks_run ON agent_tasks(run_id, created_at)",
             "CREATE INDEX IF NOT EXISTS idx_campaigns_created ON campaigns(created_at)",
+            "CREATE INDEX IF NOT EXISTS idx_cost_observations_target_time "
+            "ON cost_observations(target_id, observed_at DESC)",
         ]
         with self._lock, self._connection() as connection:
             for statement in statements:
@@ -404,6 +415,36 @@ class Database:
                 (max(1, min(limit, 500)),),
             ).fetchall()
         return [self._campaign_row(row) for row in rows]
+
+    def create_cost_observation(self, observation: dict[str, Any]) -> None:
+        target = observation.get("target") if isinstance(observation.get("target"), dict) else {}
+        with self._lock, self._connection() as connection:
+            connection.execute(
+                """
+                INSERT INTO cost_observations(
+                    id, target_id, observed_at, created_at, observation_json
+                ) VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    str(observation["id"]),
+                    str(target["id"]),
+                    str(observation["observed_at"]),
+                    str(observation["created_at"]),
+                    json.dumps(observation, ensure_ascii=False, separators=(",", ":")),
+                ),
+            )
+
+    def list_cost_observations(self, limit: int = 200) -> list[dict[str, Any]]:
+        with self._connection() as connection:
+            rows = connection.execute(
+                """
+                SELECT observation_json FROM cost_observations
+                ORDER BY observed_at DESC, created_at DESC, rowid DESC
+                LIMIT ?
+                """,
+                (max(1, min(limit, 1000)),),
+            ).fetchall()
+        return [json.loads(row["observation_json"]) for row in rows]
 
     def create_session(
         self,

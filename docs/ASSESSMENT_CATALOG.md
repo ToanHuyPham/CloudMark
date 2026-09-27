@@ -32,7 +32,7 @@ evidence returns `Insufficient evidence`, never an artificial zero.
 | 13 | Reliability, HA & DR | Replication, controlled failover, load-balancer health, node replacement, snapshot/restore, backup integrity, and RPO/RTO drills | 3 agents + Controller; 4 recommended | Roadmap |
 | 14 | Observability & Operations | Metrics/logs/traces, clock sync, alert path, agent overhead, log-delivery loss, retention, and export evidence | 1 system; 2+ for the delivery path | Roadmap |
 | 15 | Provisioning & Control Plane | Create/delete/resize, attach/detach, snapshot, API latency/errors/rate limits, quotas, and idempotency | Controller + least-privilege adapter | Roadmap |
-| 16 | Cost & Efficiency | Timestamped pricing with currency and source, egress/storage cost, price/performance, utilization, right-sizing, and license context | benchmark data + pricing source | Roadmap |
+| 16 | Cost & Efficiency | Timestamped pricing with currency and source, egress/storage cost, price/performance, utilization, right-sizing, and license context | benchmark data + pricing source | Partial |
 | 17 | Consistency & Noisy Neighbor | Variance across instances and time windows, P10/P50/P90, worst observed, burst credits, steal time, throttling, and recovery | 2–3 same-SKU instances across time windows | Roadmap |
 
 `Available` at domain level means that at least one valid measurement path
@@ -102,6 +102,14 @@ on a Linux Controller or authenticated Agent and retains Run provenance in the
 API/dashboard. It does not cover IAM, firewall/security groups, SSH,
 encryption, vulnerability status, tenant isolation, or compliance. Domain 12
 therefore remains `Partial`.
+
+`cost-observation-v1` stores an immutable operator-supplied decimal price,
+currency, billing unit, commitment/tax context, observation timestamp and its
+source class/reference against a snapshot of the exact target identity. It does
+not fetch or verify the source, infer missing terms, normalize billing units,
+or calculate price/performance. Cost observations do not satisfy the provider
+rating gate. A bounded formula-neutralized CSV exports those raw claims without
+normalization or scoring; domain 16 is therefore `Partial`.
 
 ## Mapping evidence to intended use
 

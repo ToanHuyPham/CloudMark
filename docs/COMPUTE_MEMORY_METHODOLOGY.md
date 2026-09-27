@@ -111,6 +111,24 @@ configuration and instantaneous usage context only; `pressure_measured` remains
 false and CloudMark does not infer swap latency, reclaim pressure, THP benefit,
 or zswap performance.
 
+## Repeated-observation contract
+
+`provider-observations-v6` never aggregates compute or memory metrics solely
+because their provider SKU, profile, and methodology names match. Both suites
+must retain the exact executor version plus a verified host, process-affinity,
+effective-thread, and cgroup CPU-quota boundary. Memory cohorts additionally
+match the native compiler version, fixed array allocation and safety reserve,
+finite cgroup memory limit or verified unlimited state, guest page size,
+exposed NUMA-node count, swap and HugeTLB capacity, and selected THP and zswap
+policy. Point-in-time free memory, swap usage, and cgroup current usage are not
+cohort keys because they are transient observations rather than resource-policy
+identity.
+
+Missing, malformed, or internally inconsistent execution evidence keeps the
+metric visible as `observational` but can never satisfy the comparable sampling
+gate. This projection change does not alter a benchmark workload or start any
+additional load.
+
 This is a CloudMark-specific userspace bandwidth workload, not an official
 STREAM result. It does not yet measure loaded latency, NUMA locality penalties,
 huge-page performance, memory-error correction, or swap pressure over time.

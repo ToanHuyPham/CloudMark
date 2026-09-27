@@ -224,6 +224,48 @@ components:
         claim:
           type: string
           description: Explicitly limits the result to temporal evidence for one fixed storage target.
+    CostObservationCreateRequest:
+      type: object
+      additionalProperties: false
+      required: [amount, currency, billing_unit, commitment, tax_included, source_type, source_reference]
+      properties:
+        target_id:
+          type: string
+          default: controller
+        amount:
+          type: string
+          pattern: '^\d{1,12}(?:\.\d{1,6})?$'
+          description: Exact positive decimal string; floating-point JSON numbers are rejected.
+        currency:
+          type: string
+          pattern: '^[A-Za-z]{3}$'
+        billing_unit: { type: string, enum: [hour, month, year, one-time] }
+        commitment: { type: string, enum: [on-demand, spot, reserved, contract, unknown] }
+        tax_included: { type: [boolean, "null"] }
+        observed_at:
+          type: string
+          format: date-time
+          description: Optional source observation time. Controller receipt time is used when omitted.
+        source_type: { type: string, enum: [provider-public-url, operator-reference] }
+        source_reference:
+          type: string
+          maxLength: 512
+          description: Public HTTPS pricing URL without credentials/fragment, or a bounded operator reference.
+    CostObservation:
+      type: object
+      required: [id, version, created_at, observed_at, observed_at_source, target, price, source, evidence_status, claim, policy]
+      properties:
+        id: { type: string }
+        version: { type: string, const: cost-observation-v1 }
+        created_at: { type: string, format: date-time }
+        observed_at: { type: string, format: date-time }
+        observed_at_source: { type: string, enum: [controller-receipt-time, operator-supplied] }
+        target: { type: object, additionalProperties: true }
+        price: { type: object, additionalProperties: true }
+        source: { type: object, additionalProperties: true }
+        evidence_status: { type: string, const: operator-declared-unverified }
+        claim: { type: string }
+        policy: { type: object, additionalProperties: true }
 paths:
   /health:
     get:
@@ -254,9 +296,65 @@ paths:
   /provider-comparisons:
     get:
       summary: Same-cohort repeated-window provider observations
-      description: Returns provider-observations-v5 descriptive median, P10, P90, worst-value, and stability statistics only for exact provider, SKU, region, operating-system, profile, methodology, topology, topology-evidence, database implementation/server-version, and storage environment/tool cohorts. Provider ratings remain disabled.
+      description: Returns provider-observations-v6 descriptive median, P10, P90, worst-value, and stability statistics only for exact provider, SKU, region, operating-system, profile, methodology, topology, topology-evidence, compute/memory execution-boundary/tool, database implementation/server-version, and storage environment/tool cohorts. Provider ratings remain disabled.
       responses:
         "200": { description: Versioned provider observation report }
+  /provider-comparisons.csv:
+    get:
+      summary: Export provider observation cohorts as an audit CSV
+      description: Returns provider-observation-export-v1 with exact cohort contracts, descriptive statistics, UTC windows, and source Run IDs. Spreadsheet formula prefixes are neutralized, output is bounded, and no provider score or ranking is exported.
+      responses:
+        "200":
+          description: UTF-8 provider observation audit export
+          headers:
+            Content-Disposition:
+              schema: { type: string }
+          content:
+            text/csv:
+              schema: { type: string }
+        "413": { description: Export exceeds the bounded row or response-size policy }
+  /cost-observations:
+    get:
+      summary: List immutable timestamped cost observations
+      description: Returns operator-supplied cost context only. Cost observations are not provider-rating inputs and no price/performance value is calculated.
+      responses:
+        "200": { description: Versioned cost observation collection }
+    post:
+      summary: Record immutable timestamped cost context for one exact target
+      description: Snapshots the current provider/SKU/region/OS identity. CloudMark does not fetch or verify the source and does not infer missing billing terms.
+      security: [{ controllerToken: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CostObservationCreateRequest" }
+      responses:
+        "201":
+          description: Cost observation created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CostObservation" }
+        "400":
+          description: Invalid or unsafe cost observation contract
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "401": { description: Missing or invalid Controller token }
+        "404": { description: Target not found }
+  /cost-observations.csv:
+    get:
+      summary: Export immutable raw cost observations as an audit CSV
+      description: Returns cost-observation-export-v1 with exact decimal price, target/source/timestamp provenance, and machine-readable non-scoring policy. Formula prefixes are neutralized; values are not normalized or compared.
+      responses:
+        "200":
+          description: UTF-8 cost observation audit export
+          headers:
+            Content-Disposition:
+              schema: { type: string }
+          content:
+            text/csv:
+              schema: { type: string }
+        "413": { description: Export exceeds the bounded row or response-size policy }
   /profiles:
     get:
       summary: Benchmark and suitability profiles
