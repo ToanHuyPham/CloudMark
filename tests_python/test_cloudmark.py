@@ -990,6 +990,14 @@ class CloudMarkTests(unittest.TestCase):
         self.assertIn("memory", inventory)
         self.assertIn("disks", inventory)
         self.assertIn("container", inventory)
+        self.assertIn("clock", inventory)
+        self.assertEqual(
+            inventory["clock"]["environment"]["methodology_version"],
+            "clock-environment-v1",
+        )
+        self.assertFalse(
+            inventory["clock"]["environment"]["policy"]["cloudmark_ntp_validation_performed"]
+        )
         self.assertEqual(
             inventory["container"]["environment"]["methodology_version"],
             "container-environment-v1",
@@ -1001,6 +1009,7 @@ class CloudMarkTests(unittest.TestCase):
             inventory["capabilities"]["container_environment_linux"],
             inventory["container"]["environment"]["evidence_status"] != "unavailable",
         )
+        self.assertTrue(inventory["capabilities"]["clock_environment"])
         self.assertGreaterEqual(inventory["cpu"]["logical_cores"], 1)
 
     def test_database_round_trip(self) -> None:
@@ -5767,6 +5776,7 @@ traffic: 2048000 bytes total, 128000 bytes headers (space savings 75.00%), 20480
         self.assertEqual(domains["web"], "partial")
         self.assertEqual(domains["security"], "partial")
         self.assertEqual(domains["cost"], "partial")
+        self.assertEqual(domains["observability"], "partial")
         self.assertEqual(domains["reliability"], "roadmap")
         self.assertEqual(SECURITY_PROFILES["linux-security-posture"]["methodology_version"], "linux-security-posture-v2")
         self.assertTrue(SECURITY_PROFILES["linux-security-posture"]["read_only"])

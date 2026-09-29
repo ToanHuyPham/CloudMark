@@ -221,6 +221,12 @@ Kubernetes API. `not-detected` does not prove host execution, and an overlay
 root alone is only a suspicion. See
 [`CONTAINER_ENVIRONMENT_METHODOLOGY.md`](CONTAINER_ENVIRONMENT_METHODOLOGY.md).
 
+The **Guest Clock Context** panel shows portable wall/monotonic resolution,
+Linux clocksource when exposed, and the operating system's synchronization
+assertion. CloudMark does not contact a time peer or measure clock offset/drift;
+an asserted synchronized state is not an accuracy guarantee. See
+[`CLOCK_ENVIRONMENT_METHODOLOGY.md`](CLOCK_ENVIRONMENT_METHODOLOGY.md).
+
 Cloud detection probes AWS IMDSv2, Azure IMDS, and Google Compute metadata. If
 trusted evidence is unavailable, the result is `Unknown`; CloudMark does not
 guess from an IP address. Probes use fixed identity endpoints, bypass proxies,

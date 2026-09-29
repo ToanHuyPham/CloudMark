@@ -10,6 +10,7 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+from .clock_environment import collect_clock_environment
 from .container_environment import collect_container_environment
 from .memory_environment import collect_memory_environment
 from .tooling import (
@@ -199,6 +200,7 @@ def collect_inventory(workspace: Path | None = None) -> dict[str, Any]:
     mysql_server = find_mysql_binary("server")
     mysql_initializer = find_mysql_binary("initializer")
     mysql_sysbench = find_mysql_binary("sysbench")
+    clock_environment = collect_clock_environment()
     container_environment = collect_container_environment()
     return {
         "hostname": socket.gethostname(),
@@ -218,6 +220,7 @@ def collect_inventory(workspace: Path | None = None) -> dict[str, Any]:
             "environment": collect_memory_environment(),
         },
         "virtualization": _virtualization(),
+        "clock": {"environment": clock_environment},
         "container": {"environment": container_environment},
         "disks": _disks(workspace),
         "network": {"addresses": _network_addresses()},
@@ -268,6 +271,7 @@ def collect_inventory(workspace: Path | None = None) -> dict[str, Any]:
             "openssl": find_web_binary("openssl") is not None,
             "procfs_process_cpu": Path("/proc/stat").is_file() and Path("/proc/self/stat").is_file(),
             "security_posture_linux": uname.system == "Linux" and Path("/proc/sys/kernel").is_dir(),
+            "clock_environment": True,
             "container_environment_linux": container_environment["evidence_status"] != "unavailable",
             "sysbench": shutil.which("sysbench") is not None,
             "gcc": shutil.which("gcc") is not None,

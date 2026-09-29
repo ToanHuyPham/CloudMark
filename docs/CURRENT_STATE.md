@@ -1,6 +1,6 @@
 # CloudMark current state
 
-Last updated: 2026-09-27
+Last updated: 2026-09-29
 
 ## Repository baseline
 
@@ -308,8 +308,8 @@ baseline is still the repository head.
   converted into a score. Median/P10/P90/best/worst/spread statistics retain a
   guarded nine-sample/three-target/three-window comparable state. MySQL and
   MariaDB or different server versions cannot be silently merged. The complete
-  development head passes 227 Python tests, 4 dashboard/CI-contract tests,
-  Ruff, 76.2% branch coverage, dashboard lint and strict type checking, OpenAPI
+  development head passes 230 Python tests, 4 dashboard/CI-contract tests,
+  Ruff, 76.3% branch coverage, dashboard lint and strict type checking, OpenAPI
   validation, and the production build without starting provider load;
 - `cost-observation-v1` authenticated immutable timestamped cost context for a
   Controller or Agent target, with provider/SKU/region/OS snapshot, exact
@@ -338,6 +338,11 @@ baseline is still the repository head.
   fixed marker presence; records cgroup version and root filesystem class; and
   persists no container ID, raw cgroup path, or mountinfo. It never queries a
   runtime daemon/Kubernetes API and `not-detected` never proves host execution;
+- `clock-environment-v1` portable clock semantics plus bounded Linux
+  clocksource/time-namespace context and fixed systemd `NTP`/
+  `NTPSynchronized` assertions in local/Agent inventory. It caps every source,
+  persists no namespace/raw control data, performs no network/RTC query or
+  clock change, and explicitly does not measure offset/drift or validate NTP;
 - least-privilege GitHub Actions CI in `.github/workflows/ci.yml`, with every
   third-party action pinned to an immutable commit SHA. The Python matrix covers
   the supported 3.9 floor and 3.13 on Linux plus 3.13 on Windows. The dashboard
@@ -488,7 +493,7 @@ Controller run: `run_1c572100e8704843`.
 - GPU evidence and GPU benchmarks are not complete;
 - scheduled sampling campaigns, cross-pair orchestration, cross-zone analysis,
   independently verified and normalized cost,
-  operational domains, and final provider ratings remain Roadmap; suitability
+  complete operational domains, and final provider ratings remain Roadmap; suitability
   evaluates individual targets while provider observations remain descriptive;
 - Windows is suitable for the Controller and inventory, but benchmark executor
   parity with Linux is incomplete;

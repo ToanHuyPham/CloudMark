@@ -76,6 +76,9 @@ test("keeps production metadata and project policy explicit", async () => {
   assert.match(page, /CURRENT PROCESS CONTAINER CONTEXT/);
   assert.match(page, /container-environment-v1/);
   assert.match(page, /A not-detected result never proves host execution/);
+  assert.match(page, /GUEST CLOCK CONTEXT/);
+  assert.match(page, /clock-environment-v1/);
+  assert.match(page, /does not contact a time peer/);
   assert.match(page, /READ-ONLY STORAGE CONTEXT/);
   assert.match(page, /STORAGE ENVIRONMENT \/ TOOL/);
   assert.match(page, /REPEATED UTC-DAY STORAGE EVIDENCE/);

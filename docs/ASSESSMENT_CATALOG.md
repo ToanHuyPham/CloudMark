@@ -30,7 +30,7 @@ evidence returns `Insufficient evidence`, never an artificial zero.
 | 11 | Containers & Kubernetes | Runtime discovery, pull/unpack, cold start, overlay I/O, pod density, service latency, CNI, scheduling, and autoscaling response | 1 for containers; 2–3+ for Kubernetes | Partial |
 | 12 | Security & Isolation | Port/exposure inventory, firewall/security-group evidence, TLS posture, IAM/RBAC, hardening, tenant-isolation signals, and auditability | 1–2 systems; control-plane adapter when required | Partial |
 | 13 | Reliability, HA & DR | Replication, controlled failover, load-balancer health, node replacement, snapshot/restore, backup integrity, and RPO/RTO drills | 3 agents + Controller; 4 recommended | Roadmap |
-| 14 | Observability & Operations | Metrics/logs/traces, clock sync, alert path, agent overhead, log-delivery loss, retention, and export evidence | 1 system; 2+ for the delivery path | Roadmap |
+| 14 | Observability & Operations | Metrics/logs/traces, clock sync, alert path, agent overhead, log-delivery loss, retention, and export evidence | 1 system; 2+ for the delivery path | Partial |
 | 15 | Provisioning & Control Plane | Create/delete/resize, attach/detach, snapshot, API latency/errors/rate limits, quotas, and idempotency | Controller + least-privilege adapter | Roadmap |
 | 16 | Cost & Efficiency | Timestamped pricing with currency and source, egress/storage cost, price/performance, utilization, right-sizing, and license context | benchmark data + pricing source | Partial |
 | 17 | Consistency & Noisy Neighbor | Variance across instances and time windows, P10/P50/P90, worst observed, burst credits, steal time, throttling, and recovery | 2–3 same-SKU instances across time windows | Roadmap |
@@ -109,6 +109,12 @@ normalized runtime/orchestrator hints, cgroup version, and root filesystem
 class without container IDs, cgroup paths, or raw mount data. It does not query
 a runtime/Kubernetes API or run container workloads; domain 11 remains
 `Partial`.
+
+`clock-environment-v1` records portable clock semantics and bounded Linux
+clocksource/time-namespace plus systemd synchronization assertions. It does not
+contact a time peer, measure offset/drift, or validate upstream accuracy.
+Metrics/log/trace delivery, alerting, retention, and operational overhead remain
+missing; domain 14 is therefore `Partial`.
 
 `cost-observation-v1` stores an immutable operator-supplied decimal price,
 currency, billing unit, commitment/tax context, observation timestamp and its

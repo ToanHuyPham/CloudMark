@@ -202,7 +202,11 @@ own generators for CPU and network resources.
 - database replication lag and controlled failover;
 - snapshot/restore, node replacement, and recovery drills;
 - DNS, IPv6, firewall/security-group, and private-connectivity evidence;
-- monitoring/logging coverage and clock synchronization;
+- monitoring/logging/trace delivery, alerting, retention, and overhead;
+- portable clock semantics and bounded Linux clocksource/time-namespace plus
+  systemd synchronization assertions — observational in
+  `clock-environment-v1`; controlled peer offset/drift and delivery-path
+  observability remain planned;
 - provider API create/delete/resize/snapshot latency through least-privilege adapters.
 
 HA and failover tests require at least three nodes to separate the target, load

@@ -92,6 +92,14 @@ status, and explicit limitations. Container IDs, raw cgroup paths, mountinfo,
 runtime-daemon responses, and Kubernetes API data are never returned. A
 `not-detected` result does not prove direct host execution.
 
+Inventory includes `clock.environment` under `clock-environment-v1`. Portable
+clock semantics are always attempted; Linux adds bounded clocksource and time-
+namespace context plus fixed `NTP`/`NTPSynchronized` systemd property queries.
+The payload labels these as OS assertions and keeps
+`cloudmark_ntp_validation_performed=false`, `offset_measured=false`, and
+`drift_measured=false`. No time peer, RTC, raw procfs/sysfs content, or namespace
+identifier is returned.
+
 `/dashboard` is a presentation endpoint polled by the local UI. It retains the
 latest completed result for each system suite/target and each paired suite,
 plus all active Runs. Older history entries retain lifecycle metadata but omit
