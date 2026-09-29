@@ -18,6 +18,7 @@ timestamp, and raw result.
 | Coverage | Capability |
 |---|---|
 | Available | Cross-platform inventory and system evidence |
+| Partial | Bounded read-only Linux container context with runtime/orchestrator hints, cgroup version, overlay-root observation, and identifier/path redaction |
 | Available | AWS, Azure, and Google Cloud metadata detection |
 | Available | Declared provider manifests for regional and self-hosted clouds |
 | Partial | Versioned CPU integer scaling and sustained-load profiles through `sysbench` |

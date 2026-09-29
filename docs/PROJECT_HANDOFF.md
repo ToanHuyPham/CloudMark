@@ -166,6 +166,12 @@ It is not provider comparison input or a security rating; provider IAM,
 firewall, encryption, isolation, audit, vulnerability, and compliance evidence
 still require separate contracts.
 
+`container-environment-v1` is attached to Controller/Agent inventory on Linux.
+It reads only bounded fixed procfs sources and fixed Docker/Podman marker
+presence, preserves normalized runtime/orchestrator/cgroup/root-filesystem
+context, and discards raw paths and identifiers. It is contextual evidence, not
+a container/Kubernetes benchmark or host-boundary proof.
+
 ## Repository map
 
 - `cloudmark/`: Python Controller, Agent, inventory, provider detection, and

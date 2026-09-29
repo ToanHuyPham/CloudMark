@@ -191,6 +191,11 @@ own generators for CPU and network resources.
   `linux-security-posture-v2`; Windows and provider-control integration remain
   planned;
 
+- bounded current-process Linux container context with redacted runtime/
+  orchestrator hints, cgroup generation, and root filesystem class — available
+  in `container-environment-v1` inventory; runtime-daemon health and workload
+  behavior remain planned;
+
 - container cold start, image pull/unpack, and overlay filesystem;
 - Kubernetes scheduling, pod density, service latency, and autoscaling response;
 - load-balancer health and failover;

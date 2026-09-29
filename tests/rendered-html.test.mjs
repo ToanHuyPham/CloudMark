@@ -73,6 +73,9 @@ test("keeps production metadata and project policy explicit", async () => {
   assert.match(page, /operator-supplied cost context/);
   assert.match(page, /cost-observations\.csv/);
   assert.match(page, /Export cost CSV/);
+  assert.match(page, /CURRENT PROCESS CONTAINER CONTEXT/);
+  assert.match(page, /container-environment-v1/);
+  assert.match(page, /A not-detected result never proves host execution/);
   assert.match(page, /READ-ONLY STORAGE CONTEXT/);
   assert.match(page, /STORAGE ENVIRONMENT \/ TOOL/);
   assert.match(page, /REPEATED UTC-DAY STORAGE EVIDENCE/);

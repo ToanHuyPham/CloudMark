@@ -43,6 +43,11 @@ memory, and storage persist completed jobs as partial results during execution.
 Inventory and every memory preflight attach bounded read-only
 `memory-environment-v2` guest NUMA and snapshot-only paging context; collection failure remains explicit
 unavailable evidence and does not prevent the memory executor from running.
+Inventory additionally attaches `container-environment-v1` for the current
+CloudMark process on Linux. It retains normalized runtime/orchestrator hints,
+cgroup generation, fixed-marker presence, and root filesystem class while
+discarding container IDs, raw cgroup paths, and raw mountinfo. It never queries
+a runtime daemon or Kubernetes API and remains contextual, unscored evidence.
 A native storage operation profile persists `filesystem_operations` under the
 same Run lifecycle while retaining a methodology distinct from fio jobs.
 All storage executors attach a bounded read-only `storage_environment`

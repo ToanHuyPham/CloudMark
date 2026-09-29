@@ -210,7 +210,16 @@ Current inventory includes:
 - OS-visible volumes and disks;
 - local IP addresses;
 - virtualization evidence when exposed by the OS;
+- bounded current-process Linux container context: normalized runtime/
+  orchestrator hints, cgroup version, and root filesystem class without IDs or
+  raw paths;
 - availability of `fio`, `iperf3`, `sysbench`, Docker, and Podman.
+
+The **Current Process Container Context** panel reports `detected`, `suspected`,
+`not-detected`, or `unavailable`. This evidence does not query a daemon or
+Kubernetes API. `not-detected` does not prove host execution, and an overlay
+root alone is only a suspicion. See
+[`CONTAINER_ENVIRONMENT_METHODOLOGY.md`](CONTAINER_ENVIRONMENT_METHODOLOGY.md).
 
 Cloud detection probes AWS IMDSv2, Azure IMDS, and Google Compute metadata. If
 trusted evidence is unavailable, the result is `Unknown`; CloudMark does not

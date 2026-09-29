@@ -1,6 +1,6 @@
 # CloudMark current state
 
-Last updated: 2026-09-26
+Last updated: 2026-09-27
 
 ## Repository baseline
 
@@ -308,8 +308,8 @@ baseline is still the repository head.
   converted into a score. Median/P10/P90/best/worst/spread statistics retain a
   guarded nine-sample/three-target/three-window comparable state. MySQL and
   MariaDB or different server versions cannot be silently merged. The complete
-  development head passes 224 Python tests, 4 dashboard/CI-contract tests,
-  Ruff, 76.1% branch coverage, dashboard lint and strict type checking, OpenAPI
+  development head passes 227 Python tests, 4 dashboard/CI-contract tests,
+  Ruff, 76.2% branch coverage, dashboard lint and strict type checking, OpenAPI
   validation, and the production build without starting provider load;
 - `cost-observation-v1` authenticated immutable timestamped cost context for a
   Controller or Agent target, with provider/SKU/region/OS snapshot, exact
@@ -332,6 +332,12 @@ baseline is still the repository head.
   passes 155 Python tests, 3 rendered-dashboard tests, dashboard lint, and the
   production build. Provider security controls remain unavailable, so the
   Security domain is Partial;
+- `container-environment-v1` bounded read-only Linux inventory context for the
+  current CloudMark process. It classifies Docker, Podman, containerd, CRI-O,
+  LXC, systemd-nspawn, and Kubernetes hints from capped fixed procfs sources and
+  fixed marker presence; records cgroup version and root filesystem class; and
+  persists no container ID, raw cgroup path, or mountinfo. It never queries a
+  runtime daemon/Kubernetes API and `not-detected` never proves host execution;
 - least-privilege GitHub Actions CI in `.github/workflows/ci.yml`, with every
   third-party action pinned to an immutable commit SHA. The Python matrix covers
   the supported 3.9 floor and 3.13 on Linux plus 3.13 on Windows. The dashboard
@@ -474,6 +480,11 @@ Controller run: `run_1c572100e8704843`.
   firewall/security groups, SSH, encryption, vulnerability status, IAM/RBAC,
   tenant isolation, audit delivery, incident response, and compliance remain
   unavailable, and no provider security rating is produced;
+- Container/Kubernetes coverage is Partial: bounded current-process Linux
+  runtime/orchestrator hints, cgroup generation, marker presence, and root
+  filesystem class are available; runtime daemon health, image pull/unpack,
+  cold start, overlay I/O, CNI, scheduling, pod density, service latency, and
+  autoscaling remain unavailable;
 - GPU evidence and GPU benchmarks are not complete;
 - scheduled sampling campaigns, cross-pair orchestration, cross-zone analysis,
   independently verified and normalized cost,

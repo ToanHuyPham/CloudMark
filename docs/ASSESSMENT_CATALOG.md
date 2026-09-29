@@ -103,6 +103,13 @@ API/dashboard. It does not cover IAM, firewall/security groups, SSH,
 encryption, vulnerability status, tenant isolation, or compliance. Domain 12
 therefore remains `Partial`.
 
+`container-environment-v1` adds bounded read-only current-process context from
+fixed Linux procfs sources and fixed Docker/Podman marker presence. It retains
+normalized runtime/orchestrator hints, cgroup version, and root filesystem
+class without container IDs, cgroup paths, or raw mount data. It does not query
+a runtime/Kubernetes API or run container workloads; domain 11 remains
+`Partial`.
+
 `cost-observation-v1` stores an immutable operator-supplied decimal price,
 currency, billing unit, commitment/tax context, observation timestamp and its
 source class/reference against a snapshot of the exact target identity. It does

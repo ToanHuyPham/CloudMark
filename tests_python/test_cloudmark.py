@@ -989,6 +989,18 @@ class CloudMarkTests(unittest.TestCase):
         self.assertIn("cpu", inventory)
         self.assertIn("memory", inventory)
         self.assertIn("disks", inventory)
+        self.assertIn("container", inventory)
+        self.assertEqual(
+            inventory["container"]["environment"]["methodology_version"],
+            "container-environment-v1",
+        )
+        self.assertFalse(
+            inventory["container"]["environment"]["policy"]["raw_cgroup_path_persisted"]
+        )
+        self.assertEqual(
+            inventory["capabilities"]["container_environment_linux"],
+            inventory["container"]["environment"]["evidence_status"] != "unavailable",
+        )
         self.assertGreaterEqual(inventory["cpu"]["logical_cores"], 1)
 
     def test_database_round_trip(self) -> None:

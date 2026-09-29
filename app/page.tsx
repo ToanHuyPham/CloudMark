@@ -72,12 +72,40 @@ type MemoryEnvironment = {
   reason?: string;
 };
 
+type ContainerEnvironment = {
+  methodology_version: "container-environment-v1";
+  observed_at: string;
+  platform: string;
+  evidence_status: "complete" | "partial" | "unavailable";
+  scope: "current-cloudmark-process-guest-container-context";
+  container_status: "detected" | "suspected" | "not-detected" | "unavailable";
+  container_detected: boolean;
+  runtime_hints: string[];
+  orchestrator_hints: string[];
+  cgroup_version: "v1" | "v2" | "unknown";
+  root_filesystem?: string | null;
+  root_filesystem_overlay_like: boolean;
+  markers: { docker: boolean; podman: boolean };
+  policy: {
+    read_only: true;
+    runtime_engine_queried: false;
+    kubernetes_api_queried: false;
+    container_identifier_persisted: false;
+    raw_cgroup_path_persisted: false;
+    raw_mountinfo_persisted: false;
+    host_boundary_verified: false;
+    absence_proves_host_execution: false;
+  };
+  reason?: string;
+};
+
 type Inventory = {
   hostname: string;
   os: { system: string; release: string; distribution: string; architecture: string };
   cpu: { model: string; logical_cores: number };
   memory: { total_bytes?: number; environment?: MemoryEnvironment };
   virtualization: { type: string; technology?: string };
+  container?: { environment?: ContainerEnvironment };
   disks: Disk[];
   network: { addresses: { family: string; address: string }[] };
   capabilities: Record<string, boolean>;
@@ -1495,6 +1523,7 @@ export default function Home() {
   const selectedExecutionAgent = allAgents.find((agent) => agent.id === selectedExecutionTarget);
   const executionInventory = selectedExecutionAgent?.system.inventory || (selectedExecutionTarget === "local" ? inventory : undefined);
   const memoryEnvironment = executionInventory?.memory?.environment;
+  const containerEnvironment = inventory?.container?.environment;
   const executionTargetLabel = selectedExecutionAgent?.name || "Controller host";
   const executionTargetOnline = selectedExecutionTarget === "local" || selectedExecutionAgent?.status === "online";
   const memoryReady = executionInventory?.os?.system === "Linux" && Boolean(executionInventory.capabilities?.gcc);
@@ -2492,6 +2521,16 @@ export default function Home() {
                   ))}
                 </div>
               </article>
+            </section>
+            <section className="panel container-environment-panel">
+              <div className="panel-head"><div><span className="section-kicker">CURRENT PROCESS CONTAINER CONTEXT</span><h3>Bounded guest evidence without querying a runtime daemon.</h3></div><span className={`environment-status ${containerEnvironment?.evidence_status || "unavailable"}`}>{containerEnvironment?.container_status || "unavailable"}</span></div>
+              <div className="container-environment-grid">
+                <div><span>RUNTIME HINTS</span><strong>{containerEnvironment?.runtime_hints.join(" · ") || "None observed"}</strong></div>
+                <div><span>ORCHESTRATOR HINTS</span><strong>{containerEnvironment?.orchestrator_hints.join(" · ") || "None observed"}</strong></div>
+                <div><span>CGROUP CONTRACT</span><strong>{containerEnvironment?.cgroup_version || "Unknown"}</strong></div>
+                <div><span>ROOT FILESYSTEM</span><strong>{containerEnvironment?.root_filesystem || "Unavailable"}{containerEnvironment?.root_filesystem_overlay_like ? " · overlay-like" : ""}</strong></div>
+              </div>
+              <p className="method-note">CloudMark reads bounded fixed procfs sources and fixed marker presence only. It stores no container ID, cgroup path, or raw mount data; it does not contact Docker, Podman, containerd, or Kubernetes. A not-detected result never proves host execution.</p>
             </section>
           </div>
         )}

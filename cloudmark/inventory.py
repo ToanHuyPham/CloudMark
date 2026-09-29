@@ -10,6 +10,8 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+from .container_environment import collect_container_environment
+from .memory_environment import collect_memory_environment
 from .tooling import (
     find_mysql_binary,
     find_postgres_binary,
@@ -20,7 +22,6 @@ from .tooling import (
     postgres_tool_supports,
     web_tool_supports,
 )
-from .memory_environment import collect_memory_environment
 
 
 def _run(command: list[str], timeout: float = 3.0) -> str | None:
@@ -198,6 +199,7 @@ def collect_inventory(workspace: Path | None = None) -> dict[str, Any]:
     mysql_server = find_mysql_binary("server")
     mysql_initializer = find_mysql_binary("initializer")
     mysql_sysbench = find_mysql_binary("sysbench")
+    container_environment = collect_container_environment()
     return {
         "hostname": socket.gethostname(),
         "os": {
@@ -216,6 +218,7 @@ def collect_inventory(workspace: Path | None = None) -> dict[str, Any]:
             "environment": collect_memory_environment(),
         },
         "virtualization": _virtualization(),
+        "container": {"environment": container_environment},
         "disks": _disks(workspace),
         "network": {"addresses": _network_addresses()},
         "capabilities": {
@@ -265,6 +268,7 @@ def collect_inventory(workspace: Path | None = None) -> dict[str, Any]:
             "openssl": find_web_binary("openssl") is not None,
             "procfs_process_cpu": Path("/proc/stat").is_file() and Path("/proc/self/stat").is_file(),
             "security_posture_linux": uname.system == "Linux" and Path("/proc/sys/kernel").is_dir(),
+            "container_environment_linux": container_environment["evidence_status"] != "unavailable",
             "sysbench": shutil.which("sysbench") is not None,
             "gcc": shutil.which("gcc") is not None,
             "docker": shutil.which("docker") is not None,
