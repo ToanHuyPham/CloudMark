@@ -99,12 +99,54 @@ type ContainerEnvironment = {
   reason?: string;
 };
 
+type ClockEnvironment = {
+  methodology_version: "clock-environment-v1";
+  observed_at: string;
+  platform: string;
+  evidence_status: "complete" | "partial";
+  scope: "guest-clock-configuration-and-os-sync-assertion";
+  python_clocks: Record<"time" | "monotonic" | "perf_counter", {
+    status: "observed" | "unavailable";
+    implementation?: string;
+    resolution_seconds?: number;
+    monotonic?: boolean;
+    adjustable?: boolean;
+  }>;
+  clocksource: {
+    status: "observed" | "unavailable";
+    current?: string | null;
+    available: string[];
+  };
+  time_namespace: {
+    status: "observed" | "unavailable";
+    offsets: { clock: "monotonic" | "boottime"; seconds: number; nanoseconds: number }[];
+    nonzero_offset_observed: boolean;
+  };
+  system_time: {
+    status: "observed" | "partial" | "unavailable";
+    ntp_service_active_assertion?: boolean | null;
+    system_clock_synchronized_assertion?: boolean | null;
+  };
+  policy: {
+    read_only: true;
+    system_clock_changed: false;
+    rtc_queried: false;
+    network_request_performed: false;
+    cloudmark_ntp_validation_performed: false;
+    offset_measured: false;
+    drift_measured: false;
+    time_namespace_identifier_persisted: false;
+  };
+  reason?: string;
+};
+
 type Inventory = {
   hostname: string;
   os: { system: string; release: string; distribution: string; architecture: string };
   cpu: { model: string; logical_cores: number };
   memory: { total_bytes?: number; environment?: MemoryEnvironment };
   virtualization: { type: string; technology?: string };
+  clock?: { environment?: ClockEnvironment };
   container?: { environment?: ContainerEnvironment };
   disks: Disk[];
   network: { addresses: { family: string; address: string }[] };
@@ -1382,6 +1424,13 @@ function formatBytes(value?: number, compact = false) {
   return `${current.toFixed(compact ? 0 : 1)} ${units[index]}`;
 }
 
+function formatClockResolution(value?: number) {
+  if (value == null || !Number.isFinite(value) || value <= 0) return "Unavailable";
+  if (value < 0.000001) return `${(value * 1_000_000_000).toFixed(0)} ns`;
+  if (value < 0.001) return `${(value * 1_000_000).toFixed(3)} µs`;
+  return `${(value * 1_000).toFixed(3)} ms`;
+}
+
 function shortCpu(model?: string) {
   if (!model) return "Detecting system";
   return model.replace(/\(R\)|\(TM\)|CPU|Processor/gi, "").replace(/\s+/g, " ").trim();
@@ -1523,6 +1572,7 @@ export default function Home() {
   const selectedExecutionAgent = allAgents.find((agent) => agent.id === selectedExecutionTarget);
   const executionInventory = selectedExecutionAgent?.system.inventory || (selectedExecutionTarget === "local" ? inventory : undefined);
   const memoryEnvironment = executionInventory?.memory?.environment;
+  const clockEnvironment = inventory?.clock?.environment;
   const containerEnvironment = inventory?.container?.environment;
   const executionTargetLabel = selectedExecutionAgent?.name || "Controller host";
   const executionTargetOnline = selectedExecutionTarget === "local" || selectedExecutionAgent?.status === "online";
@@ -2531,6 +2581,16 @@ export default function Home() {
                 <div><span>ROOT FILESYSTEM</span><strong>{containerEnvironment?.root_filesystem || "Unavailable"}{containerEnvironment?.root_filesystem_overlay_like ? " · overlay-like" : ""}</strong></div>
               </div>
               <p className="method-note">CloudMark reads bounded fixed procfs sources and fixed marker presence only. It stores no container ID, cgroup path, or raw mount data; it does not contact Docker, Podman, containerd, or Kubernetes. A not-detected result never proves host execution.</p>
+            </section>
+            <section className="panel clock-environment-panel">
+              <div className="panel-head"><div><span className="section-kicker">GUEST CLOCK CONTEXT</span><h3>Clock semantics and operating-system synchronization assertion.</h3></div><span className={`environment-status ${clockEnvironment?.evidence_status || "unavailable"}`}>{clockEnvironment?.evidence_status || "unavailable"}</span></div>
+              <div className="clock-environment-grid">
+                <div><span>WALL CLOCK RESOLUTION</span><strong>{formatClockResolution(clockEnvironment?.python_clocks.time.resolution_seconds)}</strong></div>
+                <div><span>MONOTONIC RESOLUTION</span><strong>{formatClockResolution(clockEnvironment?.python_clocks.monotonic.resolution_seconds)}</strong></div>
+                <div><span>LINUX CLOCKSOURCE</span><strong>{clockEnvironment?.clocksource.current || "Unavailable"}</strong></div>
+                <div><span>OS SYNC ASSERTION</span><strong>{clockEnvironment?.system_time.system_clock_synchronized_assertion == null ? "Unavailable" : clockEnvironment.system_time.system_clock_synchronized_assertion ? "Synchronized asserted" : "Unsynchronized asserted"}</strong></div>
+              </div>
+              <p className="method-note">CloudMark records fixed local clock semantics, bounded Linux clocksource/time-namespace context, and systemd properties when available. It does not contact a time peer, query the RTC, measure offset/drift, or independently validate NTP.</p>
             </section>
           </div>
         )}

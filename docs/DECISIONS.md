@@ -928,3 +928,19 @@ the assessed process itself is containerized. Bounded guest-process evidence
 improves interpretation of CPU, memory, and filesystem results while avoiding
 daemon privileges and identifier leakage. It remains contextual because guest
 markers cannot prove the physical host boundary or container platform quality.
+
+## D-057: Clock context separates OS assertions from measured synchronization
+
+**Decision:** Add `clock-environment-v1` to local/Agent inventory. Retain
+portable `time`/`monotonic`/`perf_counter` semantics; on Linux, read capped
+clocksource and time-namespace controls and execute only fixed bounded
+`timedatectl show` queries for `NTP` and `NTPSynchronized`. Persist normalized
+values, source status, and no namespace/raw control identifiers. Never query the
+RTC or a time peer, modify clock state, or claim independent NTP validation,
+offset, drift, jitter, peer accuracy, holdover, or cross-machine alignment.
+
+**Reason:** Timestamped benchmark evidence requires known local clock semantics
+and benefits from guest synchronization context. Systemd properties expose an
+operating-system assertion, not a CloudMark measurement. Keeping that boundary
+machine-readable improves interpretation without turning configuration state
+into an unsupported timing-quality or provider claim.

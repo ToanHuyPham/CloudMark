@@ -172,6 +172,11 @@ presence, preserves normalized runtime/orchestrator/cgroup/root-filesystem
 context, and discards raw paths and identifiers. It is contextual evidence, not
 a container/Kubernetes benchmark or host-boundary proof.
 
+`clock-environment-v1` attaches portable clock semantics and bounded Linux
+clocksource/time-namespace plus systemd assertions to Controller/Agent
+inventory. It never changes time or contacts a peer; OS synchronization state
+is not promoted into measured offset/drift or independent NTP validation.
+
 ## Repository map
 
 - `cloudmark/`: Python Controller, Agent, inventory, provider detection, and

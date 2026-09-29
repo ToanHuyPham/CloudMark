@@ -316,6 +316,18 @@ systems.
 - Missing/truncated evidence remains partial. Overlay-only is suspected, and
   absence of recognized evidence never proves direct host execution.
 
+## Clock Environment
+
+- Portable clock semantics use local runtime introspection only. Linux
+  clocksource and time-namespace files are capped at 4 KiB or less.
+- `timedatectl` is invoked only for the fixed read-only `NTP` and
+  `NTPSynchronized` boolean properties, with a three-second deadline and
+  32-byte output cap per query.
+- CloudMark never sets time/timezone/NTP state, queries the RTC, contacts an NTP
+  peer, or stores raw procfs/sysfs/time-namespace identifiers.
+- OS synchronization values remain assertions. Offset, drift, jitter, peer
+  identity/accuracy, holdover, and cross-machine alignment are not measured.
+
 ## Suitability and provider claims
 
 - Suitability evaluation is read-only and never starts a benchmark.

@@ -441,7 +441,7 @@ ASSESSMENT_DOMAINS: list[dict[str, Any]] = [
     {"id": "containers", "label": "Containers & Kubernetes", "status": "partial", "summary": "Runtime CLI discovery and bounded current-process container context available; image, pod, network and scaling tests pending"},
     {"id": "security", "label": "Security & Isolation", "status": "partial", "summary": "Read-only Linux guest hardening evidence is available; IAM, firewall/exposure, encryption, vulnerability, compliance, and tenant-isolation evidence remain pending"},
     {"id": "reliability", "label": "Reliability, HA & DR", "status": "roadmap", "summary": "Failover, replication, snapshot, restore, RPO and RTO drills"},
-    {"id": "observability", "label": "Observability & Operations", "status": "roadmap", "summary": "Metrics, logs, traces, clock sync, alerting and operational overhead"},
+    {"id": "observability", "label": "Observability & Operations", "status": "partial", "summary": "Bounded clock semantics and OS synchronization assertions available; metrics, logs, traces, alerting, delivery, and operational overhead pending"},
     {"id": "control-plane", "label": "Provisioning & Control Plane", "status": "roadmap", "summary": "Create, resize, attach, snapshot and API reliability measurements"},
     {"id": "cost", "label": "Cost & Efficiency", "status": "partial", "summary": "Immutable timestamped operator price context available; verification, normalization, price/performance, and resource efficiency pending"},
     {"id": "consistency", "label": "Consistency & Noisy Neighbor", "status": "roadmap", "summary": "Cross-instance variance, throttling, steal time and time-window stability"},
