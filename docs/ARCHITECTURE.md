@@ -52,6 +52,12 @@ a runtime daemon or Kubernetes API and remains contextual, unscored evidence.
 portable clock semantics with bounded Linux clocksource/time-namespace context
 and fixed systemd time assertions. It never contacts a time peer or changes the
 clock, and explicitly denies independent NTP/offset/drift claims.
+`gpu-environment-v1` attaches bounded guest-visible accelerator context to the
+same local/Agent inventory. Linux acquisition reads only exact DRM/PCI sysfs
+fields and may run one fixed bounded NVIDIA inventory query. It retains device
+identity, driver, visible VRAM, NUMA, SR-IOV/IOMMU visibility, and runtime-tool
+presence without UUIDs, serials, raw paths, or process data. This is contextual
+inventory, not a GPU workload or physical-host attachment claim.
 A native storage operation profile persists `filesystem_operations` under the
 same Run lifecycle while retaining a methodology distinct from fio jobs.
 All storage executors attach a bounded read-only `storage_environment`

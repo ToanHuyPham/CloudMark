@@ -145,6 +145,9 @@ combined with private or VPC network results.
   pressure remain planned;
 - repeated-run and same-SKU variance analysis — planned;
 - authenticated remote dispatch, progress, cancellation, and result attribution for single-system suites — available;
+- bounded Linux DRM/PCI GPU identity, driver, visible VRAM, NUMA, SR-IOV/IOMMU
+  visibility, NVIDIA inventory enrichment, and runtime-tool discovery —
+  observational in `gpu-environment-v1`;
 - GPU inventory, H2D/D2H bandwidth, compute, VRAM, and thermal/power stability;
 - real media encode/decode through FFmpeg;
 - CUDA, ROCm, and oneAPI framework probes when available;

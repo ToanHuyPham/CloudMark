@@ -177,6 +177,12 @@ clocksource/time-namespace plus systemd assertions to Controller/Agent
 inventory. It never changes time or contacts a peer; OS synchronization state
 is not promoted into measured offset/drift or independent NTP validation.
 
+`gpu-environment-v1` adds bounded Linux guest accelerator inventory to local
+and Agent system evidence. It records DRM/PCI identity, driver, visible VRAM,
+NUMA, SR-IOV/IOMMU visibility, fixed runtime-tool presence, and optional bounded
+NVIDIA name/version enrichment. It generates no load, persists no UUID, serial,
+or raw path, and does not complete the GPU performance domain.
+
 ## Repository map
 
 - `cloudmark/`: Python Controller, Agent, inventory, provider detection, and

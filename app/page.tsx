@@ -140,6 +140,54 @@ type ClockEnvironment = {
   reason?: string;
 };
 
+type GpuEnvironment = {
+  methodology_version: "gpu-environment-v1";
+  observed_at: string;
+  platform: string;
+  evidence_status: "complete" | "partial" | "unavailable";
+  scope: "guest-visible-accelerator-inventory";
+  detection_status: "detected" | "not-detected" | "unavailable";
+  device_count: number;
+  devices: {
+    index: number;
+    status: "observed" | "partial";
+    drm_card: string;
+    pci_address?: string | null;
+    pci_class?: string | null;
+    vendor_id?: string | null;
+    vendor_name: string;
+    device_id?: string | null;
+    subsystem_vendor_id?: string | null;
+    subsystem_device_id?: string | null;
+    driver?: string | null;
+    driver_version?: string | null;
+    product_name?: string | null;
+    numa_node?: number | null;
+    vram_total_bytes?: number | null;
+    function_type: string;
+    sriov_total_vfs?: number | null;
+    sriov_enabled_vfs?: number | null;
+    iommu_group_visible: boolean;
+  }[];
+  runtime_tools: Record<"nvidia_smi" | "rocm_smi" | "clinfo" | "vulkaninfo" | "vainfo" | "ffmpeg", boolean>;
+  policy: {
+    read_only: true;
+    load_generated: false;
+    driver_configuration_changed: false;
+    framework_support_verified: false;
+    compute_performance_measured: false;
+    vram_bandwidth_measured: false;
+    media_performance_measured: false;
+    thermal_stability_measured: false;
+    physical_host_gpu_claim: false;
+    gpu_uuid_persisted: false;
+    serial_number_persisted: false;
+    iommu_group_identifier_persisted: false;
+  };
+  truncated?: boolean;
+  reason?: string;
+};
+
 type Inventory = {
   hostname: string;
   os: { system: string; release: string; distribution: string; architecture: string };
@@ -148,6 +196,7 @@ type Inventory = {
   virtualization: { type: string; technology?: string };
   clock?: { environment?: ClockEnvironment };
   container?: { environment?: ContainerEnvironment };
+  gpu?: { environment?: GpuEnvironment };
   disks: Disk[];
   network: { addresses: { family: string; address: string }[] };
   capabilities: Record<string, boolean>;
@@ -1572,6 +1621,7 @@ export default function Home() {
   const selectedExecutionAgent = allAgents.find((agent) => agent.id === selectedExecutionTarget);
   const executionInventory = selectedExecutionAgent?.system.inventory || (selectedExecutionTarget === "local" ? inventory : undefined);
   const memoryEnvironment = executionInventory?.memory?.environment;
+  const gpuEnvironment = executionInventory?.gpu?.environment;
   const clockEnvironment = inventory?.clock?.environment;
   const containerEnvironment = inventory?.container?.environment;
   const executionTargetLabel = selectedExecutionAgent?.name || "Controller host";
@@ -2433,13 +2483,14 @@ export default function Home() {
     ["catalog", "Assessment Catalog", "02"],
     ["compute", "Compute & Memory", "03"],
     ["storage", "Storage Assessment", "04"],
-    ["network", "Distributed Testing", "05"],
-    ["database", "Database Assessment", "06"],
-    ["web", "Web & API Assessment", "07"],
-    ["security", "Security Posture", "08"],
-    ["scenarios", "Workload Suitability", "09"],
-    ["providers", "Provider Comparison", "10"],
-    ["history", "History", "11"],
+    ["gpu", "GPU & Accelerators", "05"],
+    ["network", "Distributed Testing", "06"],
+    ["database", "Database Assessment", "07"],
+    ["web", "Web & API Assessment", "08"],
+    ["security", "Security Posture", "09"],
+    ["scenarios", "Workload Suitability", "10"],
+    ["providers", "Provider Comparison", "11"],
+    ["history", "History", "12"],
   ];
 
   const executionTargetPanel = (
@@ -2461,6 +2512,7 @@ export default function Home() {
         <span className={executionInventory?.capabilities?.sysbench ? "ready" : "missing"}>CPU</span>
         <span className={memoryReady ? "ready" : "missing"}>MEMORY</span>
         <span className={(executionInventory?.capabilities?.fio || executionInventory?.capabilities?.filesystem_metadata_benchmark) ? "ready" : "missing"}>STORAGE</span>
+        <span className={gpuEnvironment?.evidence_status !== "unavailable" ? "ready" : "missing"}>GPU CTX</span>
         <span className={securityReady ? "ready" : "missing"}>SECURITY</span>
       </div>
     </section>
@@ -2660,6 +2712,39 @@ export default function Home() {
               </article>
             </section>
             <section className="validity-panel panel"><span>COMPARISON CONTRACT</span><p>Compare only identical CloudMark profile, methodology, tool/compiler version, architecture, thread count, and controlled background-load conditions. CPU events and native memory bandwidth are evidence dimensions—not a universal machine score.</p></section>
+          </div>
+        )}
+
+        {activeView === "gpu" && (
+          <div className="view gpu-view">
+            <section className="section-intro">
+              <div><span className="section-kicker">READ-ONLY ACCELERATOR CONTEXT</span><h2>Identify guest-visible GPUs before designing a valid accelerator workload.</h2><p>CloudMark records bounded Linux DRM/PCI identity, driver, VRAM capacity, NUMA placement, SR-IOV visibility, and installed runtime tools. This inventory creates no GPU load and does not claim framework readiness or performance.</p></div>
+              <div className="load-policy"><span>GPU LOAD POLICY</span><strong>Inventory only</strong><small>Compute, transfer, media, thermal, and power benchmarks remain unavailable.</small></div>
+            </section>
+            {executionTargetPanel}
+            <section className="provider-summary-grid">
+              <article className="panel"><span>EVIDENCE STATUS</span><strong>{gpuEnvironment?.evidence_status || "Unavailable"}</strong><small><code>{gpuEnvironment?.methodology_version || "gpu-environment-v1"}</code></small></article>
+              <article className="panel"><span>DETECTION</span><strong>{gpuEnvironment?.detection_status?.replaceAll("-", " ") || "Unavailable"}</strong><small>{gpuEnvironment?.device_count || 0} guest-visible accelerator devices</small></article>
+              <article className="panel"><span>COLLECTION POLICY</span><strong>Read only</strong><small>No driver changes, compute kernels, transfers, or media jobs</small></article>
+              <article className="panel caution"><span>GPU SUITABILITY</span><strong>Not rated</strong><small>Inventory cannot establish AI/ML, VDI, or media performance</small></article>
+            </section>
+            {gpuEnvironment?.devices.length ? <section className="gpu-device-grid" aria-label="Guest-visible accelerator devices">
+              {gpuEnvironment.devices.map((device) => <article className="panel gpu-device-card" key={`${device.drm_card}-${device.pci_address || device.index}`}>
+                <header><div><span>{device.vendor_name} · {device.status.toUpperCase()}</span><h3>{device.product_name || `${device.vendor_id || "unknown vendor"}:${device.device_id || "unknown device"}`}</h3><small>{device.drm_card} · {device.pci_address || "PCI address unavailable"}</small></div><i>{device.function_type.replaceAll("-", " ")}</i></header>
+                <div className="gpu-device-facts">
+                  <div><span>DRIVER</span><strong>{device.driver || "Unavailable"}</strong><small>{device.driver_version || "version unavailable"}</small></div>
+                  <div><span>VISIBLE VRAM</span><strong>{device.vram_total_bytes == null ? "Unavailable" : formatBytes(device.vram_total_bytes, true)}</strong><small>Capacity only · bandwidth unmeasured</small></div>
+                  <div><span>NUMA / IOMMU</span><strong>{device.numa_node == null ? "NUMA unavailable" : `NUMA ${device.numa_node}`}</strong><small>{device.iommu_group_visible ? "IOMMU group visible" : "IOMMU group unavailable"} · identifier redacted</small></div>
+                  <div><span>SR-IOV</span><strong>{device.sriov_total_vfs == null ? "Unavailable" : `${device.sriov_enabled_vfs || 0}/${device.sriov_total_vfs} VFs`}</strong><small>Guest-visible function context only</small></div>
+                </div>
+              </article>)}
+            </section> : <section className="panel provider-empty-state"><strong>{gpuEnvironment?.detection_status === "not-detected" ? "No DRM accelerator was detected in this guest." : "GPU hardware evidence is unavailable for this target."}</strong><p>{gpuEnvironment?.reason || "Linux Agents expose bounded DRM sysfs evidence when the guest has access. A missing device is not converted into a performance score."}</p></section>}
+            <section className="panel gpu-runtime-panel">
+              <div className="panel-head"><div><span className="section-kicker">RUNTIME TOOL DISCOVERY</span><h3>Installed interfaces, not verified framework support</h3></div><span className="run-id">NO LOAD</span></div>
+              <div className="runtime-tool-grid">{Object.entries(gpuEnvironment?.runtime_tools || {}).map(([name, available]) => <div key={name} className={available ? "available" : "missing"}><span>{name.replaceAll("_", " ")}</span><strong>{available ? "Installed" : "Unavailable"}</strong></div>)}</div>
+              <p className="method-note">Management or diagnostic CLI presence does not prove CUDA, ROCm, OpenCL, Vulkan, VA-API, framework compatibility, codec support, tenant isolation, physical-host attachment, or usable performance. UUIDs, serials, and IOMMU group identifiers are not persisted.</p>
+            </section>
+            <section className="validity-panel panel"><span>ACCELERATOR COVERAGE BOUNDARY</span><p>The GPU domain is Partial. H2D/D2H bandwidth, VRAM bandwidth, floating-point/tensor compute, framework probes, inference/training, codec throughput, thermal/power stability, and multi-tenant contention still require separately reviewed bounded executors.</p></section>
           </div>
         )}
 

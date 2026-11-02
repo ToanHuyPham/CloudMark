@@ -60,6 +60,18 @@ systems.
 - Cancellation terminates the current child process. A failed or cancelled run
   retains completed jobs only as partial evidence.
 
+## GPU and accelerators
+
+- `gpu-environment-v1` is read-only inventory and starts no GPU workload.
+- Linux collection inspects at most 16 exact DRM cards with 4 KiB per sysfs
+  source. It never writes driver controls, power limits, clocks, reset, SR-IOV,
+  or IOMMU configuration.
+- Optional NVIDIA enrichment uses one fixed three-second inventory query with a
+  64 KiB output cap. Arbitrary CLI arguments are not accepted.
+- UUIDs, serials, IOMMU group identifiers, process lists, and raw sysfs paths
+  are not persisted.
+- Runtime-tool presence never becomes framework readiness or performance.
+
 ## Runner controls
 
 - Every run has a bounded timeout between 30 seconds and 12 hours.

@@ -944,3 +944,24 @@ and benefits from guest synchronization context. Systemd properties expose an
 operating-system assertion, not a CloudMark measurement. Keeping that boundary
 machine-readable improves interpretation without turning configuration state
 into an unsupported timing-quality or provider claim.
+
+## D-058: GPU inventory is bounded context, not accelerator performance
+
+**Decision:** Add `gpu-environment-v1` to local and Agent inventory. On Linux,
+inspect at most 16 exact DRM `cardN` display-class devices and cap each sysfs
+source at 4 KiB. Retain normalized PCI identity, guest driver, PCI/NUMA context,
+visible VRAM capacity, SR-IOV function/count evidence, and only a boolean for
+IOMMU-group visibility. Optionally run one fixed three-second, 64 KiB-capped
+NVIDIA inventory query for product name, driver version, VRAM, and PCI matching.
+Record fixed runtime-tool presence without executing framework or media probes.
+Persist no UUID, serial, raw path, IOMMU group identifier, process list, or
+arbitrary command output. Keep the GPU domain Partial and all performance-
+dependent workloads blocked.
+
+**Reason:** Provider instances may expose full GPUs, virtual functions,
+integrated graphics, or no accelerator at all. Bounded guest inventory is
+necessary to plan safe workloads and interpret a SKU, but device presence and
+management-tool installation do not establish CUDA/ROCm/framework support,
+transfer bandwidth, compute rate, codec throughput, thermal stability, tenant
+isolation, or physical-host attachment. Separating context from performance
+prevents hardware names from becoming synthetic scores.

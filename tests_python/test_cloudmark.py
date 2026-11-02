@@ -5774,6 +5774,7 @@ traffic: 2048000 bytes total, 128000 bytes headers (space savings 75.00%), 20480
         self.assertEqual(domains["network"], "partial")
         self.assertEqual(domains["database"], "partial")
         self.assertEqual(domains["web"], "partial")
+        self.assertEqual(domains["gpu"], "partial")
         self.assertEqual(domains["security"], "partial")
         self.assertEqual(domains["cost"], "partial")
         self.assertEqual(domains["observability"], "partial")

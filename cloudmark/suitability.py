@@ -162,7 +162,7 @@ SCENARIO_REQUIREMENTS: dict[str, dict[str, Any]] = {
     },
     "ai-ml": {
         "rules": [],
-        "blockers": ["GPU/accelerator inventory, transfer, compute, framework, training, and inference evidence is unavailable."],
+        "blockers": ["GPU transfer, compute, verified framework, training, and inference evidence is unavailable; read-only inventory alone cannot satisfy this workload."],
         "next_actions": ["Complete the GPU and accelerator assessment domain."],
     },
     "containers": {

@@ -57,6 +57,10 @@ test("keeps production metadata and project policy explicit", async () => {
   assert.match(page, /Fractional quota capacity is never labelled as physical cores/);
   assert.match(page, /memory-environment-v2/);
   assert.match(page, /Relative Linux distances are not latency measurements/);
+  assert.match(page, /READ-ONLY ACCELERATOR CONTEXT/);
+  assert.match(page, /gpu-environment-v1/);
+  assert.match(page, /ACCELERATOR COVERAGE BOUNDARY/);
+  assert.match(page, /UUIDs, serials, and IOMMU group identifiers are not persisted/);
   assert.match(page, /swap usage is a point-in-time snapshot/);
   assert.match(page, /EXCLUSIVE LOAD POLICY/);
   assert.match(page, /EXECUTION TARGET/);
@@ -149,6 +153,7 @@ test("keeps public product copy English-only", async () => {
     "../docs/HTTP2_LOAD_METHODOLOGY.md",
     "../docs/SUITABILITY_METHODOLOGY.md",
     "../docs/SECURITY_POSTURE_METHODOLOGY.md",
+    "../docs/GPU_ENVIRONMENT_METHODOLOGY.md",
     "../docs/STORAGE_CAMPAIGN_METHODOLOGY.md",
     "../docs/REMOTE_EXECUTION.md",
     "../docs/ROADMAP.md",

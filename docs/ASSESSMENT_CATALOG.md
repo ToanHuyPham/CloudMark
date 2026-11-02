@@ -24,7 +24,7 @@ evidence returns `Insufficient evidence`, never an artificial zero.
 | 5 | Memory & NUMA | Read/write/copy bandwidth, latency, remote NUMA penalty, page size, swap pressure, and sustained stability | 1 system | Partial |
 | 6 | Storage, Filesystem & Object | Sequential/random/mixed I/O, queue-depth sweep, sync/fsync, P50–P99.9, burst/throttle, metadata, integrity, object PUT/GET/list, and snapshot/restore | 1 system for block; 2–3 for object/backup | Available |
 | 7 | Network & Connectivity | TCP/UDP, 1–16 streams, idle/loaded RTT, jitter/loss/reorder, retransmits, MTU, DNS, IPv4/IPv6, private/public, and cross-zone/region | 2 agents + Controller | Partial |
-| 8 | GPU & Accelerators | Model/driver, VRAM, H2D/D2H, compute, tensor/floating-point profiles, framework probes, thermal/power stability, and media encode/decode | 1 GPU system; 2 for serving | Roadmap |
+| 8 | GPU & Accelerators | Model/driver, VRAM, H2D/D2H, compute, tensor/floating-point profiles, framework probes, thermal/power stability, and media encode/decode | 1 GPU system; 2 for serving | Partial |
 | 9 | Web, API & TLS | Static/JSON, TLS handshake, keep-alive, HTTP/2/3, concurrency ramp, P50–P99, error rate, saturation, soak, and reverse proxy | target + generator + Controller | Partial |
 | 10 | Database & Cache | PostgreSQL/MySQL OLTP, read-only/read-write, connection scaling, checkpoint/fsync, Redis GET/SET/pipeline/persistence, and replication lag | server + client; 3+ for replication | Partial |
 | 11 | Containers & Kubernetes | Runtime discovery, pull/unpack, cold start, overlay I/O, pod density, service latency, CNI, scheduling, and autoscaling response | 1 for containers; 2–3+ for Kubernetes | Partial |
@@ -115,6 +115,14 @@ clocksource/time-namespace plus systemd synchronization assertions. It does not
 contact a time peer, measure offset/drift, or validate upstream accuracy.
 Metrics/log/trace delivery, alerting, retention, and operational overhead remain
 missing; domain 14 is therefore `Partial`.
+
+`gpu-environment-v1` records bounded Linux guest-visible DRM/PCI accelerator
+identity, driver, visible VRAM capacity, PCI/NUMA placement, SR-IOV/IOMMU
+visibility, and installed runtime-tool interfaces. Optional NVIDIA enrichment
+uses one fixed bounded inventory query and persists no UUID, serial, raw path,
+or process data. It starts no accelerator workload and does not verify
+frameworks, transfer, compute, codecs, thermal/power stability, or contention;
+domain 8 is therefore `Partial`.
 
 `cost-observation-v1` stores an immutable operator-supplied decimal price,
 currency, billing unit, commitment/tax context, observation timestamp and its

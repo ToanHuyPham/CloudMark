@@ -24,6 +24,7 @@ timestamp, and raw result.
 | Available | Declared provider manifests for regional and self-hosted clouds |
 | Partial | Versioned CPU integer scaling and sustained-load profiles through `sysbench` |
 | Partial | Cache-resistant native memory read, write, copy, and triad bandwidth profiles |
+| Partial | Bounded read-only Linux GPU identity, driver, VRAM, PCI/NUMA, SR-IOV, and runtime-tool evidence; performance remains unmeasured |
 | Available | Filesystem-safe `fio` storage profiles with latency percentiles |
 | Available | Native small-file metadata, SHA-256 integrity, per-file fsync, tail latency, and cleanup evidence |
 | Available | Bounded read-only Linux mount, block topology, queue policy, and I/O geometry evidence for every storage Run |
@@ -47,7 +48,7 @@ timestamp, and raw result.
 | Available | Immutable, manually dispatched repeated network campaigns with one comparison-eligible window per UTC day |
 | Available | Immutable, baseline-anchored storage campaigns with explicit per-window confirmation and one exact-contract Run per UTC day |
 | Roadmap | Unattended sampling schedules, physical-fabric verification, additional vendor queue normalization, public-path classification, and mTLS enrollment |
-| Roadmap | Remaining CPU, memory/NUMA, GPU, application, platform, operations, and provider executors |
+| Roadmap | Remaining CPU, memory/NUMA, GPU performance, application, platform, operations, and provider executors |
 | Partial | Read-only Linux Security Posture v2 runs locally or on an authenticated Agent with redacted kernel, LSM, Secure Boot, cgroup, network-hardening, and mount evidence; provider security evidence remains pending |
 | Roadmap | Cross-target campaign orchestration, cross-zone analysis, verified/normalized cost, operations, and final provider ratings |
 

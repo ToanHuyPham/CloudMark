@@ -12,6 +12,7 @@ from typing import Any
 
 from .clock_environment import collect_clock_environment
 from .container_environment import collect_container_environment
+from .gpu_environment import collect_gpu_environment
 from .memory_environment import collect_memory_environment
 from .tooling import (
     find_mysql_binary,
@@ -202,6 +203,7 @@ def collect_inventory(workspace: Path | None = None) -> dict[str, Any]:
     mysql_sysbench = find_mysql_binary("sysbench")
     clock_environment = collect_clock_environment()
     container_environment = collect_container_environment()
+    gpu_environment = collect_gpu_environment()
     return {
         "hostname": socket.gethostname(),
         "os": {
@@ -222,6 +224,7 @@ def collect_inventory(workspace: Path | None = None) -> dict[str, Any]:
         "virtualization": _virtualization(),
         "clock": {"environment": clock_environment},
         "container": {"environment": container_environment},
+        "gpu": {"environment": gpu_environment},
         "disks": _disks(workspace),
         "network": {"addresses": _network_addresses()},
         "capabilities": {
@@ -273,6 +276,13 @@ def collect_inventory(workspace: Path | None = None) -> dict[str, Any]:
             "security_posture_linux": uname.system == "Linux" and Path("/proc/sys/kernel").is_dir(),
             "clock_environment": True,
             "container_environment_linux": container_environment["evidence_status"] != "unavailable",
+            "gpu_environment_linux": gpu_environment["evidence_status"] != "unavailable",
+            "nvidia_smi": gpu_environment["runtime_tools"]["nvidia_smi"],
+            "rocm_smi": gpu_environment["runtime_tools"]["rocm_smi"],
+            "clinfo": gpu_environment["runtime_tools"]["clinfo"],
+            "vulkaninfo": gpu_environment["runtime_tools"]["vulkaninfo"],
+            "vainfo": gpu_environment["runtime_tools"]["vainfo"],
+            "ffmpeg": gpu_environment["runtime_tools"]["ffmpeg"],
             "sysbench": shutil.which("sysbench") is not None,
             "gcc": shutil.which("gcc") is not None,
             "docker": shutil.which("docker") is not None,

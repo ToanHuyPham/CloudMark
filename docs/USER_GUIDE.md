@@ -156,6 +156,9 @@ In the dashboard:
 - **Compute & Memory** runs CPU integer scaling/sustained profiles and native
   cache-resistant memory-bandwidth profiles with an explicit local/Agent target,
   live progress, and cancellation.
+- **GPU & Accelerators** shows bounded read-only guest-visible device, driver,
+  VRAM, PCI/NUMA, SR-IOV/IOMMU visibility, and runtime-tool evidence. It starts
+  no accelerator workload and does not unlock AI/ML, VDI, or media suitability.
 - **Storage Assessment** provides Quick, Standard, Database, Throughput,
   Sustained, and Filesystem Metadata & Integrity profiles with live progress
   and cancellation.
@@ -376,6 +379,28 @@ validity contract and current limitations.
 The native memory executor currently targets Linux with GCC/OpenMP. Windows is
 supported for the Controller and inventory, but version `0.5.0` does not claim
 complete Windows CPU/memory qualification.
+
+### Inspect GPU and accelerator context
+
+Open **GPU & Accelerators**, then select the Controller or an online Agent. This
+view is inventory-only and requires no confirmation because it starts no load.
+On Linux it can display bounded guest-visible DRM/PCI identity, driver, VRAM
+capacity when exposed, PCI/NUMA placement, SR-IOV function/count context, and
+whether an IOMMU group is visible. NVIDIA product name, driver version, and
+VRAM may be enriched through one fixed bounded `nvidia-smi` inventory query.
+
+The runtime section reports only whether `nvidia-smi`, `rocm-smi`, `clinfo`,
+`vulkaninfo`, `vainfo`, and `ffmpeg` are installed. Installation does not prove
+that a GPU workload, framework, API, or codec works. A complete `not-detected`
+scan means the Linux guest exposed no matching DRM device; it is not a zero GPU
+score and cannot prove that the physical host lacks an accelerator.
+
+CloudMark does not retain UUIDs, serials, IOMMU group identifiers, raw sysfs
+paths, or GPU process lists. PCI/NUMA/SR-IOV evidence is guest context, not
+proof of physical-host placement or tenant isolation. Windows/macOS inventory,
+H2D/D2H, VRAM bandwidth, compute, frameworks, media engines, temperature,
+power, and sustained throttling remain unavailable. See
+[`GPU_ENVIRONMENT_METHODOLOGY.md`](GPU_ENVIRONMENT_METHODOLOGY.md).
 
 ## 9. Run the storage assessment
 
