@@ -7,7 +7,11 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from cloudmark.gpu_environment import collect_gpu_environment, parse_nvidia_smi_inventory
+from cloudmark.gpu_environment import (
+    collect_gpu_environment,
+    parse_nvidia_smi_inventory,
+    parse_windows_cim_inventory,
+)
 from cloudmark.inventory import collect_inventory
 from cloudmark.profiles import ASSESSMENT_DOMAINS
 
@@ -66,7 +70,7 @@ class GpuEnvironmentTests(unittest.TestCase):
                 side_effect=self._without_tools,
             ):
                 evidence = collect_gpu_environment(drm_root=drm_root)
-        self.assertEqual(evidence["methodology_version"], "gpu-environment-v1")
+        self.assertEqual(evidence["methodology_version"], "gpu-environment-v2")
         self.assertEqual(evidence["evidence_status"], "complete")
         self.assertEqual(evidence["detection_status"], "detected")
         self.assertEqual(evidence["device_count"], 1)
@@ -173,11 +177,12 @@ class GpuEnvironmentTests(unittest.TestCase):
         self.assertEqual(evidence["devices"][0]["status"], "partial")
 
     def test_non_linux_is_explicitly_unavailable_and_inventory_attaches_contract(self) -> None:
-        with patch("cloudmark.gpu_environment.platform.system", return_value="Windows"), patch(
+        with patch("cloudmark.gpu_environment.platform.system", return_value="Darwin"), patch(
             "cloudmark.gpu_environment.shutil.which",
             side_effect=self._without_tools,
         ), patch("cloudmark.gpu_environment.subprocess.run") as run:
             unavailable = collect_gpu_environment()
+        self.assertEqual(unavailable["platform"], "Darwin")
         self.assertEqual(unavailable["evidence_status"], "unavailable")
         self.assertEqual(unavailable["detection_status"], "unavailable")
         run.assert_not_called()
@@ -192,8 +197,104 @@ class GpuEnvironmentTests(unittest.TestCase):
             inventory = collect_inventory(Path.cwd())
         self.assertEqual(inventory["gpu"]["environment"], fixture)
         self.assertTrue(inventory["capabilities"]["gpu_environment_linux"])
+        self.assertTrue(inventory["capabilities"]["gpu_environment"])
         domains = {item["id"]: item["status"] for item in ASSESSMENT_DOMAINS}
         self.assertEqual(domains["gpu"], "partial")
+
+    def test_windows_cim_query_normalizes_pci_identity_and_redacts_pnp_instance(self) -> None:
+        pnp_identifier = "PCI\\VEN_10DE&DEV_27B8&SUBSYS_16DA10DE&REV_A1\\SECRET-INSTANCE"
+        payload = json.dumps(
+            [
+                {
+                    "Name": "NVIDIA L4",
+                    "DriverVersion": "32.0.15.5054",
+                    "AdapterRAM": 4_293_918_720,
+                    "PNPDeviceID": pnp_identifier,
+                }
+            ]
+        )
+        completed = subprocess.CompletedProcess([], 0, payload, "")
+        with patch("cloudmark.gpu_environment.platform.system", return_value="Windows"), patch(
+            "cloudmark.gpu_environment.shutil.which",
+            side_effect=self._without_tools,
+        ), patch("cloudmark.gpu_environment.subprocess.run", return_value=completed) as run:
+            evidence = collect_gpu_environment(powershell="powershell.exe")
+        self.assertEqual(evidence["evidence_status"], "complete")
+        self.assertEqual(evidence["detection_status"], "detected")
+        device = evidence["devices"][0]
+        self.assertEqual(device["vendor_name"], "NVIDIA")
+        self.assertEqual(device["vendor_id"], "0x10de")
+        self.assertEqual(device["device_id"], "0x27b8")
+        self.assertEqual(device["subsystem_vendor_id"], "0x10de")
+        self.assertEqual(device["subsystem_device_id"], "0x16da")
+        self.assertEqual(device["product_name"], "NVIDIA L4")
+        self.assertEqual(device["driver_version"], "32.0.15.5054")
+        self.assertEqual(device["memory_capacity_source"], "windows-cim-adapterram-uint32")
+        self.assertTrue(device["memory_capacity_may_be_truncated"])
+        self.assertTrue(evidence["policy"]["windows_cim_queried"])
+        self.assertFalse(evidence["policy"]["windows_pnp_instance_identifier_persisted"])
+        self.assertNotIn("SECRET-INSTANCE", json.dumps(evidence))
+        command = run.call_args.args[0]
+        self.assertEqual(command[:5], ["powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-Command"])
+        self.assertIn("Get-CimInstance Win32_VideoController", command[-1])
+
+    def test_windows_parser_bounds_shape_capacity_and_labels(self) -> None:
+        self.assertEqual(parse_windows_cim_inventory("{}"), None)
+        self.assertEqual(parse_windows_cim_inventory("not-json"), None)
+        self.assertEqual(parse_windows_cim_inventory("x" * 70_000), None)
+        self.assertEqual(parse_windows_cim_inventory(json.dumps([{}] * 17)), None)
+        malformed_capacity = parse_windows_cim_inventory(
+            json.dumps(
+                [
+                    {
+                        "Name": "Virtual Adapter",
+                        "DriverVersion": "1.0",
+                        "AdapterRAM": 2**40,
+                        "PNPDeviceID": "ROOT\\BASICDISPLAY",
+                    }
+                ]
+            )
+        )
+        self.assertIsNotNone(malformed_capacity)
+        assert malformed_capacity is not None
+        self.assertIsNone(malformed_capacity[0]["vram_total_bytes"])
+        self.assertEqual(malformed_capacity[0]["vendor_name"], "Unknown")
+        self.assertFalse(malformed_capacity[0]["memory_capacity_may_be_truncated"])
+
+    def test_windows_query_failure_and_empty_inventory_are_distinct(self) -> None:
+        with patch("cloudmark.gpu_environment.platform.system", return_value="Windows"), patch(
+            "cloudmark.gpu_environment.shutil.which",
+            side_effect=self._without_tools,
+        ), patch(
+            "cloudmark.gpu_environment.subprocess.run",
+            return_value=subprocess.CompletedProcess([], 1, "", "failure"),
+        ):
+            failed = collect_gpu_environment(powershell="powershell.exe")
+        self.assertEqual(failed["evidence_status"], "unavailable")
+        self.assertEqual(failed["detection_status"], "unavailable")
+
+        with patch("cloudmark.gpu_environment.platform.system", return_value="Windows"), patch(
+            "cloudmark.gpu_environment.shutil.which",
+            side_effect=self._without_tools,
+        ), patch(
+            "cloudmark.gpu_environment.subprocess.run",
+            return_value=subprocess.CompletedProcess([], 0, "[]", "Access denied"),
+        ):
+            misleading_empty = collect_gpu_environment(powershell="powershell.exe")
+        self.assertEqual(misleading_empty["evidence_status"], "unavailable")
+        self.assertEqual(misleading_empty["detection_status"], "unavailable")
+
+        with patch("cloudmark.gpu_environment.platform.system", return_value="Windows"), patch(
+            "cloudmark.gpu_environment.shutil.which",
+            side_effect=self._without_tools,
+        ), patch(
+            "cloudmark.gpu_environment.subprocess.run",
+            return_value=subprocess.CompletedProcess([], 0, "[]", ""),
+        ):
+            empty = collect_gpu_environment(powershell="powershell.exe")
+        self.assertEqual(empty["evidence_status"], "complete")
+        self.assertEqual(empty["detection_status"], "not-detected")
+        self.assertEqual(empty["device_count"], 0)
 
 
 if __name__ == "__main__":

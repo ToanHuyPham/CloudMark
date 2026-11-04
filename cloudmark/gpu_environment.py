@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import json
 import platform
 import re
 import shutil
@@ -10,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 
-GPU_ENVIRONMENT_VERSION = "gpu-environment-v1"
+GPU_ENVIRONMENT_VERSION = "gpu-environment-v2"
 GPU_MAX_DEVICES = 16
 GPU_SYSFS_MAX_BYTES = 4_096
 GPU_TOOL_OUTPUT_MAX_BYTES = 65_536
@@ -19,6 +20,9 @@ GPU_PCI_ADDRESS = re.compile(r"^(?:[0-9A-Fa-f]{4,8}:)?[0-9A-Fa-f]{2}:[0-9A-Fa-f]
 GPU_CARD_NAME = re.compile(r"^card([0-9]{1,3})$")
 GPU_HEX_ID = re.compile(r"^0x([0-9A-Fa-f]{4})$")
 GPU_DRIVER_NAME = re.compile(r"^[A-Za-z0-9_.+-]{1,64}$")
+GPU_WINDOWS_VENDOR = re.compile(r"(?:^|\\)VEN_([0-9A-Fa-f]{4})(?:&|$)")
+GPU_WINDOWS_DEVICE = re.compile(r"(?:^|&)DEV_([0-9A-Fa-f]{4})(?:&|$)")
+GPU_WINDOWS_SUBSYSTEM = re.compile(r"(?:^|&)SUBSYS_([0-9A-Fa-f]{8})(?:&|$)")
 
 GPU_VENDOR_NAMES = {
     "0x1002": "AMD",
@@ -170,6 +174,10 @@ def _linux_gpu_devices(drm_root: Path) -> tuple[list[dict[str, Any]], bool]:
                 "product_name": None,
                 "numa_node": numa_node,
                 "vram_total_bytes": vram_total,
+                "memory_capacity_source": (
+                    "linux-drm-vram-total" if vram_total is not None else "unavailable"
+                ),
+                "memory_capacity_may_be_truncated": False,
                 "function_type": _function_type(device, total_vfs),
                 "sriov_total_vfs": total_vfs,
                 "sriov_enabled_vfs": enabled_vfs,
@@ -253,12 +261,113 @@ def _enrich_nvidia_devices(devices: list[dict[str, Any]], records: list[dict[str
         device["product_name"] = record["product_name"]
         device["driver_version"] = record["driver_version"]
         device["vram_total_bytes"] = record["vram_total_bytes"]
+        device["memory_capacity_source"] = "nvidia-smi-memory-total-mib"
+        device["memory_capacity_may_be_truncated"] = False
+
+
+def _windows_pci_identifiers(value: Any) -> tuple[str | None, str | None, str | None, str | None]:
+    text = str(value or "")
+    vendor = GPU_WINDOWS_VENDOR.search(text)
+    device = GPU_WINDOWS_DEVICE.search(text)
+    subsystem = GPU_WINDOWS_SUBSYSTEM.search(text)
+    vendor_id = f"0x{vendor.group(1).lower()}" if vendor else None
+    device_id = f"0x{device.group(1).lower()}" if device else None
+    subsystem_device_id = f"0x{subsystem.group(1)[:4].lower()}" if subsystem else None
+    subsystem_vendor_id = f"0x{subsystem.group(1)[4:].lower()}" if subsystem else None
+    return vendor_id, device_id, subsystem_vendor_id, subsystem_device_id
+
+
+def _windows_adapter_ram(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if 0 < parsed <= 2**32 - 1 else None
+
+
+def parse_windows_cim_inventory(value: str) -> list[dict[str, Any]] | None:
+    if len(value.encode("utf-8", errors="replace")) > GPU_TOOL_OUTPUT_MAX_BYTES:
+        return None
+    try:
+        payload = json.loads(value)
+    except (json.JSONDecodeError, TypeError):
+        return None
+    if not isinstance(payload, list) or len(payload) > GPU_MAX_DEVICES:
+        return None
+    devices: list[dict[str, Any]] = []
+    for item in payload:
+        if not isinstance(item, dict):
+            return None
+        product_name = _safe_label(item.get("Name"))
+        driver_version = _safe_label(item.get("DriverVersion"))
+        vendor_id, device_id, subsystem_vendor_id, subsystem_device_id = _windows_pci_identifiers(
+            item.get("PNPDeviceID")
+        )
+        vram_total = _windows_adapter_ram(item.get("AdapterRAM"))
+        status = "observed" if product_name and driver_version else "partial"
+        devices.append(
+            {
+                "index": len(devices),
+                "status": status,
+                "platform_device": f"windows-video-controller-{len(devices)}",
+                "drm_card": None,
+                "pci_address": None,
+                "pci_class": "display-controller",
+                "vendor_id": vendor_id,
+                "vendor_name": GPU_VENDOR_NAMES.get(vendor_id or "", "Unknown"),
+                "device_id": device_id,
+                "subsystem_vendor_id": subsystem_vendor_id,
+                "subsystem_device_id": subsystem_device_id,
+                "driver": None,
+                "driver_version": driver_version,
+                "product_name": product_name,
+                "numa_node": None,
+                "vram_total_bytes": vram_total,
+                "memory_capacity_source": (
+                    "windows-cim-adapterram-uint32" if vram_total is not None else "unavailable"
+                ),
+                "memory_capacity_may_be_truncated": vram_total is not None,
+                "function_type": "windows-cim-controller",
+                "sriov_total_vfs": None,
+                "sriov_enabled_vfs": None,
+                "iommu_group_visible": None,
+            }
+        )
+    return devices
+
+
+def _windows_cim_inventory(executable: str) -> tuple[list[dict[str, Any]], bool]:
+    script = (
+        "$ErrorActionPreference = 'Stop'; "
+        "$items = @(Get-CimInstance Win32_VideoController | "
+        "Select-Object Name,DriverVersion,AdapterRAM,PNPDeviceID); "
+        "ConvertTo-Json -InputObject $items -Compress -Depth 2"
+    )
+    command = [executable, "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script]
+    try:
+        result = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=5,
+            creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return [], False
+    if result.returncode != 0 or result.stderr.strip():
+        return [], False
+    devices = parse_windows_cim_inventory(result.stdout)
+    return (devices, True) if devices is not None else ([], False)
 
 
 def collect_gpu_environment(
     *,
     drm_root: Path = Path("/sys/class/drm"),
     nvidia_smi: str | None = None,
+    powershell: str | None = None,
 ) -> dict[str, Any]:
     platform_name = platform.system()
     tools = {
@@ -291,18 +400,53 @@ def collect_gpu_environment(
             "gpu_uuid_persisted": False,
             "serial_number_persisted": False,
             "iommu_group_identifier_persisted": False,
+            "windows_pnp_instance_identifier_persisted": False,
+            "nvidia_smi_inventory_queried": False,
+            "windows_cim_queried": False,
+            "raw_command_output_persisted": False,
         },
     }
+    if platform_name == "Windows":
+        executable = powershell or shutil.which("powershell.exe") or shutil.which("powershell")
+        if executable is None:
+            return {
+                **base,
+                "evidence_status": "unavailable",
+                "reason": "PowerShell is unavailable for the fixed Windows video-controller query.",
+            }
+        devices, valid = _windows_cim_inventory(executable)
+        if not valid:
+            return {
+                **base,
+                "evidence_status": "unavailable",
+                "reason": "The bounded Windows video-controller query failed or returned malformed evidence.",
+            }
+        partial = any(device.get("status") != "observed" for device in devices)
+        base["policy"]["windows_cim_queried"] = True
+        return {
+            **base,
+            "evidence_status": "partial" if partial else "complete",
+            "detection_status": "detected" if devices else "not-detected",
+            "device_count": len(devices),
+            "devices": devices,
+            "truncated": False,
+            **(
+                {"reason": "One or more Windows video controllers exposed incomplete bounded identity."}
+                if partial
+                else {}
+            ),
+        }
     if platform_name != "Linux":
         return {
             **base,
             "evidence_status": "unavailable",
-            "reason": "Bounded GPU hardware inventory currently supports Linux DRM sysfs only.",
+            "reason": "Bounded GPU hardware inventory currently supports Linux DRM sysfs and Windows CIM only.",
         }
     devices, truncated = _linux_gpu_devices(drm_root)
     executable = nvidia_smi or shutil.which("nvidia-smi")
     if executable and any(device.get("vendor_id") == "0x10de" for device in devices):
         _enrich_nvidia_devices(devices, _nvidia_smi_inventory(executable))
+        base["policy"]["nvidia_smi_inventory_queried"] = True
     inaccessible = not drm_root.is_dir()
     if inaccessible:
         evidence_status = "unavailable"

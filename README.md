@@ -24,7 +24,7 @@ timestamp, and raw result.
 | Available | Declared provider manifests for regional and self-hosted clouds |
 | Partial | Versioned CPU integer scaling and sustained-load profiles through `sysbench` |
 | Partial | Cache-resistant native memory read, write, copy, and triad bandwidth profiles |
-| Partial | Bounded read-only Linux GPU identity, driver, VRAM, PCI/NUMA, SR-IOV, and runtime-tool evidence; performance remains unmeasured |
+| Partial | Bounded read-only Linux/Windows GPU identity, driver, visible memory, placement context, and runtime-tool evidence; performance remains unmeasured |
 | Available | Filesystem-safe `fio` storage profiles with latency percentiles |
 | Available | Native small-file metadata, SHA-256 integrity, per-file fsync, tail latency, and cleanup evidence |
 | Available | Bounded read-only Linux mount, block topology, queue policy, and I/O geometry evidence for every storage Run |

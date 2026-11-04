@@ -62,12 +62,15 @@ systems.
 
 ## GPU and accelerators
 
-- `gpu-environment-v1` is read-only inventory and starts no GPU workload.
+- `gpu-environment-v2` is read-only inventory and starts no GPU workload.
 - Linux collection inspects at most 16 exact DRM cards with 4 KiB per sysfs
   source. It never writes driver controls, power limits, clocks, reset, SR-IOV,
   or IOMMU configuration.
 - Optional NVIDIA enrichment uses one fixed three-second inventory query with a
   64 KiB output cap. Arbitrary CLI arguments are not accepted.
+- Windows collection uses one fixed five-second CIM video-controller projection
+  with the same 64 KiB cap. Raw PNP instance IDs are parsed only for PCI IDs and
+  are not persisted.
 - UUIDs, serials, IOMMU group identifiers, process lists, and raw sysfs paths
   are not persisted.
 - Runtime-tool presence never becomes framework readiness or performance.

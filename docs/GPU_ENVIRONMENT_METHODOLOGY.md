@@ -1,6 +1,6 @@
 # GPU environment methodology
 
-`gpu-environment-v1` is a bounded read-only inventory contract for accelerators
+`gpu-environment-v2` is a bounded read-only inventory contract for accelerators
 visible to the CloudMark process. It does not execute a GPU workload and does
 not produce a suitability score.
 
@@ -23,6 +23,20 @@ rows are accepted. It can add product name, driver version, and visible VRAM.
 The command does not request utilization, processes, UUIDs, serials, power,
 temperature, or clocks. Unknown fields and raw `uevent` content are discarded.
 
+## Windows acquisition
+
+CloudMark runs one fixed five-second PowerShell query over
+`Win32_VideoController`. JSON output is rejected above 64 KiB and more than 16
+controllers are refused. The projection contains only name, driver version,
+`AdapterRAM`, and PNP device identity. CloudMark extracts PCI vendor, device,
+and subsystem IDs, then discards the raw PNP instance identifier.
+
+Windows CIM `AdapterRAM` is an unsigned 32-bit observation with driver-specific
+semantics. CloudMark labels it as `windows-cim-adapterram-uint32` and sets
+`memory_capacity_may_be_truncated=true`; it must not be interpreted as complete
+VRAM capacity for modern devices. PCI address, NUMA, SR-IOV, and IOMMU evidence
+remain unavailable on this path.
+
 ## Runtime discovery
 
 Inventory records only whether fixed runtime or diagnostic interfaces are
@@ -35,21 +49,22 @@ workload.
 
 ## Evidence states
 
-- `complete`: Linux DRM sysfs was readable and every retained device exposed
-  the required PCI identity and driver fields. A complete scan with zero
-  devices is `not-detected`, not a zero-performance result.
+- `complete`: the Linux DRM scan or Windows CIM projection completed and every
+  retained device exposed the required platform identity. A complete scan with
+  zero devices is `not-detected`, not a zero-performance result.
 - `partial`: one or more retained devices had incomplete bounded identity or
   more than 16 cards were exposed.
-- `unavailable`: Linux DRM sysfs was unavailable or the platform is not yet
-  supported by this collector.
+- `unavailable`: the bounded platform source or fixed query was unavailable,
+  malformed, oversized, or unsupported.
 
-Missing or unavailable evidence never becomes a performance value. Windows and
-macOS hardware collection remain future work.
+Missing or unavailable evidence never becomes a performance value. macOS
+hardware collection remains future work.
 
 ## Privacy and claim boundary
 
 CloudMark does not persist GPU UUIDs, serial numbers, IOMMU group identifiers,
-raw sysfs paths, management-process lists, or arbitrary command output. PCI
+raw Windows PNP instance IDs, raw sysfs paths, management-process lists, or
+arbitrary command output. PCI
 addresses are guest-visible topology, not physical-host placement proof.
 SR-IOV/IOMMU visibility does not establish tenant isolation.
 

@@ -388,6 +388,10 @@ On Linux it can display bounded guest-visible DRM/PCI identity, driver, VRAM
 capacity when exposed, PCI/NUMA placement, SR-IOV function/count context, and
 whether an IOMMU group is visible. NVIDIA product name, driver version, and
 VRAM may be enriched through one fixed bounded `nvidia-smi` inventory query.
+On Windows, one fixed CIM query supplies video-controller name, driver version,
+and normalized PCI IDs. `AdapterRAM` is a 32-bit CIM observation and may
+under-report modern GPU memory, so the dashboard labels that provenance rather
+than treating it as authoritative VRAM.
 
 The runtime section reports only whether `nvidia-smi`, `rocm-smi`, `clinfo`,
 `vulkaninfo`, `vainfo`, and `ffmpeg` are installed. Installation does not prove
@@ -397,7 +401,7 @@ score and cannot prove that the physical host lacks an accelerator.
 
 CloudMark does not retain UUIDs, serials, IOMMU group identifiers, raw sysfs
 paths, or GPU process lists. PCI/NUMA/SR-IOV evidence is guest context, not
-proof of physical-host placement or tenant isolation. Windows/macOS inventory,
+proof of physical-host placement or tenant isolation. macOS inventory,
 H2D/D2H, VRAM bandwidth, compute, frameworks, media engines, temperature,
 power, and sustained throttling remain unavailable. See
 [`GPU_ENVIRONMENT_METHODOLOGY.md`](GPU_ENVIRONMENT_METHODOLOGY.md).

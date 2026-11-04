@@ -116,10 +116,11 @@ contact a time peer, measure offset/drift, or validate upstream accuracy.
 Metrics/log/trace delivery, alerting, retention, and operational overhead remain
 missing; domain 14 is therefore `Partial`.
 
-`gpu-environment-v1` records bounded Linux guest-visible DRM/PCI accelerator
-identity, driver, visible VRAM capacity, PCI/NUMA placement, SR-IOV/IOMMU
-visibility, and installed runtime-tool interfaces. Optional NVIDIA enrichment
-uses one fixed bounded inventory query and persists no UUID, serial, raw path,
+`gpu-environment-v2` records bounded Linux DRM/PCI or Windows CIM guest-visible
+accelerator identity, driver, visible memory capacity and provenance, placement
+context where exposed, and installed runtime-tool interfaces. Optional NVIDIA
+enrichment uses one fixed bounded inventory query; Windows raw PNP instance IDs
+are discarded after PCI ID normalization. It persists no UUID, serial, raw path,
 or process data. It starts no accelerator workload and does not verify
 frameworks, transfer, compute, codecs, thermal/power stability, or contention;
 domain 8 is therefore `Partial`.

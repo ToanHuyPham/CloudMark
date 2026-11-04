@@ -177,11 +177,13 @@ clocksource/time-namespace plus systemd assertions to Controller/Agent
 inventory. It never changes time or contacts a peer; OS synchronization state
 is not promoted into measured offset/drift or independent NTP validation.
 
-`gpu-environment-v1` adds bounded Linux guest accelerator inventory to local
-and Agent system evidence. It records DRM/PCI identity, driver, visible VRAM,
-NUMA, SR-IOV/IOMMU visibility, fixed runtime-tool presence, and optional bounded
-NVIDIA name/version enrichment. It generates no load, persists no UUID, serial,
-or raw path, and does not complete the GPU performance domain.
+`gpu-environment-v2` adds bounded Linux DRM/PCI and Windows CIM guest
+accelerator inventory to local and Agent system evidence. It records normalized
+identity, driver, visible memory capacity with source/limitations, placement
+context where exposed, fixed runtime-tool presence, and optional bounded NVIDIA
+name/version enrichment. Raw Windows PNP instance IDs are discarded. It
+generates no load, persists no UUID, serial, or raw path, and does not complete
+the GPU performance domain.
 
 ## Repository map
 

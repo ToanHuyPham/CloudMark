@@ -965,3 +965,24 @@ management-tool installation do not establish CUDA/ROCm/framework support,
 transfer bandwidth, compute rate, codec throughput, thermal stability, tenant
 isolation, or physical-host attachment. Separating context from performance
 prevents hardware names from becoming synthetic scores.
+
+## D-059: Windows GPU context discards PNP identity and qualifies memory capacity
+
+**Decision:** Advance the accelerator inventory contract to
+`gpu-environment-v2`. On Windows, execute one fixed five-second PowerShell CIM
+projection over at most 16 `Win32_VideoController` records with a 64 KiB JSON
+cap. Retain bounded product/driver labels and normalized PCI vendor/device/
+subsystem IDs, then discard the raw PNP instance identifier. Preserve
+`AdapterRAM` only when it fits the CIM uint32 contract, label its source as
+`windows-cim-adapterram-uint32`, and set
+`memory_capacity_may_be_truncated=true`. Do not infer PCI address, NUMA, SR-IOV,
+IOMMU, physical attachment, or full VRAM from this query. Keep Linux v1
+semantics intact under the v2 envelope.
+
+**Reason:** Windows is an intended CloudMark target and the previous Linux-only
+collector made the local Windows Controller report accelerator evidence as
+unavailable. CIM provides useful normalized device and driver context, but its
+PNP instance string may contain unnecessary identifiers and its historical
+32-bit `AdapterRAM` field can under-report modern GPUs. Explicit redaction and
+capacity provenance add practical Windows coverage without converting a weak
+inventory field into a false hardware or performance claim.

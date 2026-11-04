@@ -276,7 +276,11 @@ def collect_inventory(workspace: Path | None = None) -> dict[str, Any]:
             "security_posture_linux": uname.system == "Linux" and Path("/proc/sys/kernel").is_dir(),
             "clock_environment": True,
             "container_environment_linux": container_environment["evidence_status"] != "unavailable",
-            "gpu_environment_linux": gpu_environment["evidence_status"] != "unavailable",
+            "gpu_environment_linux": (
+                gpu_environment["platform"] == "Linux"
+                and gpu_environment["evidence_status"] != "unavailable"
+            ),
+            "gpu_environment": gpu_environment["evidence_status"] != "unavailable",
             "nvidia_smi": gpu_environment["runtime_tools"]["nvidia_smi"],
             "rocm_smi": gpu_environment["runtime_tools"]["rocm_smi"],
             "clinfo": gpu_environment["runtime_tools"]["clinfo"],

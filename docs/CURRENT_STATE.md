@@ -1,6 +1,6 @@
 # CloudMark current state
 
-Last updated: 2026-11-02
+Last updated: 2026-11-03
 
 ## Repository baseline
 
@@ -343,21 +343,24 @@ baseline is still the repository head.
   `NTPSynchronized` assertions in local/Agent inventory. It caps every source,
   persists no namespace/raw control data, performs no network/RTC query or
   clock change, and explicitly does not measure offset/drift or validate NTP;
-- `gpu-environment-v1` bounded read-only Linux DRM/PCI accelerator inventory in
-  local and Agent evidence. It retains at most 16 display-class devices with
-  normalized vendor/device/subsystem identity, guest driver, PCI/NUMA context,
-  visible VRAM, SR-IOV/IOMMU visibility, and fixed runtime-tool presence.
-  NVIDIA devices may receive name, driver-version, and VRAM enrichment through
-  one fixed three-second 64 KiB-capped query. UUIDs, serials, raw sysfs paths,
-  IOMMU group identifiers, and process data are not persisted. The collector
-  generates no load and leaves transfer, compute, framework, media, thermal,
-  power, and contention performance unavailable, so the GPU domain is Partial.
-  Six dedicated fixture-only tests cover bounded Linux identity, zero-device
-  detection, NVIDIA enrichment, malformed/oversized input, truncation, privacy,
-  non-Linux handling, inventory integration, and catalog state. The complete
-  development head passes 236 Python tests at 76.3% branch coverage and 4 Node
-  tests, plus Ruff, dashboard lint, strict TypeScript, OpenAPI validation, and
-  the production build without starting accelerator load;
+- `gpu-environment-v2` bounded read-only Linux DRM/PCI and Windows CIM
+  accelerator inventory in local and Agent evidence. Linux retains at most 16
+  display-class devices with normalized vendor/device/subsystem identity,
+  driver, PCI/NUMA context, visible VRAM, and SR-IOV/IOMMU visibility; NVIDIA
+  devices may receive bounded name/version/VRAM enrichment. Windows uses one
+  fixed five-second 64 KiB-capped video-controller query, normalizes PCI IDs,
+  discards raw PNP instance identifiers, and labels `AdapterRAM` as a potentially
+  truncated uint32 observation. UUIDs, serials, raw paths, IOMMU identifiers,
+  and process data are not persisted. Runtime-tool presence is contextual. The
+  collector generates no load and leaves transfer, compute, framework, media,
+  thermal, power, and contention performance unavailable, so the GPU domain is
+  Partial. Nine dedicated fixture-only tests cover Linux identity/truncation,
+  NVIDIA enrichment, Windows CIM normalization/redaction/capacity provenance,
+  command failure versus a valid empty scan, malformed/oversized input,
+  unsupported platforms, inventory integration, and catalog state. The
+  complete development head passes 239 Python tests at 76.4% branch coverage
+  and 4 Node tests, plus Ruff, dashboard lint, strict TypeScript, OpenAPI
+  validation, and the production build without starting accelerator load;
 - least-privilege GitHub Actions CI in `.github/workflows/ci.yml`, with every
   third-party action pinned to an immutable commit SHA. The Python matrix covers
   the supported 3.9 floor and 3.13 on Linux plus 3.13 on Windows. The dashboard

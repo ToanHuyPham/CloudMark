@@ -141,7 +141,7 @@ type ClockEnvironment = {
 };
 
 type GpuEnvironment = {
-  methodology_version: "gpu-environment-v1";
+  methodology_version: "gpu-environment-v1" | "gpu-environment-v2";
   observed_at: string;
   platform: string;
   evidence_status: "complete" | "partial" | "unavailable";
@@ -151,7 +151,8 @@ type GpuEnvironment = {
   devices: {
     index: number;
     status: "observed" | "partial";
-    drm_card: string;
+    platform_device?: string | null;
+    drm_card?: string | null;
     pci_address?: string | null;
     pci_class?: string | null;
     vendor_id?: string | null;
@@ -164,10 +165,12 @@ type GpuEnvironment = {
     product_name?: string | null;
     numa_node?: number | null;
     vram_total_bytes?: number | null;
+    memory_capacity_source?: string;
+    memory_capacity_may_be_truncated?: boolean;
     function_type: string;
     sriov_total_vfs?: number | null;
     sriov_enabled_vfs?: number | null;
-    iommu_group_visible: boolean;
+    iommu_group_visible?: boolean | null;
   }[];
   runtime_tools: Record<"nvidia_smi" | "rocm_smi" | "clinfo" | "vulkaninfo" | "vainfo" | "ffmpeg", boolean>;
   policy: {
@@ -183,6 +186,10 @@ type GpuEnvironment = {
     gpu_uuid_persisted: false;
     serial_number_persisted: false;
     iommu_group_identifier_persisted: false;
+    windows_pnp_instance_identifier_persisted?: false;
+    nvidia_smi_inventory_queried?: boolean;
+    windows_cim_queried?: boolean;
+    raw_command_output_persisted?: false;
   };
   truncated?: boolean;
   reason?: string;
@@ -2718,33 +2725,33 @@ export default function Home() {
         {activeView === "gpu" && (
           <div className="view gpu-view">
             <section className="section-intro">
-              <div><span className="section-kicker">READ-ONLY ACCELERATOR CONTEXT</span><h2>Identify guest-visible GPUs before designing a valid accelerator workload.</h2><p>CloudMark records bounded Linux DRM/PCI identity, driver, VRAM capacity, NUMA placement, SR-IOV visibility, and installed runtime tools. This inventory creates no GPU load and does not claim framework readiness or performance.</p></div>
+              <div><span className="section-kicker">READ-ONLY ACCELERATOR CONTEXT</span><h2>Identify guest-visible GPUs before designing a valid accelerator workload.</h2><p>CloudMark records bounded Linux DRM/PCI or Windows CIM identity, driver, visible memory capacity, placement context where exposed, and installed runtime tools. This inventory creates no GPU load and does not claim framework readiness or performance.</p></div>
               <div className="load-policy"><span>GPU LOAD POLICY</span><strong>Inventory only</strong><small>Compute, transfer, media, thermal, and power benchmarks remain unavailable.</small></div>
             </section>
             {executionTargetPanel}
             <section className="provider-summary-grid">
-              <article className="panel"><span>EVIDENCE STATUS</span><strong>{gpuEnvironment?.evidence_status || "Unavailable"}</strong><small><code>{gpuEnvironment?.methodology_version || "gpu-environment-v1"}</code></small></article>
+              <article className="panel"><span>EVIDENCE STATUS</span><strong>{gpuEnvironment?.evidence_status || "Unavailable"}</strong><small><code>{gpuEnvironment?.methodology_version || "gpu-environment-v2"}</code></small></article>
               <article className="panel"><span>DETECTION</span><strong>{gpuEnvironment?.detection_status?.replaceAll("-", " ") || "Unavailable"}</strong><small>{gpuEnvironment?.device_count || 0} guest-visible accelerator devices</small></article>
               <article className="panel"><span>COLLECTION POLICY</span><strong>Read only</strong><small>No driver changes, compute kernels, transfers, or media jobs</small></article>
               <article className="panel caution"><span>GPU SUITABILITY</span><strong>Not rated</strong><small>Inventory cannot establish AI/ML, VDI, or media performance</small></article>
             </section>
             {gpuEnvironment?.devices.length ? <section className="gpu-device-grid" aria-label="Guest-visible accelerator devices">
-              {gpuEnvironment.devices.map((device) => <article className="panel gpu-device-card" key={`${device.drm_card}-${device.pci_address || device.index}`}>
-                <header><div><span>{device.vendor_name} · {device.status.toUpperCase()}</span><h3>{device.product_name || `${device.vendor_id || "unknown vendor"}:${device.device_id || "unknown device"}`}</h3><small>{device.drm_card} · {device.pci_address || "PCI address unavailable"}</small></div><i>{device.function_type.replaceAll("-", " ")}</i></header>
+              {gpuEnvironment.devices.map((device) => <article className="panel gpu-device-card" key={`${device.platform_device || device.drm_card || device.index}-${device.pci_address || device.index}`}>
+                <header><div><span>{device.vendor_name} · {device.status.toUpperCase()}</span><h3>{device.product_name || `${device.vendor_id || "unknown vendor"}:${device.device_id || "unknown device"}`}</h3><small>{device.platform_device || device.drm_card || "device handle unavailable"} · {device.pci_address || "PCI address unavailable"}</small></div><i>{device.function_type.replaceAll("-", " ")}</i></header>
                 <div className="gpu-device-facts">
                   <div><span>DRIVER</span><strong>{device.driver || "Unavailable"}</strong><small>{device.driver_version || "version unavailable"}</small></div>
-                  <div><span>VISIBLE VRAM</span><strong>{device.vram_total_bytes == null ? "Unavailable" : formatBytes(device.vram_total_bytes, true)}</strong><small>Capacity only · bandwidth unmeasured</small></div>
+                  <div><span>VISIBLE MEMORY</span><strong>{device.vram_total_bytes == null ? "Unavailable" : formatBytes(device.vram_total_bytes, true)}</strong><small>{device.memory_capacity_may_be_truncated ? "Windows CIM uint32 value may be truncated" : "Capacity only · bandwidth unmeasured"}</small></div>
                   <div><span>NUMA / IOMMU</span><strong>{device.numa_node == null ? "NUMA unavailable" : `NUMA ${device.numa_node}`}</strong><small>{device.iommu_group_visible ? "IOMMU group visible" : "IOMMU group unavailable"} · identifier redacted</small></div>
-                  <div><span>SR-IOV</span><strong>{device.sriov_total_vfs == null ? "Unavailable" : `${device.sriov_enabled_vfs || 0}/${device.sriov_total_vfs} VFs`}</strong><small>Guest-visible function context only</small></div>
+                  <div><span>SR-IOV</span><strong>{device.sriov_total_vfs == null ? "Unavailable" : `${device.sriov_enabled_vfs || 0}/${device.sriov_total_vfs} VFs`}</strong><small>{device.memory_capacity_source || "capacity source unavailable"} · guest-visible context only</small></div>
                 </div>
               </article>)}
-            </section> : <section className="panel provider-empty-state"><strong>{gpuEnvironment?.detection_status === "not-detected" ? "No DRM accelerator was detected in this guest." : "GPU hardware evidence is unavailable for this target."}</strong><p>{gpuEnvironment?.reason || "Linux Agents expose bounded DRM sysfs evidence when the guest has access. A missing device is not converted into a performance score."}</p></section>}
+            </section> : <section className="panel provider-empty-state"><strong>{gpuEnvironment?.detection_status === "not-detected" ? "No accelerator was detected in this guest." : "GPU hardware evidence is unavailable for this target."}</strong><p>{gpuEnvironment?.reason || "Linux Agents use bounded DRM sysfs and Windows targets use a fixed CIM query. A missing device is not converted into a performance score."}</p></section>}
             <section className="panel gpu-runtime-panel">
               <div className="panel-head"><div><span className="section-kicker">RUNTIME TOOL DISCOVERY</span><h3>Installed interfaces, not verified framework support</h3></div><span className="run-id">NO LOAD</span></div>
               <div className="runtime-tool-grid">{Object.entries(gpuEnvironment?.runtime_tools || {}).map(([name, available]) => <div key={name} className={available ? "available" : "missing"}><span>{name.replaceAll("_", " ")}</span><strong>{available ? "Installed" : "Unavailable"}</strong></div>)}</div>
               <p className="method-note">Management or diagnostic CLI presence does not prove CUDA, ROCm, OpenCL, Vulkan, VA-API, framework compatibility, codec support, tenant isolation, physical-host attachment, or usable performance. UUIDs, serials, and IOMMU group identifiers are not persisted.</p>
             </section>
-            <section className="validity-panel panel"><span>ACCELERATOR COVERAGE BOUNDARY</span><p>The GPU domain is Partial. H2D/D2H bandwidth, VRAM bandwidth, floating-point/tensor compute, framework probes, inference/training, codec throughput, thermal/power stability, and multi-tenant contention still require separately reviewed bounded executors.</p></section>
+            <section className="validity-panel panel"><span>ACCELERATOR COVERAGE BOUNDARY</span><p>The GPU domain is Partial. Windows AdapterRAM is a CIM uint32 observation and may under-report modern VRAM. H2D/D2H bandwidth, VRAM bandwidth, floating-point/tensor compute, framework probes, inference/training, codec throughput, thermal/power stability, and multi-tenant contention still require separately reviewed bounded executors.</p></section>
           </div>
         )}
 
