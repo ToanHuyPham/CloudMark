@@ -177,13 +177,16 @@ clocksource/time-namespace plus systemd assertions to Controller/Agent
 inventory. It never changes time or contacts a peer; OS synchronization state
 is not promoted into measured offset/drift or independent NTP validation.
 
-`gpu-environment-v2` adds bounded Linux DRM/PCI and Windows CIM guest
+`gpu-environment-v3` adds bounded Linux DRM/PCI and Windows CIM guest
 accelerator inventory to local and Agent system evidence. It records normalized
 identity, driver, visible memory capacity with source/limitations, placement
 context where exposed, fixed runtime-tool presence, and optional bounded NVIDIA
 name/version enrichment. Raw Windows PNP instance IDs are discarded. It
 generates no load, persists no UUID, serial, or raw path, and does not complete
 the GPU performance domain.
+Its isolated `gpu-opencl-probe-v1` child confirms only bounded OpenCL
+platform/device enumeration and memory limits. It creates no context, queue,
+buffer, program, or kernel and does not become performance evidence.
 
 ## Repository map
 

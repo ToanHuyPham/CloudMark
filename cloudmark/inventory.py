@@ -287,6 +287,8 @@ def collect_inventory(workspace: Path | None = None) -> dict[str, Any]:
             "vulkaninfo": gpu_environment["runtime_tools"]["vulkaninfo"],
             "vainfo": gpu_environment["runtime_tools"]["vainfo"],
             "ffmpeg": gpu_environment["runtime_tools"]["ffmpeg"],
+            "opencl_loader": gpu_environment["runtime_tools"]["opencl_loader"],
+            "opencl_gpu_device": gpu_environment["opencl"]["device_count"] > 0,
             "sysbench": shutil.which("sysbench") is not None,
             "gcc": shutil.which("gcc") is not None,
             "docker": shutil.which("docker") is not None,

@@ -141,7 +141,7 @@ type ClockEnvironment = {
 };
 
 type GpuEnvironment = {
-  methodology_version: "gpu-environment-v1" | "gpu-environment-v2";
+  methodology_version: "gpu-environment-v1" | "gpu-environment-v2" | "gpu-environment-v3";
   observed_at: string;
   platform: string;
   evidence_status: "complete" | "partial" | "unavailable";
@@ -172,7 +172,41 @@ type GpuEnvironment = {
     sriov_enabled_vfs?: number | null;
     iommu_group_visible?: boolean | null;
   }[];
-  runtime_tools: Record<"nvidia_smi" | "rocm_smi" | "clinfo" | "vulkaninfo" | "vainfo" | "ffmpeg", boolean>;
+  runtime_tools: Record<"nvidia_smi" | "rocm_smi" | "clinfo" | "vulkaninfo" | "vainfo" | "ffmpeg" | "opencl_loader", boolean>;
+  opencl: {
+    methodology_version: "gpu-opencl-probe-v1";
+    status: "complete" | "partial" | "unavailable";
+    platform_count: number;
+    device_count: number;
+    platforms: { index: number; status: string; name?: string | null; vendor?: string | null; version?: string | null }[];
+    devices: {
+      index: number;
+      platform_index: number;
+      platform_device_index: number;
+      status: string;
+      name?: string | null;
+      vendor?: string | null;
+      driver_version?: string | null;
+      device_version?: string | null;
+      opencl_c_version?: string | null;
+      global_memory_bytes?: number | null;
+      max_allocation_bytes?: number | null;
+      address_bits?: number | null;
+      available?: boolean | null;
+      compiler_available?: boolean | null;
+      unified_memory?: boolean | null;
+    }[];
+    reason_code?: string;
+    policy: {
+      read_only: true;
+      context_created: false;
+      queue_created: false;
+      buffer_allocated: false;
+      kernel_compiled: false;
+      load_generated: false;
+      extension_list_persisted: false;
+    };
+  };
   policy: {
     read_only: true;
     load_generated: false;
@@ -190,6 +224,7 @@ type GpuEnvironment = {
     nvidia_smi_inventory_queried?: boolean;
     windows_cim_queried?: boolean;
     raw_command_output_persisted?: false;
+    opencl_probe_subprocess_isolated?: true;
   };
   truncated?: boolean;
   reason?: string;
@@ -2725,12 +2760,12 @@ export default function Home() {
         {activeView === "gpu" && (
           <div className="view gpu-view">
             <section className="section-intro">
-              <div><span className="section-kicker">READ-ONLY ACCELERATOR CONTEXT</span><h2>Identify guest-visible GPUs before designing a valid accelerator workload.</h2><p>CloudMark records bounded Linux DRM/PCI or Windows CIM identity, driver, visible memory capacity, placement context where exposed, and installed runtime tools. This inventory creates no GPU load and does not claim framework readiness or performance.</p></div>
+              <div><span className="section-kicker">READ-ONLY ACCELERATOR CONTEXT</span><h2>Identify guest-visible GPUs and a usable backend before designing a valid workload.</h2><p>CloudMark records bounded Linux DRM/PCI or Windows CIM identity, driver, visible memory capacity, placement context, installed runtime tools, and an isolated no-load OpenCL enumeration. It does not create a GPU context, queue, buffer, or kernel.</p></div>
               <div className="load-policy"><span>GPU LOAD POLICY</span><strong>Inventory only</strong><small>Compute, transfer, media, thermal, and power benchmarks remain unavailable.</small></div>
             </section>
             {executionTargetPanel}
             <section className="provider-summary-grid">
-              <article className="panel"><span>EVIDENCE STATUS</span><strong>{gpuEnvironment?.evidence_status || "Unavailable"}</strong><small><code>{gpuEnvironment?.methodology_version || "gpu-environment-v2"}</code></small></article>
+              <article className="panel"><span>EVIDENCE STATUS</span><strong>{gpuEnvironment?.evidence_status || "Unavailable"}</strong><small><code>{gpuEnvironment?.methodology_version || "gpu-environment-v3"}</code></small></article>
               <article className="panel"><span>DETECTION</span><strong>{gpuEnvironment?.detection_status?.replaceAll("-", " ") || "Unavailable"}</strong><small>{gpuEnvironment?.device_count || 0} guest-visible accelerator devices</small></article>
               <article className="panel"><span>COLLECTION POLICY</span><strong>Read only</strong><small>No driver changes, compute kernels, transfers, or media jobs</small></article>
               <article className="panel caution"><span>GPU SUITABILITY</span><strong>Not rated</strong><small>Inventory cannot establish AI/ML, VDI, or media performance</small></article>
@@ -2749,9 +2784,10 @@ export default function Home() {
             <section className="panel gpu-runtime-panel">
               <div className="panel-head"><div><span className="section-kicker">RUNTIME TOOL DISCOVERY</span><h3>Installed interfaces, not verified framework support</h3></div><span className="run-id">NO LOAD</span></div>
               <div className="runtime-tool-grid">{Object.entries(gpuEnvironment?.runtime_tools || {}).map(([name, available]) => <div key={name} className={available ? "available" : "missing"}><span>{name.replaceAll("_", " ")}</span><strong>{available ? "Installed" : "Unavailable"}</strong></div>)}</div>
+              {gpuEnvironment?.opencl?.devices.length ? <div className="evidence-rows gpu-opencl-evidence">{gpuEnvironment.opencl.devices.map((device) => <div key={`${device.platform_index}-${device.platform_device_index}`}><span>OPENCL GPU {device.index} · {device.status.toUpperCase()}</span><strong>{device.name || "Unnamed OpenCL device"} · {device.vendor || "vendor unavailable"}</strong><small>{device.device_version || "device version unavailable"} · driver {device.driver_version || "unavailable"} · {device.global_memory_bytes == null ? "memory unavailable" : `${formatBytes(device.global_memory_bytes, true)} global memory`} · max allocation {device.max_allocation_bytes == null ? "unavailable" : formatBytes(device.max_allocation_bytes, true)} · compiler {device.compiler_available == null ? "unknown" : device.compiler_available ? "available" : "unavailable"}</small></div>)}</div> : <div className="empty-row">{gpuEnvironment?.opencl?.status === "unavailable" ? "No bounded OpenCL GPU backend evidence is available." : "The OpenCL loader exposed no GPU device."}</div>}
               <p className="method-note">Management or diagnostic CLI presence does not prove CUDA, ROCm, OpenCL, Vulkan, VA-API, framework compatibility, codec support, tenant isolation, physical-host attachment, or usable performance. UUIDs, serials, and IOMMU group identifiers are not persisted.</p>
             </section>
-            <section className="validity-panel panel"><span>ACCELERATOR COVERAGE BOUNDARY</span><p>The GPU domain is Partial. Windows AdapterRAM is a CIM uint32 observation and may under-report modern VRAM. H2D/D2H bandwidth, VRAM bandwidth, floating-point/tensor compute, framework probes, inference/training, codec throughput, thermal/power stability, and multi-tenant contention still require separately reviewed bounded executors.</p></section>
+            <section className="validity-panel panel"><span>ACCELERATOR COVERAGE BOUNDARY</span><p>The GPU domain is Partial. OpenCL v1 verifies enumeration only in an isolated child and explicitly creates no context, queue, buffer, or kernel. Windows AdapterRAM may under-report modern VRAM. H2D/D2H, VRAM bandwidth, compute, frameworks, inference/training, codecs, thermal/power stability, and contention still require bounded executors.</p></section>
           </div>
         )}
 

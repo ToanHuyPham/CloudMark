@@ -1,6 +1,6 @@
 # GPU environment methodology
 
-`gpu-environment-v2` is a bounded read-only inventory contract for accelerators
+`gpu-environment-v3` is a bounded read-only inventory contract for accelerators
 visible to the CloudMark process. It does not execute a GPU workload and does
 not produce a suitability score.
 
@@ -36,6 +36,26 @@ semantics. CloudMark labels it as `windows-cim-adapterram-uint32` and sets
 `memory_capacity_may_be_truncated=true`; it must not be interpreted as complete
 VRAM capacity for modern devices. PCI address, NUMA, SR-IOV, and IOMMU evidence
 remain unavailable on this path.
+
+## Isolated OpenCL backend probe
+
+When the operating-system OpenCL loader is present, CloudMark starts one fixed
+five-second `gpu-opencl-probe-v1` child process. Windows loads `OpenCL.dll` from
+System32 only; Linux and macOS use fixed loader discovery/fallback names. The
+worker enumerates at most 8 platforms and 16 GPU devices and caps each returned
+runtime label at 4 KiB.
+
+The normalized evidence can include platform/device/vendor/driver/OpenCL C
+versions, global memory, maximum allocation size, address width, device and
+compiler availability, and unified-memory status. Raw extension lists are not
+persisted.
+
+The worker calls only platform/device enumeration and information functions. It
+does not create a context, command queue, buffer, program, or kernel. A crash,
+timeout, malformed payload, stderr output, count overflow, or policy mismatch
+becomes `unavailable` and does not affect the parent Controller/Agent process.
+Successful enumeration verifies a visible OpenCL GPU backend, not that a real
+allocation, transfer, compilation, or workload succeeds.
 
 ## Runtime discovery
 

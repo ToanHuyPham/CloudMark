@@ -1,17 +1,21 @@
 from __future__ import annotations
 
 import json
+import io
 import subprocess
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
+from contextlib import redirect_stdout
 
 from cloudmark.gpu_environment import (
     collect_gpu_environment,
     parse_nvidia_smi_inventory,
+    parse_opencl_probe,
     parse_windows_cim_inventory,
 )
+from cloudmark.gpu_opencl_probe import main as opencl_probe_main
 from cloudmark.inventory import collect_inventory
 from cloudmark.profiles import ASSESSMENT_DOMAINS
 
@@ -69,8 +73,8 @@ class GpuEnvironmentTests(unittest.TestCase):
                 "cloudmark.gpu_environment.shutil.which",
                 side_effect=self._without_tools,
             ):
-                evidence = collect_gpu_environment(drm_root=drm_root)
-        self.assertEqual(evidence["methodology_version"], "gpu-environment-v2")
+                evidence = collect_gpu_environment(drm_root=drm_root, opencl_loader="")
+        self.assertEqual(evidence["methodology_version"], "gpu-environment-v3")
         self.assertEqual(evidence["evidence_status"], "complete")
         self.assertEqual(evidence["detection_status"], "detected")
         self.assertEqual(evidence["device_count"], 1)
@@ -109,7 +113,7 @@ class GpuEnvironmentTests(unittest.TestCase):
                 "cloudmark.gpu_environment.shutil.which",
                 side_effect=lambda name: "/usr/bin/nvidia-smi" if name == "nvidia-smi" else None,
             ), patch("cloudmark.gpu_environment.subprocess.run", return_value=completed) as run:
-                evidence = collect_gpu_environment(drm_root=drm_root)
+                evidence = collect_gpu_environment(drm_root=drm_root, opencl_loader="")
         device = evidence["devices"][0]
         self.assertEqual(device["product_name"], "NVIDIA L4")
         self.assertEqual(device["driver_version"], "550.54.15")
@@ -145,7 +149,7 @@ class GpuEnvironmentTests(unittest.TestCase):
                 "cloudmark.gpu_environment.shutil.which",
                 side_effect=self._without_tools,
             ):
-                evidence = collect_gpu_environment(drm_root=drm_root)
+                evidence = collect_gpu_environment(drm_root=drm_root, opencl_loader="")
         self.assertEqual(evidence["evidence_status"], "complete")
         self.assertEqual(evidence["detection_status"], "not-detected")
         self.assertEqual(evidence["device_count"], 0)
@@ -170,7 +174,7 @@ class GpuEnvironmentTests(unittest.TestCase):
                 "cloudmark.gpu_environment.shutil.which",
                 side_effect=self._without_tools,
             ):
-                evidence = collect_gpu_environment(drm_root=drm_root)
+                evidence = collect_gpu_environment(drm_root=drm_root, opencl_loader="")
         self.assertEqual(evidence["evidence_status"], "partial")
         self.assertEqual(evidence["device_count"], 16)
         self.assertTrue(evidence["truncated"])
@@ -181,7 +185,7 @@ class GpuEnvironmentTests(unittest.TestCase):
             "cloudmark.gpu_environment.shutil.which",
             side_effect=self._without_tools,
         ), patch("cloudmark.gpu_environment.subprocess.run") as run:
-            unavailable = collect_gpu_environment()
+            unavailable = collect_gpu_environment(opencl_loader="")
         self.assertEqual(unavailable["platform"], "Darwin")
         self.assertEqual(unavailable["evidence_status"], "unavailable")
         self.assertEqual(unavailable["detection_status"], "unavailable")
@@ -218,7 +222,7 @@ class GpuEnvironmentTests(unittest.TestCase):
             "cloudmark.gpu_environment.shutil.which",
             side_effect=self._without_tools,
         ), patch("cloudmark.gpu_environment.subprocess.run", return_value=completed) as run:
-            evidence = collect_gpu_environment(powershell="powershell.exe")
+            evidence = collect_gpu_environment(powershell="powershell.exe", opencl_loader="")
         self.assertEqual(evidence["evidence_status"], "complete")
         self.assertEqual(evidence["detection_status"], "detected")
         device = evidence["devices"][0]
@@ -269,7 +273,7 @@ class GpuEnvironmentTests(unittest.TestCase):
             "cloudmark.gpu_environment.subprocess.run",
             return_value=subprocess.CompletedProcess([], 1, "", "failure"),
         ):
-            failed = collect_gpu_environment(powershell="powershell.exe")
+            failed = collect_gpu_environment(powershell="powershell.exe", opencl_loader="")
         self.assertEqual(failed["evidence_status"], "unavailable")
         self.assertEqual(failed["detection_status"], "unavailable")
 
@@ -280,7 +284,7 @@ class GpuEnvironmentTests(unittest.TestCase):
             "cloudmark.gpu_environment.subprocess.run",
             return_value=subprocess.CompletedProcess([], 0, "[]", "Access denied"),
         ):
-            misleading_empty = collect_gpu_environment(powershell="powershell.exe")
+            misleading_empty = collect_gpu_environment(powershell="powershell.exe", opencl_loader="")
         self.assertEqual(misleading_empty["evidence_status"], "unavailable")
         self.assertEqual(misleading_empty["detection_status"], "unavailable")
 
@@ -291,10 +295,110 @@ class GpuEnvironmentTests(unittest.TestCase):
             "cloudmark.gpu_environment.subprocess.run",
             return_value=subprocess.CompletedProcess([], 0, "[]", ""),
         ):
-            empty = collect_gpu_environment(powershell="powershell.exe")
+            empty = collect_gpu_environment(powershell="powershell.exe", opencl_loader="")
         self.assertEqual(empty["evidence_status"], "complete")
         self.assertEqual(empty["detection_status"], "not-detected")
         self.assertEqual(empty["device_count"], 0)
+
+    @staticmethod
+    def _opencl_payload() -> dict[str, object]:
+        return {
+            "methodology_version": "gpu-opencl-probe-v1",
+            "status": "complete",
+            "platform_count": 1,
+            "device_count": 1,
+            "platforms": [
+                {
+                    "index": 0,
+                    "status": "observed",
+                    "name": "Test OpenCL",
+                    "vendor": "Test Vendor",
+                    "version": "OpenCL 3.0",
+                }
+            ],
+            "devices": [
+                {
+                    "index": 0,
+                    "platform_index": 0,
+                    "platform_device_index": 0,
+                    "status": "observed",
+                    "name": "Test GPU",
+                    "vendor": "Test Vendor",
+                    "driver_version": "1.2.3",
+                    "device_version": "OpenCL 3.0 Test",
+                    "opencl_c_version": "OpenCL C 1.2",
+                    "global_memory_bytes": 8 * 1024**3,
+                    "max_allocation_bytes": 2 * 1024**3,
+                    "address_bits": 64,
+                    "available": True,
+                    "compiler_available": True,
+                    "unified_memory": False,
+                }
+            ],
+            "policy": {
+                "read_only": True,
+                "context_created": False,
+                "queue_created": False,
+                "buffer_allocated": False,
+                "kernel_compiled": False,
+                "load_generated": False,
+                "extension_list_persisted": False,
+            },
+        }
+
+    def test_opencl_probe_parser_enforces_bounded_no_load_contract(self) -> None:
+        parsed = parse_opencl_probe(json.dumps(self._opencl_payload()))
+        self.assertIsNotNone(parsed)
+        assert parsed is not None
+        self.assertEqual(parsed["device_count"], 1)
+        self.assertEqual(parsed["devices"][0]["global_memory_bytes"], 8 * 1024**3)
+        self.assertFalse(parsed["policy"]["context_created"])
+        self.assertFalse(parsed["policy"]["load_generated"])
+
+        wrong_policy = self._opencl_payload()
+        wrong_policy["policy"] = {**wrong_policy["policy"], "buffer_allocated": True}
+        self.assertIsNone(parse_opencl_probe(json.dumps(wrong_policy)))
+        wrong_count = self._opencl_payload()
+        wrong_count["device_count"] = 2
+        self.assertIsNone(parse_opencl_probe(json.dumps(wrong_count)))
+        impossible_allocation = self._opencl_payload()
+        impossible_allocation["devices"][0]["max_allocation_bytes"] = 16 * 1024**3
+        self.assertIsNone(parse_opencl_probe(json.dumps(impossible_allocation)))
+        false_status = self._opencl_payload()
+        false_status["status"] = "partial"
+        self.assertIsNone(parse_opencl_probe(json.dumps(false_status)))
+        self.assertIsNone(parse_opencl_probe("x" * 70_000))
+
+    def test_opencl_probe_runs_in_fixed_subprocess_and_attaches_inventory(self) -> None:
+        completed = subprocess.CompletedProcess([], 0, json.dumps(self._opencl_payload()), "")
+        with patch("cloudmark.gpu_environment.platform.system", return_value="Darwin"), patch(
+            "cloudmark.gpu_environment.shutil.which",
+            side_effect=self._without_tools,
+        ), patch("cloudmark.gpu_environment.subprocess.run", return_value=completed) as run:
+            evidence = collect_gpu_environment(opencl_loader="OpenCL")
+        self.assertEqual(evidence["opencl"]["status"], "complete")
+        self.assertEqual(evidence["opencl"]["device_count"], 1)
+        self.assertTrue(evidence["runtime_tools"]["opencl_loader"])
+        self.assertEqual(run.call_args.args[0][1:], ["-m", "cloudmark.gpu_opencl_probe"])
+        self.assertTrue(evidence["policy"]["opencl_probe_subprocess_isolated"])
+
+    def test_opencl_probe_failure_is_unavailable_and_worker_output_is_json(self) -> None:
+        with patch("cloudmark.gpu_environment.platform.system", return_value="Darwin"), patch(
+            "cloudmark.gpu_environment.shutil.which",
+            side_effect=self._without_tools,
+        ), patch(
+            "cloudmark.gpu_environment.subprocess.run",
+            return_value=subprocess.CompletedProcess([], 0, "{}", ""),
+        ):
+            evidence = collect_gpu_environment(opencl_loader="OpenCL")
+        self.assertEqual(evidence["opencl"]["status"], "unavailable")
+        self.assertEqual(evidence["opencl"]["reason_code"], "opencl-probe-unavailable")
+
+        output = io.StringIO()
+        fixture = self._opencl_payload()
+        with patch("cloudmark.gpu_opencl_probe.collect_opencl_probe", return_value=fixture), redirect_stdout(output):
+            opencl_probe_main()
+        self.assertEqual(json.loads(output.getvalue()), fixture)
 
 
 if __name__ == "__main__":

@@ -343,7 +343,7 @@ baseline is still the repository head.
   `NTPSynchronized` assertions in local/Agent inventory. It caps every source,
   persists no namespace/raw control data, performs no network/RTC query or
   clock change, and explicitly does not measure offset/drift or validate NTP;
-- `gpu-environment-v2` bounded read-only Linux DRM/PCI and Windows CIM
+- `gpu-environment-v3` bounded read-only Linux DRM/PCI and Windows CIM
   accelerator inventory in local and Agent evidence. Linux retains at most 16
   display-class devices with normalized vendor/device/subsystem identity,
   driver, PCI/NUMA context, visible VRAM, and SR-IOV/IOMMU visibility; NVIDIA
@@ -354,13 +354,19 @@ baseline is still the repository head.
   and process data are not persisted. Runtime-tool presence is contextual. The
   collector generates no load and leaves transfer, compute, framework, media,
   thermal, power, and contention performance unavailable, so the GPU domain is
-  Partial. Nine dedicated fixture-only tests cover Linux identity/truncation,
+  Partial. Twelve dedicated fixture-only tests cover Linux identity/truncation,
   NVIDIA enrichment, Windows CIM normalization/redaction/capacity provenance,
   command failure versus a valid empty scan, malformed/oversized input,
   unsupported platforms, inventory integration, and catalog state. The
-  complete development head passes 239 Python tests at 76.4% branch coverage
+  complete development head passes 242 Python tests at 75.8% branch coverage
   and 4 Node tests, plus Ruff, dashboard lint, strict TypeScript, OpenAPI
   validation, and the production build without starting accelerator load;
+  Version 3 adds `gpu-opencl-probe-v1` in a fixed subprocess: operating-system
+  loader, up to 8 platforms/16 GPU devices, bounded runtime/driver labels,
+  global/max-allocation memory, address width, compiler/device availability,
+  and unified-memory context. The worker creates no context, queue, buffer,
+  program, or kernel; Windows loader search is System32-only, and every failure
+  remains unavailable without affecting the parent process;
 - least-privilege GitHub Actions CI in `.github/workflows/ci.yml`, with every
   third-party action pinned to an immutable commit SHA. The Python matrix covers
   the supported 3.9 floor and 3.13 on Linux plus 3.13 on Windows. The dashboard

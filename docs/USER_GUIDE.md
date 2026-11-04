@@ -393,6 +393,13 @@ and normalized PCI IDs. `AdapterRAM` is a 32-bit CIM observation and may
 under-report modern GPU memory, so the dashboard labels that provenance rather
 than treating it as authoritative VRAM.
 
+When an OpenCL loader is installed, CloudMark also runs a fixed isolated
+five-second enumeration probe. The dashboard can show OpenCL platform/device,
+driver/runtime versions, global memory, maximum allocation, address width,
+compiler availability, and unified-memory status. This probe creates no OpenCL
+context, queue, buffer, program, or kernel. A visible OpenCL device is a backend
+preflight fact, not H2D/D2H, VRAM-bandwidth, compute, or framework evidence.
+
 The runtime section reports only whether `nvidia-smi`, `rocm-smi`, `clinfo`,
 `vulkaninfo`, `vainfo`, and `ffmpeg` are installed. Installation does not prove
 that a GPU workload, framework, API, or codec works. A complete `not-detected`

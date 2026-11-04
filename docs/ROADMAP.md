@@ -147,7 +147,9 @@ combined with private or VPC network results.
 - authenticated remote dispatch, progress, cancellation, and result attribution for single-system suites — available;
 - bounded Linux DRM/PCI and Windows CIM GPU identity, driver, visible memory
   capacity/provenance, placement context, NVIDIA inventory enrichment, and
-  runtime-tool discovery — observational in `gpu-environment-v2`;
+  runtime-tool discovery plus subprocess-isolated no-load OpenCL platform/GPU
+  enumeration — observational in `gpu-environment-v3` and
+  `gpu-opencl-probe-v1`;
 - GPU inventory, H2D/D2H bandwidth, compute, VRAM, and thermal/power stability;
 - real media encode/decode through FFmpeg;
 - CUDA, ROCm, and oneAPI framework probes when available;

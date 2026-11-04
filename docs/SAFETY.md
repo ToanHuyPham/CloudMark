@@ -62,7 +62,7 @@ systems.
 
 ## GPU and accelerators
 
-- `gpu-environment-v2` is read-only inventory and starts no GPU workload.
+- `gpu-environment-v3` is read-only inventory and starts no GPU workload.
 - Linux collection inspects at most 16 exact DRM cards with 4 KiB per sysfs
   source. It never writes driver controls, power limits, clocks, reset, SR-IOV,
   or IOMMU configuration.
@@ -74,6 +74,10 @@ systems.
 - UUIDs, serials, IOMMU group identifiers, process lists, and raw sysfs paths
   are not persisted.
 - Runtime-tool presence never becomes framework readiness or performance.
+- `gpu-opencl-probe-v1` runs in a fixed five-second child process, enumerates at
+  most 8 platforms and 16 GPU devices, and caps each returned label at 4 KiB.
+  On Windows it loads `OpenCL.dll` from System32 only. It creates no context,
+  queue, buffer, program, or kernel; failure remains `unavailable` evidence.
 
 ## Runner controls
 

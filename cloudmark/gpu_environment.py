@@ -1,17 +1,19 @@
 from __future__ import annotations
 
-import os
+import ctypes.util
 import json
+import os
 import platform
 import re
 import shutil
 import subprocess
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 
-GPU_ENVIRONMENT_VERSION = "gpu-environment-v2"
+GPU_ENVIRONMENT_VERSION = "gpu-environment-v3"
 GPU_MAX_DEVICES = 16
 GPU_SYSFS_MAX_BYTES = 4_096
 GPU_TOOL_OUTPUT_MAX_BYTES = 65_536
@@ -23,6 +25,7 @@ GPU_DRIVER_NAME = re.compile(r"^[A-Za-z0-9_.+-]{1,64}$")
 GPU_WINDOWS_VENDOR = re.compile(r"(?:^|\\)VEN_([0-9A-Fa-f]{4})(?:&|$)")
 GPU_WINDOWS_DEVICE = re.compile(r"(?:^|&)DEV_([0-9A-Fa-f]{4})(?:&|$)")
 GPU_WINDOWS_SUBSYSTEM = re.compile(r"(?:^|&)SUBSYS_([0-9A-Fa-f]{8})(?:&|$)")
+GPU_OPENCL_PROBE_VERSION = "gpu-opencl-probe-v1"
 
 GPU_VENDOR_NAMES = {
     "0x1002": "AMD",
@@ -363,11 +366,181 @@ def _windows_cim_inventory(executable: str) -> tuple[list[dict[str, Any]], bool]
     return (devices, True) if devices is not None else ([], False)
 
 
+def _bounded_count(value: Any, maximum: int) -> int | None:
+    return value if isinstance(value, int) and not isinstance(value, bool) and 0 <= value <= maximum else None
+
+
+def _bounded_opencl_bytes(value: Any) -> int | None:
+    return value if isinstance(value, int) and not isinstance(value, bool) and 0 <= value <= 2**63 - 1 else None
+
+
+def _unavailable_opencl_probe() -> dict[str, Any]:
+    return {
+        "methodology_version": GPU_OPENCL_PROBE_VERSION,
+        "status": "unavailable",
+        "platform_count": 0,
+        "device_count": 0,
+        "platforms": [],
+        "devices": [],
+        "reason_code": "opencl-probe-unavailable",
+        "policy": {
+            "read_only": True,
+            "context_created": False,
+            "queue_created": False,
+            "buffer_allocated": False,
+            "kernel_compiled": False,
+            "load_generated": False,
+            "extension_list_persisted": False,
+        },
+    }
+
+
+def parse_opencl_probe(value: str) -> dict[str, Any] | None:
+    if len(value.encode("utf-8", errors="replace")) > GPU_TOOL_OUTPUT_MAX_BYTES:
+        return None
+    try:
+        payload = json.loads(value)
+    except (json.JSONDecodeError, TypeError):
+        return None
+    if not isinstance(payload, dict) or payload.get("methodology_version") != GPU_OPENCL_PROBE_VERSION:
+        return None
+    status = payload.get("status")
+    platform_count = _bounded_count(payload.get("platform_count"), 8)
+    device_count = _bounded_count(payload.get("device_count"), GPU_MAX_DEVICES)
+    platforms = payload.get("platforms")
+    devices = payload.get("devices")
+    policy = payload.get("policy")
+    if (
+        status not in {"complete", "partial", "unavailable"}
+        or platform_count is None
+        or device_count is None
+        or not isinstance(platforms, list)
+        or not isinstance(devices, list)
+        or len(platforms) != platform_count
+        or len(devices) != device_count
+        or not isinstance(policy, dict)
+    ):
+        return None
+    expected_policy = _unavailable_opencl_probe()["policy"]
+    if policy != expected_policy:
+        return None
+    normalized_platforms: list[dict[str, Any]] = []
+    for index, item in enumerate(platforms):
+        if (
+            not isinstance(item, dict)
+            or item.get("index") != index
+            or item.get("status") not in {"observed", "partial"}
+        ):
+            return None
+        text_values: dict[str, str | None] = {}
+        for key in ("name", "vendor", "version"):
+            text_values[key] = _safe_label(item.get(key)) if item.get(key) is not None else None
+            if item.get(key) is not None and text_values[key] is None:
+                return None
+        normalized_platforms.append({"index": index, "status": item["status"], **text_values})
+    normalized_devices: list[dict[str, Any]] = []
+    for index, item in enumerate(devices):
+        if (
+            not isinstance(item, dict)
+            or item.get("index") != index
+            or item.get("status") not in {"observed", "partial"}
+        ):
+            return None
+        platform_index = _bounded_count(item.get("platform_index"), max(0, platform_count - 1))
+        platform_device_index = _bounded_count(item.get("platform_device_index"), GPU_MAX_DEVICES - 1)
+        if platform_count == 0 or platform_index is None or platform_device_index is None:
+            return None
+        text_values = {}
+        for key in ("name", "vendor", "driver_version", "device_version", "opencl_c_version"):
+            text_values[key] = _safe_label(item.get(key)) if item.get(key) is not None else None
+            if item.get(key) is not None and text_values[key] is None:
+                return None
+        global_memory = _bounded_opencl_bytes(item.get("global_memory_bytes"))
+        max_allocation = _bounded_opencl_bytes(item.get("max_allocation_bytes"))
+        if (
+            (item.get("global_memory_bytes") is not None and global_memory is None)
+            or (item.get("max_allocation_bytes") is not None and max_allocation is None)
+            or (
+                global_memory is not None
+                and max_allocation is not None
+                and max_allocation > global_memory
+            )
+        ):
+            return None
+        address_bits = item.get("address_bits")
+        if address_bits is not None and address_bits not in {16, 32, 64, 128}:
+            return None
+        booleans: dict[str, bool | None] = {}
+        for key in ("available", "compiler_available", "unified_memory"):
+            raw = item.get(key)
+            if raw is not None and not isinstance(raw, bool):
+                return None
+            booleans[key] = raw
+        normalized_devices.append(
+            {
+                "index": index,
+                "platform_index": platform_index,
+                "platform_device_index": platform_device_index,
+                "status": item["status"],
+                **text_values,
+                "global_memory_bytes": global_memory,
+                "max_allocation_bytes": max_allocation,
+                "address_bits": address_bits,
+                **booleans,
+            }
+        )
+    reason_code = payload.get("reason_code")
+    if reason_code is not None and reason_code != "opencl-probe-unavailable":
+        return None
+    derived_status = (
+        "complete"
+        if all(item["status"] == "observed" for item in (*normalized_platforms, *normalized_devices))
+        else "partial"
+    )
+    if status == "unavailable":
+        if platform_count or device_count or reason_code != "opencl-probe-unavailable":
+            return None
+    elif status != derived_status or reason_code is not None:
+        return None
+    return {
+        "methodology_version": GPU_OPENCL_PROBE_VERSION,
+        "status": status,
+        "platform_count": platform_count,
+        "device_count": device_count,
+        "platforms": normalized_platforms,
+        "devices": normalized_devices,
+        "policy": expected_policy,
+        **({"reason_code": reason_code} if reason_code else {}),
+    }
+
+
+def _opencl_probe() -> dict[str, Any]:
+    command = [sys.executable, "-m", "cloudmark.gpu_opencl_probe"]
+    environment = os.environ.copy()
+    environment.update({"PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"})
+    try:
+        result = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=5,
+            env=environment,
+            creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return _unavailable_opencl_probe()
+    if result.returncode != 0 or result.stderr.strip():
+        return _unavailable_opencl_probe()
+    return parse_opencl_probe(result.stdout) or _unavailable_opencl_probe()
+
+
 def collect_gpu_environment(
     *,
     drm_root: Path = Path("/sys/class/drm"),
     nvidia_smi: str | None = None,
     powershell: str | None = None,
+    opencl_loader: str | None = None,
 ) -> dict[str, Any]:
     platform_name = platform.system()
     tools = {
@@ -378,6 +551,11 @@ def collect_gpu_environment(
         "vainfo": shutil.which("vainfo") is not None,
         "ffmpeg": shutil.which("ffmpeg") is not None,
     }
+    discovered_opencl = (
+        opencl_loader if opencl_loader is not None else ctypes.util.find_library("OpenCL")
+    )
+    tools["opencl_loader"] = bool(discovered_opencl)
+    opencl = _opencl_probe() if discovered_opencl else _unavailable_opencl_probe()
     base: dict[str, Any] = {
         "methodology_version": GPU_ENVIRONMENT_VERSION,
         "observed_at": datetime.now(timezone.utc).isoformat(),
@@ -387,6 +565,7 @@ def collect_gpu_environment(
         "device_count": 0,
         "devices": [],
         "runtime_tools": tools,
+        "opencl": opencl,
         "policy": {
             "read_only": True,
             "load_generated": False,
@@ -404,6 +583,7 @@ def collect_gpu_environment(
             "nvidia_smi_inventory_queried": False,
             "windows_cim_queried": False,
             "raw_command_output_persisted": False,
+            "opencl_probe_subprocess_isolated": True,
         },
     }
     if platform_name == "Windows":

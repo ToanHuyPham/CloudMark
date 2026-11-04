@@ -52,7 +52,7 @@ a runtime daemon or Kubernetes API and remains contextual, unscored evidence.
 portable clock semantics with bounded Linux clocksource/time-namespace context
 and fixed systemd time assertions. It never contacts a time peer or changes the
 clock, and explicitly denies independent NTP/offset/drift claims.
-`gpu-environment-v2` attaches bounded guest-visible accelerator context to the
+`gpu-environment-v3` attaches bounded guest-visible accelerator context to the
 same local/Agent inventory. Linux acquisition reads only exact DRM/PCI sysfs
 fields and may run one fixed bounded NVIDIA inventory query. Windows uses one
 fixed bounded CIM video-controller projection and discards the raw PNP instance
@@ -61,6 +61,12 @@ identity, driver, visible memory capacity and its provenance, placement context
 where exposed, and runtime-tool presence without UUIDs, serials, raw paths, or
 process data. This is contextual inventory, not a GPU workload or physical-host
 attachment claim.
+Version 3 additionally launches `gpu-opencl-probe-v1` in a fixed five-second
+child process. The worker loads only the operating-system OpenCL loader,
+enumerates bounded platform/GPU device properties, and exits. It creates no
+OpenCL context, command queue, buffer, program, or kernel, so a driver crash or
+loader failure remains isolated from the Controller/Agent process and cannot be
+presented as transfer or compute evidence.
 A native storage operation profile persists `filesystem_operations` under the
 same Run lifecycle while retaining a methodology distinct from fio jobs.
 All storage executors attach a bounded read-only `storage_environment`

@@ -222,6 +222,7 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .gpu-device-facts span { color: #7193b8; font-family: var(--font-plex-mono); font-size: var(--type-micro); }
 .gpu-device-facts strong { margin-top: 9px; font-size: var(--type-body); }.gpu-device-facts small { margin-top: 4px; color: var(--muted); font-size: var(--type-micro); line-height: 1.45; }
 .gpu-runtime-panel { margin-top: 12px; }
+.gpu-opencl-evidence { border-top: 1px solid var(--line); padding-top: 17px; }
 .runtime-tool-grid { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); border-top: 1px solid var(--line); }
 .runtime-tool-grid > div { min-width: 0; padding: 15px 13px; border-right: 1px solid var(--line); }
 .runtime-tool-grid > div:last-child { border-right: 0; }

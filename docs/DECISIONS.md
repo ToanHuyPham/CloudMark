@@ -986,3 +986,22 @@ PNP instance string may contain unnecessary identifiers and its historical
 32-bit `AdapterRAM` field can under-report modern GPUs. Explicit redaction and
 capacity provenance add practical Windows coverage without converting a weak
 inventory field into a false hardware or performance claim.
+
+## D-060: OpenCL backend verification is isolated enumeration without allocation
+
+**Decision:** Advance the inventory envelope to `gpu-environment-v3` and add
+`gpu-opencl-probe-v1` as a fixed five-second child process. Load only the
+operating-system OpenCL loader (System32-only on Windows), enumerate at most 8
+platforms and 16 GPU devices, and retain bounded platform/device/runtime/driver
+labels plus global memory, maximum allocation, address width, device/compiler
+availability, and unified-memory state. Validate and normalize the child JSON
+again in the parent. Create no OpenCL context, command queue, buffer, program,
+or kernel; persist no extension list. Crash, timeout, stderr, malformed output,
+or count/policy drift becomes unavailable evidence.
+
+**Reason:** CLI presence does not prove that the installed ICD exposes a GPU,
+while loading a vendor runtime directly inside the Controller or Agent risks a
+driver fault taking down orchestration. Isolated enumeration establishes the
+minimum backend identity and memory ceilings needed to design a safe transfer
+profile, but stopping before context or allocation prevents a preflight fact
+from being overstated as workload compatibility or performance.

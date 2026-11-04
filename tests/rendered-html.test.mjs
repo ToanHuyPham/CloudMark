@@ -58,7 +58,9 @@ test("keeps production metadata and project policy explicit", async () => {
   assert.match(page, /memory-environment-v2/);
   assert.match(page, /Relative Linux distances are not latency measurements/);
   assert.match(page, /READ-ONLY ACCELERATOR CONTEXT/);
-  assert.match(page, /gpu-environment-v2/);
+  assert.match(page, /gpu-environment-v3/);
+  assert.match(page, /OPENCL GPU/);
+  assert.match(page, /creates no context, queue, buffer, or kernel/);
   assert.match(page, /ACCELERATOR COVERAGE BOUNDARY/);
   assert.match(page, /UUIDs, serials, and IOMMU group identifiers are not persisted/);
   assert.match(page, /swap usage is a point-in-time snapshot/);
