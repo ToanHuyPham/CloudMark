@@ -1,6 +1,20 @@
 # CloudMark current state
 
-Last updated: 2026-11-03
+Last updated: 2026-11-07
+
+## GPU transfer work in progress
+
+The no-allocation `gpu-transfer-plan-v1` planner is available through
+`cloudmark gpu-transfer-plan --device-index N`. It fixes 16 MiB buffers,
+16 iterations, and two device buffers, validates explicit device identity,
+availability, address width, unified-memory semantics, and allocation ceilings.
+Capacity reserve is not a free-memory measurement. Host headroom remains
+unverified; execution is explicitly unavailable and unauthorized in the plan.
+The transfer worker, correctness verification, cancellation integration,
+Agent/API dispatch, and dashboard execution are still pending.
+Verification: 245 Python tests, 75.9% coverage with branch measurement enabled,
+Ruff, dashboard lint/typecheck, OpenAPI validation, production build, and four
+Node tests passed. Tests mock enumeration and perform no transfer workload.
 
 ## Repository baseline
 

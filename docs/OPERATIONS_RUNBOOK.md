@@ -1,5 +1,13 @@
 # CloudMark operations runbook
 
+## GPU transfer planning
+
+Run `python -m cloudmark gpu-transfer-plan --device-index 0` on the intended
+target to enumerate OpenCL and validate the fixed proposed allocation contract.
+This command performs no GPU allocation or transfer. Device indexes are local
+to the current enumeration and must be revalidated before future execution.
+The returned plan is not a benchmark result or authorization to generate load.
+
 ## 1. Purpose
 
 This runbook starts, verifies, stops, backs up, and restores the local CloudMark

@@ -11,6 +11,8 @@ from .benchmarks import run_storage, storage_preflight
 from .bootstrap import create_plan, execute_plan
 from .compute import run_system_benchmark, system_preflight
 from .inventory import collect_inventory
+from .gpu_environment import _opencl_probe
+from .gpu_transfer import plan_gpu_transfer
 from .profiles import COMPUTE_PROFILES, MEMORY_PROFILES, STORAGE_PROFILES
 from .provider import detect_provider
 from .runner import JobContext
@@ -33,6 +35,8 @@ def parser() -> argparse.ArgumentParser:
     serve_parser.add_argument("--data-dir", type=Path, default=Path(".cloudmark"))
 
     sub.add_parser("inventory", help="Collect local hardware and operating system inventory")
+    gpu_plan = sub.add_parser("gpu-transfer-plan", help="Inspect a fixed GPU transfer plan without allocation or load")
+    gpu_plan.add_argument("--device-index", type=int, required=True)
 
     doctor = sub.add_parser("doctor", help="Show the dependency installation plan")
     doctor.add_argument("--packs", default="compute,memory,storage,network,database,web")
@@ -76,6 +80,11 @@ def main() -> None:
         serve(args.host, args.port, args.data_dir)
     elif args.command == "inventory":
         _print({"inventory": collect_inventory(), "provider": detect_provider()})
+    elif args.command == "gpu-transfer-plan":
+        try:
+            _print(plan_gpu_transfer(_opencl_probe(), args.device_index))
+        except ValueError as exc:
+            raise SystemExit(str(exc)) from exc
     elif args.command in {"doctor", "bootstrap"}:
         packs = [item.strip() for item in args.packs.split(",") if item.strip()]
         plan = create_plan(packs)
