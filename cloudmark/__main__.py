@@ -12,7 +12,7 @@ from .bootstrap import create_plan, execute_plan
 from .compute import run_system_benchmark, system_preflight
 from .inventory import collect_inventory
 from .gpu_environment import _opencl_probe
-from .gpu_transfer import plan_gpu_transfer
+from .gpu_transfer import plan_gpu_transfer, run_gpu_transfer
 from .profiles import COMPUTE_PROFILES, MEMORY_PROFILES, STORAGE_PROFILES
 from .provider import detect_provider
 from .runner import JobContext
@@ -37,6 +37,9 @@ def parser() -> argparse.ArgumentParser:
     sub.add_parser("inventory", help="Collect local hardware and operating system inventory")
     gpu_plan = sub.add_parser("gpu-transfer-plan", help="Inspect a fixed GPU transfer plan without allocation or load")
     gpu_plan.add_argument("--device-index", type=int, required=True)
+    gpu_run = sub.add_parser("gpu-transfer", help="Run the fixed isolated OpenCL transfer profile")
+    gpu_run.add_argument("--device-index", type=int, required=True)
+    gpu_run.add_argument("--yes", action="store_true")
 
     doctor = sub.add_parser("doctor", help="Show the dependency installation plan")
     doctor.add_argument("--packs", default="compute,memory,storage,network,database,web")
@@ -85,6 +88,11 @@ def main() -> None:
             _print(plan_gpu_transfer(_opencl_probe(), args.device_index))
         except ValueError as exc:
             raise SystemExit(str(exc)) from exc
+    elif args.command == "gpu-transfer":
+        if not args.yes:
+            raise SystemExit("Add --yes to confirm intentional GPU transfer load.")
+        _print(run_gpu_transfer(args.device_index, confirm_load=True,
+                               context=JobContext("gpu-cli", total_steps=1, timeout_seconds=90)))
     elif args.command in {"doctor", "bootstrap"}:
         packs = [item.strip() for item in args.packs.split(",") if item.strip()]
         plan = create_plan(packs)

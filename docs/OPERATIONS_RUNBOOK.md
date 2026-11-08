@@ -8,6 +8,15 @@ This command performs no GPU allocation or transfer. Device indexes are local
 to the current enumeration and must be revalidated before future execution.
 The returned plan is not a benchmark result or authorization to generate load.
 
+An operator can explicitly run the fixed CLI workload using
+`python -m cloudmark gpu-transfer --device-index 0 --yes` on an idle authorized
+target. This creates two 16 MiB device buffers and performs 16 measured copies
+per direction after one warm-up. It uses a 90-second parent deadline and
+requires verified host memory headroom with a 512 MiB reserve. Device capacity
+does not prove currently free device memory. Allocation failure aborts the run.
+Output is JSON on stdout; it is not automatically inserted into Controller
+history. Agent/API/dashboard execution is not yet available.
+
 ## 1. Purpose
 
 This runbook starts, verifies, stops, backs up, and restores the local CloudMark

@@ -1,4 +1,4 @@
-"""No-allocation planning boundary for the pending GPU transfer executor."""
+"""Fixed GPU transfer planning and isolated CLI execution."""
 from __future__ import annotations
 
 from copy import deepcopy
@@ -6,6 +6,10 @@ from typing import Any
 
 from .gpu_environment import parse_opencl_probe
 import json
+import hashlib
+import sys
+
+from .runner import JobContext
 
 
 TRANSFER_PLAN_VERSION = "gpu-transfer-plan-v1"
@@ -76,3 +80,48 @@ def plan_gpu_transfer(probe: dict[str, Any], device_index: int) -> dict[str, Any
             "identity_match_required_before_execution": True,
         },
     }
+
+
+def run_gpu_transfer(device_index: int, *, confirm_load: bool, context: JobContext) -> dict[str, Any]:
+    """Execute only the packaged worker with explicit confirmation and a bounded deadline."""
+    if confirm_load is not True or not _integer(device_index, 0, 15):
+        raise ValueError("GPU transfer requires explicit load confirmation and a valid device index.")
+    if context.timeout_seconds > 90:
+        raise ValueError("GPU transfer timeout must not exceed 90 seconds.")
+    context.report("gpu-transfer", "isolated-copy-worker")
+    completed = context.run_process(
+        [sys.executable, "-m", "cloudmark.gpu_transfer_worker", "--device-index", str(device_index), "--confirm-load"],
+        label="GPU transfer",
+    )
+    if completed.returncode or completed.stderr.strip() or len(completed.stdout.encode("utf-8")) > 65536:
+        raise ValueError("GPU transfer worker failed; no completed measurement is available.")
+    payload = json.loads(completed.stdout)
+    if not isinstance(payload, dict) or payload.get("methodology_version") != "gpu-transfer-v1":
+        raise ValueError("Invalid GPU transfer result version.")
+    plan = payload.get("plan") or {}
+    if not isinstance(plan, dict) or plan.get("plan_version") != TRANSFER_PLAN_VERSION or (plan.get("device") or {}).get("index") != device_index:
+        raise ValueError("GPU transfer target contract mismatch.")
+    if plan.get("buffer_bytes") != BUFFER_BYTES or plan.get("iterations") != ITERATIONS:
+        raise ValueError("GPU transfer allocation contract mismatch.")
+    if not _integer(payload.get("host_available_bytes"), HOST_RESERVE_BYTES + 4 * BUFFER_BYTES, 2**63 - 1):
+        raise ValueError("GPU transfer host memory evidence is incomplete.")
+    expected = hashlib.sha256(hashlib.shake_256(b"cloudmark-gpu-transfer-v1").digest(BUFFER_BYTES)).hexdigest()
+    measurements = payload.get("measurements")
+    names = ["host-to-device", "device-to-host", "device-to-device"]
+    if not isinstance(measurements, list) or len(measurements) != 3 or payload.get("cleanup_verified") is not True:
+        raise ValueError("Incomplete GPU transfer or cleanup evidence.")
+    for name, item in zip(names, measurements):
+        if not isinstance(item, dict):
+            raise ValueError("Malformed GPU transfer measurement.")
+        samples = item.get("samples_ns")
+        if (item.get("name") != name or item.get("bytes_per_iteration") != BUFFER_BYTES
+                or item.get("iterations") != ITERATIONS or item.get("sha256") != expected
+                or item.get("integrity_verified") is not True or not isinstance(samples, list)
+                or len(samples) != ITERATIONS or not all(_integer(value, 1, 90 * 10**9) for value in samples)):
+            raise ValueError("GPU transfer measurement contract mismatch.")
+        item["bandwidth_bytes_per_second"] = BUFFER_BYTES * ITERATIONS * 10**9 / sum(samples)
+    payload.update({"suite": "gpu", "profile": "gpu-transfer-quick", "profile_version": "1.0",
+                    "evidence_status": "measured", "timing_scope": "synchronous-host-wall-clock",
+                    "device_free_memory_verified": False})
+    context.complete_step("completed", None, partial_result=payload)
+    return payload
