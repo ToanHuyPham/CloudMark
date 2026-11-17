@@ -6,6 +6,8 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from .database import Database
+from .gpu_transfer import validate_transfer_result
+from .profiles import GPU_PROFILES
 from .profiles import COMPUTE_PROFILES, MEMORY_PROFILES, SECURITY_PROFILES, STORAGE_PROFILES
 from .runner import JobContext, RunCancelled, RunStopped
 
@@ -22,6 +24,8 @@ class RemoteError(RuntimeError):
 
 
 def _profiles(suite: str) -> dict[str, dict[str, Any]]:
+    if suite == "gpu":
+        return GPU_PROFILES
     if suite == "compute":
         return COMPUTE_PROFILES
     if suite == "memory":
@@ -38,6 +42,8 @@ def remote_default_timeout(suite: str, profile_name: str) -> int:
     if profile_name not in profiles:
         raise ValueError(f"Unknown {suite} profile: {profile_name}")
     profile = profiles[profile_name]
+    if suite == "gpu":
+        return 90
     runtime = sum(
         int(job.get("runtime", 0)) + int(job.get("warmup", 0)) + int(job.get("ramp_time", 0))
         for job in profile.get("jobs", [])
@@ -96,6 +102,7 @@ def validate_remote_agent(
             "memory": "gcc",
             "storage": "fio",
             "security": "security_posture_linux",
+            "gpu": "gpu_transfer_v1",
         }[suite]
     )
     if not capabilities.get(required):
@@ -135,6 +142,8 @@ def _attributed_result(
         raise RemoteError("Agent result profile version does not match the Controller profile.")
     if result.get("methodology_version") != expected_profile["methodology_version"]:
         raise RemoteError("Agent result methodology version does not match the Controller methodology.")
+    if suite == "gpu":
+        result = validate_transfer_result(result, (task.get("payload") or {}).get("device_index"))
     result["execution"] = {
         "mode": "remote-agent",
         "protocol_version": REMOTE_METHODOLOGY_VERSION,
@@ -161,6 +170,7 @@ def run_remote_benchmark(
     timeout_seconds: int,
     *,
     context: JobContext,
+    device_index: int | None = None,
 ) -> dict[str, Any]:
     # Validation happens when the run is accepted, but another network or
     # benchmark task can win the queue before this worker starts executing.
@@ -176,6 +186,7 @@ def run_remote_benchmark(
         f"benchmark-{suite}",
         {
             "suite": suite,
+            **({"device_index": device_index} if suite == "gpu" else {}),
             "profile": profile_name,
             "timeout_seconds": timeout_seconds,
             "load_confirmed": suite != "security",

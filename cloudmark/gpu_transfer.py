@@ -96,10 +96,22 @@ def run_gpu_transfer(device_index: int, *, confirm_load: bool, context: JobConte
     if completed.returncode or completed.stderr.strip() or len(completed.stdout.encode("utf-8")) > 65536:
         raise ValueError("GPU transfer worker failed; no completed measurement is available.")
     payload = json.loads(completed.stdout)
+    result = validate_transfer_result(payload, device_index)
+    context.complete_step("completed", None, partial_result=result)
+    return result
+
+
+def validate_transfer_result(payload: Any, device_index: int) -> dict[str, Any]:
+    if not _integer(device_index, 0, 15):
+        raise ValueError("Invalid requested GPU device index.")
+    payload = deepcopy(payload)
     if not isinstance(payload, dict) or payload.get("methodology_version") != "gpu-transfer-v1":
         raise ValueError("Invalid GPU transfer result version.")
     plan = payload.get("plan") or {}
-    if not isinstance(plan, dict) or plan.get("plan_version") != TRANSFER_PLAN_VERSION or (plan.get("device") or {}).get("index") != device_index:
+    device = plan.get("device") if isinstance(plan, dict) else None
+    if (not isinstance(plan, dict) or not isinstance(device, dict)
+            or plan.get("plan_version") != TRANSFER_PLAN_VERSION
+            or type(device.get("index")) is not int or device["index"] != device_index):
         raise ValueError("GPU transfer target contract mismatch.")
     if plan.get("buffer_bytes") != BUFFER_BYTES or plan.get("iterations") != ITERATIONS:
         raise ValueError("GPU transfer allocation contract mismatch.")
@@ -123,5 +135,5 @@ def run_gpu_transfer(device_index: int, *, confirm_load: bool, context: JobConte
     payload.update({"suite": "gpu", "profile": "gpu-transfer-quick", "profile_version": "1.0",
                     "evidence_status": "measured", "timing_scope": "synchronous-host-wall-clock",
                     "device_free_memory_verified": False})
-    context.complete_step("completed", None, partial_result=payload)
+    payload["gpu_transfer_measurements"] = deepcopy(measurements)
     return payload

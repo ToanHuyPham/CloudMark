@@ -15,7 +15,11 @@ per direction after one warm-up. It uses a 90-second parent deadline and
 requires verified host memory headroom with a 512 MiB reserve. Device capacity
 does not prove currently free device memory. Allocation failure aborts the run.
 Output is JSON on stdout; it is not automatically inserted into Controller
-history. Agent/API/dashboard execution is not yet available.
+history. For persisted history, submit suite `gpu`, profile
+`gpu-transfer-quick`, integer `device_index`, and `confirm_load: true` to
+`POST /api/v1/runs`. Add `agent_id` for remote execution. The GPU dashboard
+provides device selection and explicit run/cancel controls. Update and restart
+Agents to advertise `gpu_transfer_v1`; older Agents are refused for this suite.
 
 ## 1. Purpose
 

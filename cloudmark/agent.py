@@ -41,6 +41,8 @@ from .database_benchmark import (
     parse_pgbench_row_counts,
 )
 from .inventory import collect_inventory
+from .gpu_transfer import run_gpu_transfer
+from .profiles import GPU_PROFILES
 from .network import (
     ALLOWED_LATENCY_COUNT_MAX,
     ALLOWED_LATENCY_INTERVAL_MS_MAX,
@@ -4099,7 +4101,7 @@ class AgentWorker:
         kind = str(task.get("kind", ""))
         suite = kind.removeprefix("benchmark-")
         expected_kind = f"benchmark-{suite}"
-        if kind != expected_kind or suite not in {"compute", "memory", "storage", "security"}:
+        if kind != expected_kind or suite not in {"compute", "memory", "storage", "security", "gpu"}:
             raise ValueError("Agent refused an unsupported benchmark task kind.")
         if payload.get("protocol_version") != REMOTE_METHODOLOGY_VERSION:
             raise ValueError("Agent refused an incompatible remote benchmark protocol version.")
@@ -4116,6 +4118,7 @@ class AgentWorker:
             "memory": MEMORY_PROFILES,
             "storage": STORAGE_PROFILES,
             "security": SECURITY_PROFILES,
+            "gpu": GPU_PROFILES,
         }[suite]
         if profile_name not in profiles:
             raise ValueError(f"Agent refused unknown {suite} profile: {profile_name}")
@@ -4182,7 +4185,9 @@ class AgentWorker:
         )
         try:
             evidence = self._benchmark_evidence()
-            if suite == "security":
+            if suite == "gpu":
+                benchmark = run_gpu_transfer(payload.get("device_index"), confirm_load=True, context=context)
+            elif suite == "security":
                 benchmark = run_security_posture(profile_name, context=context)
             elif suite == "storage":
                 benchmark = run_storage(profile_name, self.workspace, str(task.get("run_id") or task_id), context=context)
@@ -4268,7 +4273,7 @@ class AgentWorker:
             return self._run_web_protocol_probe(str(task["id"]), payload)
         if kind == "web-service-stop":
             return self._stop_web_task(payload)
-        if kind in {"benchmark-compute", "benchmark-memory", "benchmark-storage", "benchmark-security"}:
+        if kind in {"benchmark-compute", "benchmark-memory", "benchmark-storage", "benchmark-security", "benchmark-gpu"}:
             return self._run_benchmark(task, payload)
         raise NetworkError(f"Agent refused unsupported task kind: {kind}")
 

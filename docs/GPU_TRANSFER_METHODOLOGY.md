@@ -18,8 +18,8 @@ worker at 90 seconds. Success requires reverse-order resource release and
 checksum equality. A killed worker has no verified explicit-cleanup claim.
 No kernel is compiled. Unified-memory devices are labelled shared-memory-copy.
 
-This CLI implementation has fixture-only validation. Hardware acceptance,
-Controller/Agent dispatch, dashboard actions, and provider aggregation remain
+Controller/Agent dispatch and dashboard run/cancel actions are implemented with
+fixture-only validation. Hardware acceptance and provider aggregation remain
 pending. Do not interpret these measurements as PCIe link capacity or GPU
 compute capability.
 

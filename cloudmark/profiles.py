@@ -464,9 +464,19 @@ SCENARIOS: list[dict[str, Any]] = [
 ]
 
 
+GPU_PROFILES = {
+    "gpu-transfer-quick": {
+        "label": "GPU Transfer Quick", "description": "Fixed synchronous OpenCL copies with SHA-256 verification.",
+        "profile_version": "1.0", "methodology_version": "gpu-transfer-v1",
+        "jobs": [{"name": "isolated-transfer-worker"}],
+    }
+}
+
+
 def all_profiles() -> dict[str, Any]:
     return {
         "compute": COMPUTE_PROFILES,
+        "gpu": GPU_PROFILES,
         "memory": MEMORY_PROFILES,
         "storage": STORAGE_PROFILES,
         "network": NETWORK_PROFILES,

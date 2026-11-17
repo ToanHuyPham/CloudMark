@@ -10,6 +10,14 @@ X-CloudMark-Token: <token printed by cloudmark serve>
 
 ## Endpoints
 
+GPU transfer uses the standard authenticated Run endpoint with
+`{"suite":"gpu","profile":"gpu-transfer-quick","device_index":0,"confirm_load":true}`.
+An optional `agent_id` dispatches to an updated Agent advertising
+`gpu_transfer_v1`. Timeout is limited to 30-90 seconds. It shares the target's
+single-suite exclusion rule. Cancellation uses `/runs/{id}/cancel`; completed
+results include `gpu_transfer_measurements`, checksums, and cleanup evidence.
+The current release has mock validation; hardware acceptance remains pending.
+
 | Method | Path | Purpose |
 |---|---|---|
 | GET | `/health` | API status and version |

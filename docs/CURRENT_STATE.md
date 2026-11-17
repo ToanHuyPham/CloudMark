@@ -1,6 +1,6 @@
 # CloudMark current state
 
-Last updated: 2026-11-08
+Last updated: 2026-11-17
 
 ## GPU transfer work in progress
 
@@ -16,9 +16,12 @@ device identity and limits before allocation, performs fixed synchronous copies,
 verifies SHA-256 after each phase, and releases buffers, queue, and context in
 reverse order. A parent deadline terminates a stalled child. Timings include
 host API overhead and do not establish PCIe or physical VRAM bandwidth.
-Agent/API dispatch and dashboard execution are still pending; no real transfer
-acceptance run has been performed.
-Verification: 249 Python tests, 75.2% coverage with branch measurement enabled,
+Controller/Agent dispatch and dashboard execution are implemented. Requests
+require explicit load confirmation and a GPU index; GPU shares the target's
+exclusive execution group. The Controller revalidates remote measurements and
+derives bandwidth from bounded samples. No real transfer acceptance run has
+been performed, and GPU evidence does not enter provider suitability scoring.
+Verification: 251 Python tests, 75.2% coverage with branch measurement enabled,
 Ruff, dashboard lint/typecheck, OpenAPI validation, production build, and four
 Node tests passed. Tests mock enumeration and perform no transfer workload.
 

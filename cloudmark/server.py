@@ -42,6 +42,9 @@ from .database_benchmark import (
 )
 from .distributed import DistributedError
 from .inventory import collect_inventory
+from .gpu_transfer import run_gpu_transfer, plan_gpu_transfer
+from .gpu_environment import _opencl_probe
+from .profiles import GPU_PROFILES
 from .network import (
     NetworkError,
     network_default_timeout,
@@ -109,7 +112,7 @@ def _without_raw_evidence(value: Any) -> Any:
 def _dashboard_run_summaries(runs: list[dict[str, Any]]) -> list[dict[str, Any]]:
     summaries = deepcopy(runs)
     completed_scopes: set[tuple[str, str]] = set()
-    target_scoped_suites = {"compute", "memory", "storage", "security"}
+    target_scoped_suites = {"compute", "memory", "storage", "security", "gpu"}
     for run in summaries:
         suite = str(run.get("suite", ""))
         request = run.get("request") or {}
@@ -513,19 +516,19 @@ class CloudMarkController:
                 or not request.get("campaign_id")
             ):
                 raise ValueError("Internal campaign dispatch metadata does not match its guarded contract.")
-        if suite not in {"inventory", "compute", "memory", "storage", "security", "network", "database", "web"}:
+        if suite not in {"inventory", "compute", "memory", "storage", "security", "network", "database", "web", "gpu"}:
             raise ValueError("Supported suites are inventory, compute, memory, storage, security, network, database, and web.")
-        if agent_id and suite not in {"compute", "memory", "storage", "security"}:
+        if agent_id and suite not in {"compute", "memory", "storage", "security", "gpu"}:
             raise ValueError("agent_id is supported only for compute, memory, storage, and security runs.")
         remote_agent: dict[str, Any] | None = None
-        if suite in {"compute", "memory", "storage", "security"}:
+        if suite in {"compute", "memory", "storage", "security", "gpu"}:
             if agent_id:
                 remote_agent = validate_remote_agent(self.database, agent_id, suite, profile)
             active_local = next(
                 (
                     run
                     for run in self.database.list_runs(200)
-                    if run["suite"] in {"compute", "memory", "storage", "security"}
+                    if run["suite"] in {"compute", "memory", "storage", "security", "gpu"}
                     and run["status"] in {"queued", "running"}
                     and str(run.get("request", {}).get("agent_id", "")).strip() == agent_id
                 ),
@@ -550,7 +553,17 @@ class CloudMarkController:
                 if conflicting_distributed:
                     raise ValueError("The selected Agent session already has an active distributed assessment.")
             request["execution"] = "remote-agent" if remote_agent else "controller-host"
-        if suite == "storage":
+        if suite == "gpu":
+            if request.get("confirm_load") is not True:
+                raise ValueError("GPU transfer requires confirm_load=true.")
+            if profile not in GPU_PROFILES:
+                raise ValueError("Unknown GPU profile.")
+            probe = (remote_agent.get("system", {}).get("inventory", {}).get("gpu", {}).get("environment", {}).get("opencl", {})
+                     if remote_agent else _opencl_probe())
+            preflight = plan_gpu_transfer(probe, request.get("device_index"))
+            total_steps, default_timeout = 1, 90
+            methodology_version, tool_version = "gpu-transfer-v1", "cloudmark-opencl-transfer-v1"
+        elif suite == "storage":
             if not request.get("confirm_write"):
                 raise ValueError("Storage test requires confirm_write=true because it writes a temporary test file.")
             preflight = None if remote_agent else storage_preflight(profile, self.benchmark_dir)
@@ -592,7 +605,7 @@ class CloudMarkController:
                 (
                     run
                     for run in self.database.list_runs(200)
-                    if run["suite"] in {"compute", "memory", "storage", "security", "database", "web"}
+                    if run["suite"] in {"compute", "memory", "storage", "security", "database", "web", "gpu"}
                     and run["status"] in {"queued", "running"}
                     and (
                         str(run.get("request", {}).get("session_id", "")) == session_id
@@ -714,6 +727,8 @@ class CloudMarkController:
             raise ValueError("timeout_seconds must be an integer.") from exc
         if not 30 <= timeout_seconds <= 43_200:
             raise ValueError("timeout_seconds must be between 30 and 43200.")
+        if suite == "gpu" and timeout_seconds > 90:
+            raise ValueError("GPU transfer timeout must not exceed 90 seconds.")
         request["timeout_seconds"] = timeout_seconds
         run_id = f"run_{uuid.uuid4().hex[:16]}"
         self.database.create_run(
@@ -773,6 +788,18 @@ class CloudMarkController:
                 context.report("collecting", "system-inventory")
                 result = self.system(refresh=True)
                 context.complete_step("completed", None, partial_result=result)
+            elif request["suite"] == "gpu":
+                if request.get("execution") == "remote-agent":
+                    agent = self.database.get_agent(str(request["agent_id"]))
+                    if not agent:
+                        raise RemoteError("Selected Agent disappeared before execution.")
+                    result = run_remote_benchmark(
+                        self.database, run_id, agent, "gpu", str(request["profile"]),
+                        int(request["timeout_seconds"]), context=context, device_index=request["device_index"],
+                    )
+                else:
+                    result = run_gpu_transfer(request["device_index"], confirm_load=True, context=context)
+                    result["target_evidence"] = deepcopy(self.system())
             elif request["suite"] == "storage":
                 if request.get("execution") == "remote-agent":
                     agent = self.database.get_agent(str(request["agent_id"]))

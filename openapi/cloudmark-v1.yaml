@@ -26,7 +26,8 @@ components:
       description: Generic Run submission. Campaign metadata is intentionally excluded and is rejected by this endpoint; use a guarded campaign-window endpoint.
       required: [suite]
       properties:
-        suite: { type: string, enum: [inventory, compute, memory, storage, security, network, database, web] }
+        suite: { type: string, enum: [inventory, compute, memory, storage, security, network, database, web, gpu] }
+        device_index: { type: integer, minimum: 0, maximum: 15, description: Explicit OpenCL GPU index required for GPU transfer. }
         profile: { type: string }
         agent_id:
           type: string
@@ -34,7 +35,7 @@ components:
         confirm_load:
           type: boolean
           default: false
-          description: Required for CPU and memory saturation profiles.
+          description: Required for CPU, memory, and GPU transfer profiles. GPU requires literal true and timeout at most 90 seconds.
         confirm_write: { type: boolean, default: false }
         confirm_network_load: { type: boolean, default: false }
         confirm_database_load:

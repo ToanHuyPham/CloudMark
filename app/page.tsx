@@ -805,6 +805,7 @@ type Run = {
   tool_version?: string;
   request?: { agent_id?: string; execution?: "controller-host" | "remote-agent" };
   result?: {
+    gpu_transfer_measurements?: { name: string; bandwidth_bytes_per_second: number; integrity_verified: boolean }[];
     preflight?: SystemPreflight;
     jobs?: StorageMetric[];
     filesystem_operations?: FilesystemMetric[];
@@ -1628,6 +1629,7 @@ export default function Home() {
   const [costSourceType, setCostSourceType] = useState<"provider-public-url" | "operator-reference">("provider-public-url");
   const [costSourceReference, setCostSourceReference] = useState("");
   const [selectedExecutionTarget, setSelectedExecutionTarget] = useState("local");
+  const [gpuDeviceIndex, setGpuDeviceIndex] = useState(0);
   const [selectedSessionId, setSelectedSessionId] = useState("");
   const [selectedTopologyScope, setSelectedTopologyScope] = useState<TopologyScope>("undeclared");
   const [pairing, setPairing] = useState<{
@@ -1664,6 +1666,11 @@ export default function Home() {
   const executionInventory = selectedExecutionAgent?.system.inventory || (selectedExecutionTarget === "local" ? inventory : undefined);
   const memoryEnvironment = executionInventory?.memory?.environment;
   const gpuEnvironment = executionInventory?.gpu?.environment;
+  const activeGpu = dashboard?.runs.find((run) => run.suite === "gpu"
+    && ["queued", "running"].includes(run.status)
+    && (run.request?.agent_id || "local") === selectedExecutionTarget);
+  const latestGpu = dashboard?.runs.find((run) => run.suite === "gpu" && run.status === "completed"
+    && (run.request?.agent_id || "local") === selectedExecutionTarget);
   const clockEnvironment = inventory?.clock?.environment;
   const containerEnvironment = inventory?.container?.environment;
   const executionTargetLabel = selectedExecutionAgent?.name || "Controller host";
@@ -1679,7 +1686,7 @@ export default function Home() {
       && (run.request?.agent_id || "local") === selectedExecutionTarget,
   );
   const activeLocal = dashboard?.runs.find(
-    (run) => ["compute", "memory", "storage", "security"].includes(run.suite) && ["queued", "running"].includes(run.status)
+    (run) => ["compute", "memory", "storage", "security", "gpu"].includes(run.suite) && ["queued", "running"].includes(run.status)
       && (run.request?.agent_id || "local") === selectedExecutionTarget,
   );
   const activeSecurity = dashboard?.runs.find(
@@ -1971,6 +1978,29 @@ export default function Home() {
       await loadDashboard();
     } catch (error) {
       setNotice(error instanceof Error ? error.message : "Unable to record cost evidence");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function gpuAction(cancel = false) {
+    if (!requireToken()) return;
+    setBusy(true);
+    try {
+      const response = await fetch(cancel ? `${API}/runs/${activeGpu?.id}/cancel` : `${API}/runs`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-CloudMark-Token": token },
+        body: JSON.stringify(cancel ? {} : {
+          suite: "gpu", profile: "gpu-transfer-quick", confirm_load: true, device_index: gpuDeviceIndex,
+          ...(selectedExecutionAgent ? { agent_id: selectedExecutionAgent.id } : {}),
+        }),
+      });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || "GPU request failed");
+      setNotice(cancel ? "GPU cancellation requested." : `GPU transfer accepted: ${payload.id}`);
+      await loadDashboard();
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "GPU request failed");
     } finally {
       setBusy(false);
     }
@@ -2761,7 +2791,7 @@ export default function Home() {
           <div className="view gpu-view">
             <section className="section-intro">
               <div><span className="section-kicker">READ-ONLY ACCELERATOR CONTEXT</span><h2>Identify guest-visible GPUs and a usable backend before designing a valid workload.</h2><p>CloudMark records bounded Linux DRM/PCI or Windows CIM identity, driver, visible memory capacity, placement context, installed runtime tools, and an isolated no-load OpenCL enumeration. It does not create a GPU context, queue, buffer, or kernel.</p></div>
-              <div className="load-policy"><span>GPU LOAD POLICY</span><strong>Inventory only</strong><small>Compute, transfer, media, thermal, and power benchmarks remain unavailable.</small></div>
+              <div className="load-policy"><span>GPU LOAD POLICY</span><strong>Transfer profile available</strong><small>Explicit load confirmation; 90-second deadline; two 16 MiB device buffers.</small></div>
             </section>
             {executionTargetPanel}
             <section className="provider-summary-grid">
@@ -2781,6 +2811,18 @@ export default function Home() {
                 </div>
               </article>)}
             </section> : <section className="panel provider-empty-state"><strong>{gpuEnvironment?.detection_status === "not-detected" ? "No accelerator was detected in this guest." : "GPU hardware evidence is unavailable for this target."}</strong><p>{gpuEnvironment?.reason || "Linux Agents use bounded DRM sysfs and Windows targets use a fixed CIM query. A missing device is not converted into a performance score."}</p></section>}
+            <section className="panel gpu-runtime-panel">
+              <div className="panel-head"><div><span className="section-kicker">GPU TRANSFER V1 / PROFILE 1.0</span><h3>Fixed OpenCL copies</h3></div><span className="run-id">{activeGpu?.id || latestGpu?.id || "UNMEASURED"}</span></div>
+              <div className="session-actions">
+                <label>OpenCL GPU <select value={gpuDeviceIndex} onChange={(event) => setGpuDeviceIndex(Number(event.target.value))}>
+                  {(gpuEnvironment?.opencl?.devices || []).map((device) => <option key={device.index} value={device.index}>{device.index}: {device.name}</option>)}
+                </select></label>
+                {activeGpu ? <button className="button danger" disabled={busy || activeGpu.cancel_requested} onClick={() => gpuAction(true)}>Cancel GPU transfer</button>
+                  : <button className="button primary" disabled={busy || Boolean(activeLocal) || !executionTargetOnline || !gpuEnvironment?.opencl?.devices.some((device) => device.index === gpuDeviceIndex && device.available)} onClick={() => gpuAction()}>Confirm and run GPU transfer</button>}
+              </div>
+              <p className="method-note">Target: {executionTargetLabel}. One warm-up and 16 measured copies per direction; SHA-256 verification. Wall-clock rates include host API cost. Hardware acceptance testing is still pending.</p>
+              {latestGpu?.result?.gpu_transfer_measurements && <div className="evidence-rows">{latestGpu.result.gpu_transfer_measurements.map((item) => <div key={item.name}><span>{item.name}</span><strong>{formatBytes(item.bandwidth_bytes_per_second)}/s</strong><small>{item.integrity_verified ? "Checksum verified" : "Verification unavailable"} · {latestGpu.id} · gpu-transfer-v1</small></div>)}</div>}
+            </section>
             <section className="panel gpu-runtime-panel">
               <div className="panel-head"><div><span className="section-kicker">RUNTIME TOOL DISCOVERY</span><h3>Installed interfaces, not verified framework support</h3></div><span className="run-id">NO LOAD</span></div>
               <div className="runtime-tool-grid">{Object.entries(gpuEnvironment?.runtime_tools || {}).map(([name, available]) => <div key={name} className={available ? "available" : "missing"}><span>{name.replaceAll("_", " ")}</span><strong>{available ? "Installed" : "Unavailable"}</strong></div>)}</div>
