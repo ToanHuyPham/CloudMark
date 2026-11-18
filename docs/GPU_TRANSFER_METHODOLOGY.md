@@ -7,6 +7,12 @@ samples include host API overhead; bytes/s counts payload bytes once per copy.
 Results include the selected OpenCL device, runtime versions, allocation plan,
 SHA-256 verification, host headroom, and cleanup evidence.
 
+Both local and remote result admission reconstruct the planning contract from
+the selected platform/device evidence. Inconsistent memory budgets, unavailable
+devices, invalid platform indexes, altered interpretation, and aggregate timed
+samples exceeding 90 seconds are rejected. Reported bandwidth is recomputed
+from samples; validation does not establish independent hardware attestation.
+
 Two device buffers are allocated. Host headroom must preserve 512 MiB beyond a
 64 MiB allocation budget; Linux checks cgroup headroom. Device capacity must
 preserve a 256 MiB capacity margin and each buffer must fit the maximum allocation.

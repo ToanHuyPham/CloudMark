@@ -115,6 +115,29 @@ def validate_transfer_result(payload: Any, device_index: int) -> dict[str, Any]:
         raise ValueError("GPU transfer target contract mismatch.")
     if plan.get("buffer_bytes") != BUFFER_BYTES or plan.get("iterations") != ITERATIONS:
         raise ValueError("GPU transfer allocation contract mismatch.")
+    platform = plan.get("platform")
+    if not isinstance(platform, dict):
+        raise ValueError("GPU platform evidence missing.")
+    # Rebuild the selected-device planning contract, rather than trusting fields
+    # supplied by a remote worker. Normalize indexes only for this local check.
+    selected = {**device, "index": 0, "platform_index": 0, "platform_device_index": 0}
+    probe = {
+        "methodology_version": "gpu-opencl-probe-v1", "status": "complete",
+        "platform_count": 1, "device_count": 1,
+        "platforms": [{**platform, "index": 0}], "devices": [selected],
+        "policy": {"read_only": True, "context_created": False, "queue_created": False,
+                   "buffer_allocated": False, "kernel_compiled": False, "load_generated": False,
+                   "extension_list_persisted": False},
+    }
+    canonical = plan_gpu_transfer(probe, 0)
+    for key in canonical.keys() - {"platform", "device"}:
+        if type(plan.get(key)) is not type(canonical[key]) or plan[key] != canonical[key]:
+            raise ValueError("GPU transfer planning evidence is inconsistent.")
+    if (not _integer(platform.get("index"), 0, 7)
+            or not _integer(device.get("platform_index"), 0, 7)
+            or device["platform_index"] != platform["index"]
+            or not _integer(device.get("platform_device_index"), 0, 15)):
+        raise ValueError("GPU transfer platform selection is inconsistent.")
     if not _integer(payload.get("host_available_bytes"), HOST_RESERVE_BYTES + 4 * BUFFER_BYTES, 2**63 - 1):
         raise ValueError("GPU transfer host memory evidence is incomplete.")
     expected = hashlib.sha256(hashlib.shake_256(b"cloudmark-gpu-transfer-v1").digest(BUFFER_BYTES)).hexdigest()
@@ -122,6 +145,7 @@ def validate_transfer_result(payload: Any, device_index: int) -> dict[str, Any]:
     names = ["host-to-device", "device-to-host", "device-to-device"]
     if not isinstance(measurements, list) or len(measurements) != 3 or payload.get("cleanup_verified") is not True:
         raise ValueError("Incomplete GPU transfer or cleanup evidence.")
+    total_ns = 0
     for name, item in zip(names, measurements):
         if not isinstance(item, dict):
             raise ValueError("Malformed GPU transfer measurement.")
@@ -132,6 +156,9 @@ def validate_transfer_result(payload: Any, device_index: int) -> dict[str, Any]:
                 or len(samples) != ITERATIONS or not all(_integer(value, 1, 90 * 10**9) for value in samples)):
             raise ValueError("GPU transfer measurement contract mismatch.")
         item["bandwidth_bytes_per_second"] = BUFFER_BYTES * ITERATIONS * 10**9 / sum(samples)
+        total_ns += sum(samples)
+    if total_ns > 90 * 10**9:
+        raise ValueError("GPU transfer samples exceed the maximum execution deadline.")
     payload.update({"suite": "gpu", "profile": "gpu-transfer-quick", "profile_version": "1.0",
                     "evidence_status": "measured", "timing_scope": "synchronous-host-wall-clock",
                     "device_free_memory_verified": False})

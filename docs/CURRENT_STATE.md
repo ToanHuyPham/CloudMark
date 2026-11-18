@@ -1,6 +1,6 @@
 # CloudMark current state
 
-Last updated: 2026-11-17
+Last updated: 2026-11-18
 
 ## GPU transfer work in progress
 
@@ -21,7 +21,11 @@ require explicit load confirmation and a GPU index; GPU shares the target's
 exclusive execution group. The Controller revalidates remote measurements and
 derives bandwidth from bounded samples. No real transfer acceptance run has
 been performed, and GPU evidence does not enter provider suitability scoring.
-Verification: 251 Python tests, 75.2% coverage with branch measurement enabled,
+Result admission now independently reconstructs the selected device's memory
+plan, checks platform/index consistency and device availability, rejects altered
+reserve/allocation/interpretation fields, and bounds aggregate sample duration
+by the 90-second deadline. Rates are rederived without mutating input evidence.
+Verification: 252 Python tests, 75.4% coverage with branch measurement enabled,
 Ruff, dashboard lint/typecheck, OpenAPI validation, production build, and four
 Node tests passed. Tests mock enumeration and perform no transfer workload.
 

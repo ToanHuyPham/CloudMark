@@ -1,16 +1,46 @@
 import copy
 import io
 import json
+import hashlib
 import unittest
 from contextlib import redirect_stdout
 from unittest.mock import patch
 
 from cloudmark.__main__ import main
-from cloudmark.gpu_transfer import BUFFER_BYTES, plan_gpu_transfer
+from cloudmark.gpu_transfer import BUFFER_BYTES, ITERATIONS, plan_gpu_transfer, validate_transfer_result
 from tests_python import test_gpu_environment as gpu_fixtures
 
 
 class GpuTransferPlanTests(unittest.TestCase):
+    def test_result_validation_rederives_rates_and_rejects_forged_contracts(self):
+        plan = plan_gpu_transfer(gpu_fixtures.GpuEnvironmentTests._opencl_payload(), 0)
+        digest = hashlib.sha256(hashlib.shake_256(b"cloudmark-gpu-transfer-v1").digest(BUFFER_BYTES)).hexdigest()
+        payload = {
+            "methodology_version": "gpu-transfer-v1", "plan": plan,
+            "host_available_bytes": 1024**3, "cleanup_verified": True,
+            "measurements": [{"name": name, "bytes_per_iteration": BUFFER_BYTES, "iterations": ITERATIONS,
+                              "sha256": digest, "integrity_verified": True, "samples_ns": [1000000] * ITERATIONS,
+                              "bandwidth_bytes_per_second": -1} for name in plan["operations"]],
+        }
+        result = validate_transfer_result(payload, 0)
+        self.assertEqual(result["measurements"][0]["bandwidth_bytes_per_second"], BUFFER_BYTES * 1000)
+        self.assertEqual(payload["measurements"][0]["bandwidth_bytes_per_second"], -1)
+        for field, value in (("device_allocation_bytes", 1), ("interpretation", "fabricated"),
+                             ("host_headroom_verified", True)):
+            invalid = copy.deepcopy(payload)
+            invalid["plan"][field] = value
+            with self.subTest(field=field), self.assertRaises(ValueError):
+                validate_transfer_result(invalid, 0)
+        invalid = copy.deepcopy(payload)
+        invalid["plan"]["device"]["available"] = False
+        with self.assertRaises(ValueError):
+            validate_transfer_result(invalid, 0)
+        invalid = copy.deepcopy(payload)
+        for measurement in invalid["measurements"]:
+            measurement["samples_ns"] = [10**10] * ITERATIONS
+        with self.assertRaises(ValueError):
+            validate_transfer_result(invalid, 0)
+
     def test_fixed_plan_has_no_execution_or_free_memory_claim(self):
         probe = gpu_fixtures.GpuEnvironmentTests._opencl_payload()
         original = copy.deepcopy(probe)
