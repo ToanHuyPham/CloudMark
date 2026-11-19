@@ -1,6 +1,6 @@
 # CloudMark current state
 
-Last updated: 2026-11-18
+Last updated: 2026-11-19
 
 ## GPU transfer work in progress
 
@@ -25,6 +25,10 @@ Result admission now independently reconstructs the selected device's memory
 plan, checks platform/index consistency and device availability, rejects altered
 reserve/allocation/interpretation fields, and bounds aggregate sample duration
 by the 90-second deadline. Rates are rederived without mutating input evidence.
+The result now includes `gpu-transfer-summary-v1`, independently derived
+minimum/maximum/mean, nearest-rank P50/P95/P99, sample count, and coefficient
+of variation. Sixteen samples cannot establish production tail latency: P95
+and P99 both select the maximum. Summaries are descriptive and unscored.
 Verification: 252 Python tests, 75.4% coverage with branch measurement enabled,
 Ruff, dashboard lint/typecheck, OpenAPI validation, production build, and four
 Node tests passed. Tests mock enumeration and perform no transfer workload.

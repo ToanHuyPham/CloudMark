@@ -8,6 +8,8 @@ from .gpu_environment import parse_opencl_probe
 import json
 import hashlib
 import sys
+import math
+import statistics
 
 from .runner import JobContext
 
@@ -156,6 +158,20 @@ def validate_transfer_result(payload: Any, device_index: int) -> dict[str, Any]:
                 or len(samples) != ITERATIONS or not all(_integer(value, 1, 90 * 10**9) for value in samples)):
             raise ValueError("GPU transfer measurement contract mismatch.")
         item["bandwidth_bytes_per_second"] = BUFFER_BYTES * ITERATIONS * 10**9 / sum(samples)
+        ordered = sorted(samples)
+        mean = statistics.mean(samples)
+        item["latency_summary"] = {
+            "version": "gpu-transfer-summary-v1",
+            "sample_count": len(samples),
+            "percentile_method": "nearest-rank",
+            "minimum_ms": ordered[0] / 10**6,
+            "maximum_ms": ordered[-1] / 10**6,
+            "mean_ms": mean / 10**6,
+            **{f"p{percentile}_ms": ordered[math.ceil(percentile * len(samples) / 100) - 1] / 10**6
+               for percentile in (50, 95, 99)},
+            "coefficient_of_variation_percent": statistics.pstdev(samples) / mean * 100,
+            "tail_claim": "descriptive-small-sample-only",
+        }
         total_ns += sum(samples)
     if total_ns > 90 * 10**9:
         raise ValueError("GPU transfer samples exceed the maximum execution deadline.")

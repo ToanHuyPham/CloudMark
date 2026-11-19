@@ -7,6 +7,13 @@ samples include host API overhead; bytes/s counts payload bytes once per copy.
 Results include the selected OpenCL device, runtime versions, allocation plan,
 SHA-256 verification, host headroom, and cleanup evidence.
 
+Each admitted measurement also includes `gpu-transfer-summary-v1`: minimum,
+maximum, mean, nearest-rank P50/P95/P99 in milliseconds and population standard
+deviation divided by mean (coefficient of variation, percent). The Controller
+recomputes these fields from the 16 samples. With only 16 observations P95 and
+P99 both select the maximum; these are descriptive sample summaries, not
+production tail-latency estimates, stability ratings, or suitability gates.
+
 Both local and remote result admission reconstruct the planning contract from
 the selected platform/device evidence. Inconsistent memory budgets, unavailable
 devices, invalid platform indexes, altered interpretation, and aggregate timed

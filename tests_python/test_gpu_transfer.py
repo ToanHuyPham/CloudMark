@@ -25,6 +25,19 @@ class GpuTransferPlanTests(unittest.TestCase):
         result = validate_transfer_result(payload, 0)
         self.assertEqual(result["measurements"][0]["bandwidth_bytes_per_second"], BUFFER_BYTES * 1000)
         self.assertEqual(payload["measurements"][0]["bandwidth_bytes_per_second"], -1)
+        summary = result["measurements"][0]["latency_summary"]
+        self.assertEqual(summary["mean_ms"], 1.0)
+        self.assertEqual(summary["coefficient_of_variation_percent"], 0)
+        varying = copy.deepcopy(payload)
+        varying["measurements"][0]["samples_ns"] = [i * 10**6 for i in range(1, 17)]
+        varying["measurements"][0]["latency_summary"] = {"p99_ms": -1}
+        derived = validate_transfer_result(varying, 0)["measurements"][0]["latency_summary"]
+        self.assertEqual(derived["p50_ms"], 8)
+        self.assertEqual(derived["p95_ms"], 16)
+        self.assertEqual(derived["p99_ms"], 16)
+        self.assertEqual(derived["mean_ms"], 8.5)
+        self.assertEqual(derived["sample_count"], 16)
+        self.assertGreater(derived["coefficient_of_variation_percent"], 0)
         for field, value in (("device_allocation_bytes", 1), ("interpretation", "fabricated"),
                              ("host_headroom_verified", True)):
             invalid = copy.deepcopy(payload)
